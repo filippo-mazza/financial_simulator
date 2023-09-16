@@ -1,6 +1,6 @@
 import random
 class IncomeSource:
-    def __init__(self, name, income_type, monthly_income, 
+    def __init__(self, name, income_type, monthly_income,
                  specific_taxation=None, bonus_pct = None):
         self.name = name
         self.income_type = income_type
@@ -50,6 +50,14 @@ class IncomeSource:
         if self.income_type not in self.income_growth:
             raise ValueError(f"Unknown income type: {income_type}")
 
+    def _random_annual_bonus_percentage(self) -> float:
+        """
+        Return a Gaussian distributed annual gain percentage based on the typology.
+        """
+        yearly_bonus = random.gauss(self.bonus_pct*0.7, 1) #not always a good bonus
+        return max(0,min(self.bonus_pct,yearly_bonus)) # no more than max, no less than 0
+
+
     def step(self):
         """
         Returns the monthly income after tax.
@@ -57,7 +65,7 @@ class IncomeSource:
         """
         self.months_passed += 1
         current_income = self.monthly_income
-        
+
         # Special variability for freelancers
         if self.income_type == 'freelance':
             if random.random() < self.freelance_income_variability['none']:
@@ -66,16 +74,17 @@ class IncomeSource:
                 current_income *= 0.5  # Half the usual income this month
 
         if self.months_passed>11 and self.months_passed%12==0 and self.bonus_pct:
-            current_income += self.yearly_income*self.bonus_pct/100
+            bonus = self.yearly_income*self._random_annual_bonus_percentage()/100
+            current_income += bonus
 
         tax = self.specific_taxation if self.specific_taxation is not None else self.income_taxation[self.income_type]
         net_income = current_income * (1 - tax / 100)
-        
+
 
         # Check if it's the end of the year (assuming the function is called once a month)
         if self.months_passed > 11 and self.months_passed % 12 == 0:
             self._adjust_yearly_income()
-        
+
         return net_income
 
     def _adjust_yearly_income(self):
@@ -93,7 +102,7 @@ class IncomeSource:
         self.monthly_income = self.original_monthly_income
         self.months_passed = 0
 
-    
+
     def __repr__(self):
         return f"Salary(name={self.name}, monthly_income={self.monthly_income})"
 
