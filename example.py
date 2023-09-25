@@ -1,3 +1,7 @@
+"""
+Please import the needed files, I had no time to make a package yet
+"""
+
 my_loans = [Loan(name='house loan',amount=100000,
                  duration_years=25)
 ]
