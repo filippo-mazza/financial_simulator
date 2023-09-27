@@ -1,7 +1,8 @@
 import math
 
 class Loan:
-    def __init__(self, name, amount, interest_rate, duration_years, is_fixed_rate=False, already_paid=0):
+    def __init__(self, name, amount, interest_rate=2, duration_years=25, 
+                 is_fixed_rate=False, already_paid=0):
         self.name = name
         self.initial_amount = amount
         self.remaining_amount = amount - already_paid  # Deduct the already paid amount
@@ -20,7 +21,7 @@ class Loan:
         else:
             # We're using the formula for an annuity to calculate fixed monthly repayments
             return self.remaining_amount * (self.interest_rate / 12) / (1 - math.pow(1 + self.interest_rate / 12, -self.duration_years * 12))
-    
+
     def step(self):
         if self.is_repaid:
             return None
@@ -40,7 +41,7 @@ class Loan:
             self.is_repaid = True
             self.remaining_amount = 0
             return self.monthly_repayment
-        
+
         return self.monthly_repayment
 
     def reset(self):
