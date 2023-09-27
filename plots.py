@@ -1,5 +1,5 @@
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
 
 def plot_net_worth(monthly_net_worth, loan_repayment_dates, monthly_details=None):
     plt.style.use('ggplot')  # Use the ggplot style for a cleaner appearance
