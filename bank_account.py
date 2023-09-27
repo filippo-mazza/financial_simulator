@@ -17,13 +17,13 @@ class BankAccount:
     def withdraw(self, amount, account_name="Main"):
         if account_name not in self.subaccounts:
             raise NoSubaccountException(f"No subaccount named {account_name} found!")
-        
+
         # Check if the balance is None and set it to 0 if it is
         balance = self.subaccounts.get(account_name, 0) or 0.0
-        
+
         if balance < amount:
             raise InsufficientFundsException("Insufficient funds!")
-        
+
         self.subaccounts[account_name] -= amount
 
     def add_subaccount(self, account_name, initial_balance=0.0):
