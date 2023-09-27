@@ -46,6 +46,35 @@ bank_account = BankAccount(initial_balance=1000, yearly_fee=110)
 [i.reset() for i in income_sources]
 
 
-# Usage:
+# Single use:
 net_worth_values, repay_dates, monthly_detail = compute_net_worth_over_time(5, bank_account,
                                                             my_investments, my_loans, income_sources, my_expenses)
+
+"""
+# Use with Confidence Intervals:
+
+results = []
+for i in range(15):
+  print(i)
+  bank_account = BankAccount(initial_balance=21000, yearly_fee=110)
+
+
+  # it can actually get lower as well! Oscillates due to compressions in the stock
+  # market...
+  [i.reset() for i in my_investments]
+
+  [i.reset() for i in my_loans]
+
+  [i.reset() for i in income_sources]
+  [i.reset() for i in my_expenses]
+
+  net_worth_values, repay_dates, monthly_detail = compute_net_worth_over_time(12, bank_account,
+                                                              my_investments, my_loans, income_sources, my_expenses)
+
+  results.append(monthly_detail)
+  
+plot_with_confidence_intervals(
+    data = [x['bank_account'] for x in results], rolling_window=6,
+    title='Bank account evolution with C.I.'
+)
+"""
