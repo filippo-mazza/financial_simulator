@@ -89,34 +89,4 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
     return monthly_net_worth, loan_repayment_dates, monthly_details
 
 
-import matplotlib.pyplot as plt
-
-def plot_net_worth(monthly_net_worth, loan_repayment_dates, monthly_details=None):
-    plt.style.use('ggplot')  # Use the ggplot style for a cleaner appearance
-    
-    plt.figure(figsize=(12, 6))
-    plt.plot(monthly_net_worth, '-o', markersize=3, label="Net Worth", color='blue')
-
-    # If monthly_details is provided, plot the values
-    if monthly_details is not None:
-        for key, values in monthly_details.items():
-            plt.plot(values, '-o', markersize=3, label=key.capitalize())
-    
-    for loan_name, date in loan_repayment_dates.items():
-        plt.axvline(x=date, color='r', linestyle='--')
-        plt.annotate(loan_name, (date, min(monthly_net_worth)), textcoords="offset points", xytext=(0,10), ha='center')
-
-    plt.title('Net Worth and Financial Details Over Time')
-    plt.xlabel('Months')
-    plt.ylabel('Amount ($)')  # Added $ unit of measure to the y-axis
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
-# Example:
-# monthly_net_worth, monthly_details, loan_repayment_dates = compute_net_worth_over_time(10, bank_account, investments, loans, incomes, expenses)
-# plot_net_worth(monthly_net_worth, loan_repayment_dates, monthly_details)
-
-
 
