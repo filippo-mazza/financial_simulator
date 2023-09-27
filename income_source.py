@@ -6,8 +6,7 @@ class IncomeSource:
         self.income_type = income_type
         self.monthly_income = monthly_income
         self.original_monthly_income = monthly_income
-        self.months_passed = 0  # Counter to track months
-        self.yearly_income = self.monthly_income*12
+        self.reset()
 
         if specific_taxation is not None and specific_taxation < 5:
           raise ValueError('Taxation must be between 5 and 100')
@@ -22,7 +21,8 @@ class IncomeSource:
             'dividend': 1.3,
             'royalty': 1.5,
             'freelance': 3.0,
-            'pension': 1.0
+            'pension': 1.0,
+            'other':1.5
             # ... Add other types as needed.
         }
 
@@ -73,18 +73,29 @@ class IncomeSource:
             elif random.random() < self.freelance_income_variability['partial']:
                 current_income *= 0.5  # Half the usual income this month
 
-        if self.months_passed>11 and self.months_passed%12==0 and self.bonus_pct:
+        if self.months_passed>11 and self.months_passed%12==0:
+          if self.bonus_pct:
             bonus = self.yearly_income*self._random_annual_bonus_percentage()/100
             current_income += bonus
 
         tax = self.specific_taxation if self.specific_taxation is not None else self.income_taxation[self.income_type]
         net_income = current_income * (1 - tax / 100)
 
-
         # Check if it's the end of the year (assuming the function is called once a month)
         if self.months_passed > 11 and self.months_passed % 12 == 0:
-            self._adjust_yearly_income()
+          self._adjust_yearly_income()
 
+          if self.income_type=='salary':
+            if random.random() < .1: #one in 10
+              print('Got a promotion: ' + str(self))
+              self.monthly_income *= random.uniform(1.06, 1.09) # like a promotion
+            elif random.random() < 0.15: # one in <5
+              self.monthly_income *= random.uniform(1.04, 1.06) # like a raise
+              print('Got a raise: ' + str(self))
+
+            self.yearly_income = self.monthly_income*12
+
+        self.historical_values.append(self.yearly_income)
         return net_income
 
     def _adjust_yearly_income(self):
@@ -99,8 +110,11 @@ class IncomeSource:
         """
         Reset the income source to its initial parameters.
         """
+
+        self.historical_values =  []
         self.monthly_income = self.original_monthly_income
         self.months_passed = 0
+        self.yearly_income = self.monthly_income*12
 
 
     def __repr__(self):
