@@ -10,6 +10,7 @@ class Investment:
         'safe': {'mean': 2, 'std_dev': 1.0}
         # ... add other typologies as needed
     }
+    DIVIDEND = 0.0237 # typical, pct
 
     def __init__(self, name: str, typology: str, initial_cost: float, monthly_contribution: float, current_value: float = None):
         if typology not in self.TOPOLOGY_DETAILS:
@@ -22,6 +23,8 @@ class Investment:
         self.current_value = current_value or initial_cost
         self.compounded_annual_gain = 1.0 + self._random_annual_gain_percentage() / 100
         self.months_since_last_compound = 0
+        self.months_since_beginning = 0
+        self.historical_values = []
 
     def _random_annual_gain_percentage(self) -> float:
         """
@@ -35,14 +38,20 @@ class Investment:
         """
         Advance the investment by one month.
         """
+        self.months_since_beginning+=1
+
         monthly_factor = (self.compounded_annual_gain) ** (1/12)  # pro-rata based on the last compounded yearly value
         self.current_value = self.current_value * monthly_factor
-        self.current_value += self.monthly_contribution
 
         self.months_since_last_compound += 1
         if self.months_since_last_compound == 12:  # Once a year, update the annual gain percentage
             self.compounded_annual_gain = 1.0 + self._random_annual_gain_percentage() / 100
             self.months_since_last_compound = 0
+
+        self.historical_values.append(self.current_value)
+        # dividend
+        if self.typology=='stock' and self.months_since_beginning % 3 ==0:
+          return self.current_value*self.DIVIDEND/12*3 # annual->month  ####TODO: taxation
 
     def add_contribution(self, amount):
         """
@@ -51,7 +60,7 @@ class Investment:
         if self.typology in ['stock','bonds','safe']:
           amount = amount - 50 # fees
         else:
-          
+
           raise TypeError('Can\'t add to non stock-like accounts: ' + str(self))
         self.current_value += amount
 
