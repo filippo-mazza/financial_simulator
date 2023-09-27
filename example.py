@@ -56,7 +56,7 @@ net_worth_values, repay_dates, monthly_detail = compute_net_worth_over_time(5, b
 results = []
 for i in range(15):
   print(i)
-  bank_account = BankAccount(initial_balance=21000, yearly_fee=110)
+  bank_account = BankAccount(initial_balance=2000, yearly_fee=110)
 
 
   # it can actually get lower as well! Oscillates due to compressions in the stock
