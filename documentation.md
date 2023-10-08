@@ -55,7 +55,3 @@ The `Expense` class models a regular or unexpected expense, enabling variability
 
 ## Disclaimer
 All classes and methods in this simulator are purely illustrative and do not constitute financial advice. Ensure to test, validate, and adjust as per your use-case scenarios, considering consultation with a professional financial advisor for accurate financial planning.
-
----
-
-Note: Ensure to further document each class and method with specific parameter and return type details, and perhaps examples, to provide comprehensive documentation for potential users or collaborators on Git. 
