@@ -60,10 +60,12 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                     bank_account.deposit(gain, account_name="Main")
 
                 # Monthly contribution to investment
-                if bank_account.subaccounts["Main"] > investment.monthly_contribution:
-                    if investment.typology == 'stock':
-                      bank_account.withdraw(investment.monthly_contribution, account_name="Main")
-                      investment.add_contribution(investment.monthly_contribution)
+                # only for stock like ones
+                if investment.typology=='stock':
+                    if bank_account.subaccounts["Main"] > investment.monthly_contribution:
+                        if investment.typology == 'stock':
+                          bank_account.withdraw(investment.monthly_contribution, account_name="Main")
+                          investment.add_contribution(investment.monthly_contribution)
                   
 
             # Store details
