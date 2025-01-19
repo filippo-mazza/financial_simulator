@@ -1,0 +1,16 @@
+investment:
+  dividend_yield: 0.0237 # typical, pct
+      # Define typology details with mean and standard deviation for annual gains
+  typology:
+    stock:
+      mean: 8.0
+      std_dev: 20.0
+    real_estate:
+      mean: 4.0
+      std_dev: 8.0
+    bonds:
+      mean: 2.5
+      std_dev: 5.0
+    safe:
+      mean: 2
+      std_dev: 1.0
