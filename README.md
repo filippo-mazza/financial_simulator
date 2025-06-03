@@ -35,7 +35,7 @@ The project can be explored directly from a fresh [Google Colab](https://colab.r
 1. Create a new notebook.
 2. Clone the repository and move into it:
    ```bash
-   !git clone https://github.com/yourusername/financial_simulator.git
+   !git clone https://github.com/filippo-mazza/financial_simulator.git
    %cd financial_simulator
    ```
 3. Import the main classes and utilities:
