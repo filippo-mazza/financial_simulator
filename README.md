@@ -27,3 +27,29 @@ The intention behind sharing this information is purely educational and to ignit
 Your Finances, Your Responsibility:
 
 Remember, your financial journey is deeply personal and uniquely tailored to your specific situation. Ensure that you navigate through your financial path with utmost caution, armed with verified information from trusted professional sources, safeguarding your economic stability now and into the future.
+
+## Running a Simulation in Google Colab
+
+The project can be explored directly from a fresh [Google Colab](https://colab.research.google.com/) notebook:
+
+1. Create a new notebook.
+2. Clone the repository and move into it:
+   ```bash
+   !git clone https://github.com/yourusername/financial_simulator.git
+   %cd financial_simulator
+   ```
+3. Import the main classes and utilities:
+   ```python
+   from bank_account import BankAccount
+   from investment import Investment
+   from loan import Loan
+   from income_source import IncomeSource
+   from expense import Expense
+   from utils import compute_net_worth_over_time
+   from plots import plot_net_worth, plot_with_confidence_intervals
+   ```
+4. Define your accounts, income, expenses, loans and investments (see `example.py` for a template).
+5. Call `compute_net_worth_over_time` with your objects to simulate the evolution of your finances.
+6. Optionally visualize the results using `plot_net_worth` or `plot_with_confidence_intervals`.
+
+This approach lets you experiment with the simulator without installing anything locally.
