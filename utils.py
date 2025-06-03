@@ -22,11 +22,10 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
     loan_repayment_dates = {}
      
 
-    year_income = 0
-    year_expense = 0
-    
     for year in range(years):
         additional_contributions = 0
+        year_income = 0
+        year_expense = 0
         
         for month in range(12):
             current_month = year * 12 + month  # Counting months from the start
@@ -74,16 +73,14 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             
 
             # Yearly additional to stocks
-            if bank_account.subaccounts['Main'] > 10000 and additional_contributions<3: #todo monthly
-              if year_expense<year_income*0.8:
-                  stock_inv = list(filter(lambda x: x.typology=='stock',my_investments))[0]
-                  x=bank_account.total_balance()*0.1
-                  bank_account.withdraw(x, account_name="Main")
-                  stock_inv.add_contribution(x)
+            if bank_account.subaccounts['Main'] > 10000 and additional_contributions < 3:  # todo monthly
+                if year_expense < year_income * 0.8:
+                    stock_inv = list(filter(lambda x: x.typology == 'stock', investments))[0]
+                    x = bank_account.total_balance() * 0.1
+                    bank_account.withdraw(x, account_name="Main")
+                    stock_inv.add_contribution(x)
+                    additional_contributions += 1
 
-            year_income = 0
-            year_expense = 0
-            
             # Compute net worth for the month
             net_worth = get_net_worth(investments, loans, bank_account)
             monthly_net_worth.append(net_worth)
