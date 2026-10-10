@@ -71,6 +71,8 @@ class Investment:
         self.current_value = self.initial_cost
         self.compounded_annual_gain = 1.0 + self._random_annual_gain_percentage() / 100
         self.months_since_last_compound = 0
+        self.months_since_beginning = 0
+        self.historical_values = []
 
     def __repr__(self):
         return f"Investment(name={self.name}, typology={self.typology}, initial_cost={self.initial_cost}, monthly_contribution={self.monthly_contribution}, current_value={self.current_value:.2f})"

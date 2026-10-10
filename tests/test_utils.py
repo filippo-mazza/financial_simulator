@@ -1,5 +1,6 @@
 import sys
 import types
+import random
 
 # Provide a minimal numpy module so utils can be imported without the real dependency
 sys.modules['numpy'] = types.ModuleType('numpy')
@@ -67,4 +68,23 @@ def test_contributions_reset_each_year():
     )
 
     assert inv.added_counts == 6
+
+
+def test_seed_does_not_change_caller_random_state():
+    random.seed(1234)
+    expected_next_value = random.random()
+
+    random.seed(1234)
+    bank = BankAccount(initial_balance=1000)
+    compute_net_worth_over_time(
+        years=1,
+        bank_account=bank,
+        investments=[],
+        loans=[],
+        income_sources=[],
+        expenses=[],
+        seed=42,
+    )
+
+    assert random.random() == expected_next_value
 
