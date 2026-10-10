@@ -53,3 +53,28 @@ The project can be explored directly from a fresh [Google Colab](https://colab.r
 6. Optionally visualize the results using `plot_net_worth` or `plot_with_confidence_intervals`.
 
 This approach lets you experiment with the simulator without installing anything locally.
+
+## Running locally
+
+Create a virtual environment and install the development dependencies:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+python -m pytest
+```
+
+For repeatable simulations and tests, pass a seed to
+`compute_net_worth_over_time(..., seed=42)`. The simulator restores the random
+state after a seeded run, so it does not affect unrelated random operations.
+
+## Verification status
+
+The project has been tested end to end in Codex (5.6 Luna). The current test
+suite includes unit tests and a subprocess smoke test that runs the documented
+five-year example with the real financial model components.
+
+```text
+9 passed
+```

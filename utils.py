@@ -16,13 +16,28 @@ def get_net_worth(investments,loans,bank_account):
     total_loans = sum(loan.remaining_amount for loan in loans)
     return bank_account.total_balance() + total_investments - total_loans
 
-def compute_net_worth_over_time(years, bank_account, investments, loans, income_sources, expenses):
+import random
+
+
+def compute_net_worth_over_time(years, bank_account, investments, loans, income_sources,
+                                expenses, seed=None):
+    """Simulate net worth month by month.
+
+    When ``seed`` is provided, all simulations using the standard-library random
+    module are reproducible. The caller's random state is restored afterwards so
+    running a simulation does not alter unrelated application randomness.
+    """
+    random_state = random.getstate() if seed is not None else None
+    if seed is not None:
+        random.seed(seed)
+
     monthly_details = {"investments": [], "bank_account": []}
     monthly_net_worth = []
     loan_repayment_dates = {}
      
 
-    for year in range(years):
+    try:
+      for year in range(years):
         additional_contributions = 0
         year_income = 0
         year_expense = 0
@@ -84,6 +99,9 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             # Compute net worth for the month
             net_worth = get_net_worth(investments, loans, bank_account)
             monthly_net_worth.append(net_worth)
+    finally:
+        if random_state is not None:
+            random.setstate(random_state)
             
     return monthly_net_worth, loan_repayment_dates, monthly_details
 
