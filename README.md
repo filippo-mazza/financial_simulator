@@ -1,6 +1,12 @@
 # financial_simulator
 Asking ChatGPT 4 to write me a Python personal financial simulator and optimizator.
 
+## Codex / 5.6 Luna note
+
+This project was extended and tested with Codex (5.6 Luna). The simulator and
+Streamlit interface are exploratory software: the outputs are illustrative,
+the assumptions are configurable, and nothing here is financial advice.
+
 Done for fun, personal, use, checking how many bugs ChatGPT 4 was able to introduce and I could discover/correct with him.  
 
 Licensed as Attribution‑NonCommercial‑ShareAlike 2.0 Generic (CC BY-NC-SA 2.0).
@@ -81,12 +87,24 @@ make run
 The sidebar exposes the simulator's supported income, expense, investment, and
 loan options. Use `make test` to run the unit and end-to-end test suite.
 
+### Screenshots
+
+The dashboard combines the projected net-worth chart with summary metrics:
+
+![Streamlit dashboard](docs/screenshots/streamlit-dashboard.png)
+
+The sidebar supports zero, one, or many incomes, expenses, investments, and
+loans, plus configurable family members and age-based assumptions:
+
+![Streamlit controls](docs/screenshots/streamlit-controls.png)
+
 ## Verification status
 
 The project has been tested end to end in Codex (5.6 Luna). The current test
-suite includes unit tests and a subprocess smoke test that runs the documented
-five-year example with the real financial model components.
+suite includes unit tests, collection edge cases, family scenarios, and a
+subprocess smoke test that runs the documented five-year example with the real
+financial model components.
 
 ```text
-9 passed
+28 passed
 ```

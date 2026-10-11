@@ -194,6 +194,9 @@ def main():
     def item_key(item):
         return item["_id"]
 
+    def config_values(item):
+        return {key: value for key, value in item.items() if key != "_id"}
+
     def add_expense():
         st.session_state.expenses.append({
             "name": f"Expense {len(st.session_state.expenses) + 1}",
@@ -361,10 +364,10 @@ def main():
     config = SimulationConfig(
         years=years, seed=int(seed), initial_cash=initial_cash, yearly_fee=yearly_fee,
         investment_type="stock", investment_initial=0.0, investment_contribution=0.0,
-        investments=[InvestmentConfig(**item) for item in st.session_state.investments],
-        incomes=[IncomeConfig(**item) for item in st.session_state.incomes],
-        expenses=[ExpenseConfig(**item) for item in st.session_state.expenses],
-        loans=[LoanConfig(**item) for item in st.session_state.loans],
+        investments=[InvestmentConfig(**config_values(item)) for item in st.session_state.investments],
+        incomes=[IncomeConfig(**config_values(item)) for item in st.session_state.incomes],
+        expenses=[ExpenseConfig(**config_values(item)) for item in st.session_state.expenses],
+        loans=[LoanConfig(**config_values(item)) for item in st.session_state.loans],
         additional_expenses=[ExpenseConfig(**item) for item in st.session_state.additional_expenses],
         dependents=[DependentConfig(**item) for item in st.session_state.dependents],
     )
