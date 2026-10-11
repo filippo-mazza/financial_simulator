@@ -1,8 +1,12 @@
+from datetime import datetime, timezone
+import json
+
 import pytest
 
 from bank_account import InsufficientFundsException
 from app import (DependentConfig, ExpenseConfig, IncomeConfig, InvestmentConfig,
-                 LoanConfig, SimulationConfig, build_components, run_simulation)
+                 LoanConfig, SimulationConfig, build_components,
+                 create_simulation_export, read_simulation_export, run_simulation)
 
 
 def test_build_components_exposes_all_model_options():
@@ -23,6 +27,63 @@ def test_run_simulation_is_reproducible_and_isolated():
     assert first == second
     assert len(first[0]) == 24
     assert set(first[2]) == {"investments", "bank_account"}
+
+
+def test_simulation_export_contains_parameters_and_monthly_results():
+    config = SimulationConfig(
+        years=1, seed=17, initial_cash=5000, investments=[], expenses=[],
+        incomes=[], loans=[LoanConfig("Short loan", 1200, 0, 1)],
+    )
+    net_worth, repayment_dates, details = run_simulation(config)
+    exported_at = datetime(2026, 10, 11, 12, 30, tzinfo=timezone.utc)
+
+    document = json.loads(create_simulation_export(
+        config, net_worth, repayment_dates, details, exported_at=exported_at,
+    ))
+
+    assert document["format"] == "financial-simulator-export"
+    assert document["schema_version"] == 1
+    assert document["exported_at_utc"] == "2026-10-11T12:30:00+00:00"
+    assert document["parameters"]["seed"] == 17
+    assert document["parameters"]["loans"][0]["name"] == "Short loan"
+    assert document["results"]["summary"]["months_simulated"] == 12
+    assert document["results"]["monthly"][0] == {
+        "month": 1,
+        "net_worth": net_worth[0],
+        "cash": details["bank_account"][0],
+        "investments": details["investments"][0],
+    }
+    assert document["results"]["loan_repayments"] == [
+        {"name": "Short loan", "month": repayment_dates["Short loan"] + 1}
+    ]
+
+
+def test_simulation_export_round_trip_restores_nested_parameters():
+    config = SimulationConfig(
+        years=7, seed=99, initial_cash=1234, yearly_fee=25,
+        investments=[InvestmentConfig("Bonds", "bonds", 800, 75)],
+        incomes=[IncomeConfig("Consulting", "freelance", 2500, 20, 5)],
+        expenses=[ExpenseConfig("Rent", "housing", 900)],
+        loans=[LoanConfig("Car", 5000, 3.5, 4, True, 500)],
+        dependents=[DependentConfig("Child", 300, 4, 6, 200)],
+    )
+    results = run_simulation(config)
+
+    restored = read_simulation_export(create_simulation_export(config, *results))
+
+    assert restored == config
+
+
+@pytest.mark.parametrize("document, message", [
+    ("not JSON", "not valid UTF-8 JSON"),
+    ('{"format": "something-else", "schema_version": 1}',
+     "not a Financial Simulator export"),
+    ('{"format": "financial-simulator-export", "schema_version": 99, "parameters": {}}',
+     "version is not supported"),
+])
+def test_simulation_import_rejects_invalid_exports(document, message):
+    with pytest.raises(ValueError, match=message):
+        read_simulation_export(document)
 
 
 def test_current_situation_items_become_model_expenses():

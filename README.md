@@ -87,6 +87,13 @@ make run
 The sidebar exposes the simulator's supported income, expense, investment, and
 loan options. Use `make test` to run the unit and end-to-end test suite.
 
+After a successful simulation, use **Export parameters and results** to download
+a JSON record containing the complete scenario configuration and seed, summary
+figures, month-by-month net worth/cash/investments, and loan repayment timing.
+To revisit it later, open **Import saved scenario** in the sidebar, select that
+JSON file, and choose **Import parameters**. The saved inputs are restored and
+the simulation is rerun with the same seed.
+
 ### Screenshots
 
 The dashboard combines the projected net-worth chart with summary metrics:

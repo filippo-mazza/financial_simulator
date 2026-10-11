@@ -4,7 +4,9 @@ The model-building functions are intentionally independent of Streamlit so they
 can be exercised in unit tests and reused by another front end later.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+import json
 import random
 import uuid
 
@@ -156,6 +158,85 @@ def _money(value):
     return f"${value:,.0f}"
 
 
+def create_simulation_export(config, net_worth, repayment_dates, details, exported_at=None):
+    """Return a JSON export containing reproducible inputs and monthly results."""
+    exported_at = exported_at or datetime.now(timezone.utc)
+    monthly_results = [
+        {
+            "month": index + 1,
+            "net_worth": value,
+            "cash": details["bank_account"][index],
+            "investments": details["investments"][index],
+        }
+        for index, value in enumerate(net_worth)
+    ]
+    export = {
+        "format": "financial-simulator-export",
+        "schema_version": 1,
+        "exported_at_utc": exported_at.astimezone(timezone.utc).isoformat(),
+        "parameters": asdict(config),
+        "results": {
+            "summary": {
+                "months_simulated": len(net_worth),
+                "final_net_worth": net_worth[-1],
+                "final_cash": details["bank_account"][-1],
+                "final_investments": details["investments"][-1],
+                "loans_repaid": len(repayment_dates),
+            },
+            "monthly": monthly_results,
+            "loan_repayments": [
+                {"name": name, "month": month_index + 1}
+                for name, month_index in repayment_dates.items()
+            ],
+        },
+    }
+    return json.dumps(export, indent=2, ensure_ascii=False)
+
+
+def read_simulation_export(data):
+    """Validate an exported JSON document and rebuild its simulation config."""
+    try:
+        if isinstance(data, bytes):
+            data = data.decode("utf-8")
+        document = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as error:
+        raise ValueError("The selected file is not valid UTF-8 JSON.") from error
+
+    if not isinstance(document, dict) or document.get("format") != "financial-simulator-export":
+        raise ValueError("This is not a Financial Simulator export.")
+    if document.get("schema_version") != 1:
+        raise ValueError("This export version is not supported.")
+    parameters = document.get("parameters")
+    if not isinstance(parameters, dict):
+        raise ValueError("The export does not contain simulation parameters.")
+
+    parameters = dict(parameters)
+
+    def rebuild_collection(name, config_type):
+        items = parameters.get(name)
+        if items is None:
+            return None
+        if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
+            raise ValueError(f"The exported {name} must be a list.")
+        try:
+            return [config_type(**item) for item in items]
+        except TypeError as error:
+            raise ValueError(f"The exported {name} are invalid: {error}") from error
+
+    parameters["investments"] = rebuild_collection("investments", InvestmentConfig)
+    parameters["incomes"] = rebuild_collection("incomes", IncomeConfig)
+    parameters["expenses"] = rebuild_collection("expenses", ExpenseConfig)
+    parameters["loans"] = rebuild_collection("loans", LoanConfig)
+    parameters["additional_expenses"] = (
+        rebuild_collection("additional_expenses", ExpenseConfig) or []
+    )
+    parameters["dependents"] = rebuild_collection("dependents", DependentConfig) or []
+    try:
+        return SimulationConfig(**parameters)
+    except TypeError as error:
+        raise ValueError(f"The exported parameters are invalid: {error}") from error
+
+
 def main():
     import matplotlib.pyplot as plt
     import streamlit as st
@@ -196,6 +277,44 @@ def main():
 
     def config_values(item):
         return {key: value for key, value in item.items() if key != "_id"}
+
+    def editable_items(items):
+        return [{**asdict(item), "_id": uuid.uuid4().hex} for item in items]
+
+    def import_config(imported):
+        st.session_state.scenario_years = imported.years
+        st.session_state.scenario_seed = imported.seed
+        st.session_state.scenario_initial_cash = imported.initial_cash
+        st.session_state.scenario_yearly_fee = imported.yearly_fee
+        st.session_state.investments = editable_items(
+            imported.investments if imported.investments is not None else [
+                InvestmentConfig("Portfolio", imported.investment_type,
+                                 imported.investment_initial, imported.investment_contribution)
+            ]
+        )
+        st.session_state.incomes = editable_items(
+            imported.incomes if imported.incomes is not None else [
+                IncomeConfig("Primary income", imported.income_type, imported.monthly_income,
+                             imported.tax_rate, imported.bonus_pct)
+            ]
+        )
+        st.session_state.expenses = editable_items(
+            imported.expenses if imported.expenses is not None else [
+                ExpenseConfig("Living expenses", imported.expense_type, imported.monthly_expense)
+            ]
+        )
+        st.session_state.loans = editable_items(
+            imported.loans if imported.loans is not None else [
+                LoanConfig("Loan", imported.loan_amount, imported.loan_rate,
+                           imported.loan_duration, imported.fixed_rate,
+                           imported.loan_already_paid)
+            ]
+        )
+        st.session_state.additional_expenses = [
+            asdict(item) for item in imported.additional_expenses
+        ]
+        st.session_state.dependents = editable_items(imported.dependents)
+        st.session_state.active_card = None
 
     def card_is_open(collection, item):
         active = st.session_state.get("active_card")
@@ -253,11 +372,44 @@ def main():
 
     with st.sidebar:
         st.header("Scenario")
-        years = st.slider("Simulation horizon (years)", 1, 50, 10)
-        seed = st.number_input("Random seed", 0, 1_000_000, 42)
+        with st.expander("Import saved scenario"):
+            uploaded_export = st.file_uploader(
+                "Financial Simulator JSON", type="json",
+                help="Select a JSON file created by the export button.",
+            )
+            if st.button(
+                "Import parameters", disabled=uploaded_export is None,
+                use_container_width=True,
+            ):
+                try:
+                    import_config(read_simulation_export(uploaded_export.getvalue()))
+                except ValueError as error:
+                    st.error(str(error))
+                else:
+                    st.success("Scenario imported.")
+                    st.rerun()
+
+        years = st.slider(
+            "Simulation horizon (years)", 1, 50,
+            **({} if "scenario_years" in st.session_state else {"value": 10}),
+            key="scenario_years",
+        )
+        seed = st.number_input(
+            "Random seed", 0, 1_000_000,
+            **({} if "scenario_seed" in st.session_state else {"value": 42}),
+            key="scenario_seed",
+        )
         st.subheader("Cash")
-        initial_cash = st.number_input("Starting cash", min_value=0.0, value=5000.0, step=500.0)
-        yearly_fee = st.number_input("Annual bank fee", min_value=0.0, value=110.0, step=10.0)
+        initial_cash = st.number_input(
+            "Starting cash", min_value=0.0, step=500.0,
+            **({} if "scenario_initial_cash" in st.session_state else {"value": 5000.0}),
+            key="scenario_initial_cash",
+        )
+        yearly_fee = st.number_input(
+            "Annual bank fee", min_value=0.0, step=10.0,
+            **({} if "scenario_yearly_fee" in st.session_state else {"value": 110.0}),
+            key="scenario_yearly_fee",
+        )
         st.subheader("Investments")
         investment_types = sorted(Investment.TOPOLOGY_DETAILS)
         add_type = st.selectbox("Investment type to add", investment_types,
@@ -412,6 +564,14 @@ def main():
     columns[1].metric("Final cash", _money(details["bank_account"][-1]))
     columns[2].metric("Final investments", _money(details["investments"][-1]))
     columns[3].metric("Loans repaid", len(repayment_dates))
+
+    st.download_button(
+        "⬇️ Export parameters and results",
+        data=create_simulation_export(config, net_worth, repayment_dates, details),
+        file_name=f"financial-simulation-{config.years}y-seed-{config.seed}.json",
+        mime="application/json",
+        help="Download the scenario inputs and month-by-month results as JSON.",
+    )
 
     figure, axis = plt.subplots(figsize=(12, 5))
     axis.plot(net_worth, label="Net worth", linewidth=2.5, color="#35c99a")
