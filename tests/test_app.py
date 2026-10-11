@@ -1,5 +1,6 @@
 import pytest
 
+from bank_account import InsufficientFundsException
 from app import (DependentConfig, ExpenseConfig, IncomeConfig, InvestmentConfig,
                  LoanConfig, SimulationConfig, build_components, run_simulation)
 
@@ -128,6 +129,17 @@ def test_loan_rejects_overpayment():
         loans=[LoanConfig("Invalid", 1000, 2, 10, already_paid=1001)],
     )
     with pytest.raises(ValueError, match="already_paid"):
+        run_simulation(config)
+
+
+def test_catastrophic_scenario_stops_when_cash_cannot_cover_obligations():
+    config = SimulationConfig(
+        years=5, initial_cash=100, yearly_fee=0,
+        investments=[], incomes=[],
+        expenses=[ExpenseConfig("Emergency care", "healthcare", 1000)],
+        loans=[LoanConfig("Large debt", 50000, 2, 25)],
+    )
+    with pytest.raises(InsufficientFundsException):
         run_simulation(config)
 
 
