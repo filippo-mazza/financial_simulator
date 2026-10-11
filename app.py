@@ -433,6 +433,184 @@ def main():
     def remove_item(collection, index):
         collection.pop(index)
 
+    def render_investments():
+        investment_types = sorted(Investment.TOPOLOGY_DETAILS)
+        add_type = st.selectbox(
+            "Investment type to add", investment_types,
+            index=investment_types.index("stock"), key="investment_type_to_add",
+        )
+        if st.button("＋ Add investment", use_container_width=True):
+            add_investment(add_type)
+        for index, item in enumerate(st.session_state.investments):
+            with st.container(border=True):
+                if not card_is_open("investment", item):
+                    st.caption(
+                        f"{item['investment_type']} · initial "
+                        f"${item['initial_amount']:,.0f} · monthly "
+                        f"${item['monthly_contribution']:,.0f}"
+                    )
+                    continue
+                item["name"] = st.text_input(
+                    "Name", item["name"], key=f"investment_name_{item_key(item)}"
+                )
+                item["investment_type"] = st.selectbox(
+                    "Type", investment_types,
+                    index=investment_types.index(item["investment_type"]),
+                    key=f"investment_type_{item_key(item)}",
+                )
+                item["initial_amount"] = st.number_input(
+                    "Initial amount", min_value=0.0, value=float(item["initial_amount"]),
+                    step=100.0, format="%.0f", key=f"investment_initial_{item_key(item)}",
+                )
+                item["monthly_contribution"] = st.number_input(
+                    "Monthly contribution", min_value=0.0,
+                    value=float(item["monthly_contribution"]), step=50.0, format="%.0f",
+                    key=f"investment_contribution_{item_key(item)}",
+                )
+                if st.button("Remove investment", key=f"remove_investment_{item_key(item)}"):
+                    remove_item(st.session_state.investments, index)
+                    st.rerun()
+
+    def render_incomes():
+        income_types = sorted(IncomeSource("x", "salary", 1).income_growth)
+        income_to_add = st.selectbox(
+            "Income type to add", income_types, key="income_type_to_add"
+        )
+        if st.button("＋ Add income", use_container_width=True):
+            add_income(income_to_add)
+        for index, item in enumerate(st.session_state.incomes):
+            with st.container(border=True):
+                if not card_is_open("income", item):
+                    st.caption(f"{item['income_type']} · ${item['monthly_amount']:,.0f}/month")
+                    continue
+                item["name"] = st.text_input(
+                    "Name", item["name"], key=f"income_name_{item_key(item)}"
+                )
+                item["income_type"] = st.selectbox(
+                    "Type", income_types, index=income_types.index(item["income_type"]),
+                    key=f"income_type_{item_key(item)}",
+                )
+                item["monthly_amount"] = st.number_input(
+                    "Monthly amount", min_value=0.0, value=float(item["monthly_amount"]),
+                    step=100.0, format="%.0f", key=f"income_amount_{item_key(item)}",
+                )
+                item["tax_rate"] = st.number_input(
+                    "Custom tax rate", 0.0, 100.0, value=float(item["tax_rate"]),
+                    key=f"income_tax_{item_key(item)}",
+                )
+                item["bonus_pct"] = st.number_input(
+                    "Bonus cap (%)", 0.0, 100.0, value=float(item["bonus_pct"]),
+                    key=f"income_bonus_{item_key(item)}",
+                )
+                if st.button("Remove income", key=f"remove_income_{item_key(item)}"):
+                    remove_item(st.session_state.incomes, index)
+                    st.rerun()
+
+    def render_expenses():
+        expense_types = sorted(Expense("x", "housing", 1).expense_growth)
+        expense_to_add = st.selectbox(
+            "Expense type to add", expense_types, key="expense_type_to_add"
+        )
+        if st.button("＋ Add expense", use_container_width=True):
+            add_expense()
+        for index, item in enumerate(st.session_state.expenses):
+            with st.container(border=True):
+                if not card_is_open("expense", item):
+                    st.caption(f"{item['expense_type']} · ${item['monthly_amount']:,.0f}/month")
+                    continue
+                item["name"] = st.text_input(
+                    "Name", item["name"], key=f"expense_name_{item_key(item)}"
+                )
+                item["expense_type"] = st.selectbox(
+                    "Type", expense_types,
+                    index=expense_types.index(item["expense_type"]),
+                    key=f"expense_type_{item_key(item)}",
+                )
+                item["monthly_amount"] = st.number_input(
+                    "Monthly amount", min_value=0.0, value=float(item["monthly_amount"]),
+                    step=25.0, format="%.0f", key=f"expense_amount_{item_key(item)}",
+                )
+                if st.button("Remove expense", key=f"remove_expense_{item_key(item)}"):
+                    remove_item(st.session_state.expenses, index)
+                    st.rerun()
+
+    def render_loans():
+        if st.button("＋ Add loan", use_container_width=True):
+            add_loan()
+        for index, item in enumerate(st.session_state.loans):
+            with st.container(border=True):
+                if not card_is_open("loan", item):
+                    st.caption(
+                        f"${item['amount']:,.0f} · {item['interest_rate']:.2f}% · "
+                        f"{item['duration_years']} years"
+                    )
+                    continue
+                item["name"] = st.text_input(
+                    "Name", item["name"], key=f"loan_name_{item_key(item)}"
+                )
+                item["amount"] = st.number_input(
+                    "Amount", min_value=0.0, value=float(item["amount"]), step=1000.0,
+                    format="%.0f", key=f"loan_amount_{item_key(item)}",
+                )
+                item["interest_rate"] = st.number_input(
+                    "Interest rate (%)", min_value=0.0, value=float(item["interest_rate"]),
+                    step=0.1, key=f"loan_rate_{item_key(item)}",
+                )
+                item["duration_years"] = st.number_input(
+                    "Duration (years)", min_value=1, value=int(item["duration_years"]),
+                    key=f"loan_duration_{item_key(item)}",
+                )
+                item["fixed_rate"] = st.checkbox(
+                    "Fixed rate", value=item["fixed_rate"],
+                    key=f"loan_fixed_{item_key(item)}",
+                )
+                item["already_paid"] = st.number_input(
+                    "Already paid", min_value=0.0, value=float(item["already_paid"]),
+                    step=100.0, format="%.0f", key=f"loan_paid_{item_key(item)}",
+                )
+                if st.button("Remove loan", key=f"remove_loan_{item_key(item)}"):
+                    remove_item(st.session_state.loans, index)
+                    st.rerun()
+
+    def render_dependents():
+        st.caption("Add the people and recurring costs that shape this scenario.")
+        if st.button("＋ Add daughter / child", use_container_width=True):
+            add_dependent()
+        for index, item in enumerate(st.session_state.dependents):
+            with st.container(border=True):
+                if not card_is_open("dependent", item):
+                    st.caption(
+                        f"age {item.get('age', 0)} · ${item['monthly_cost']:,.0f}/month"
+                    )
+                    continue
+                item["name"] = st.text_input(
+                    "Name", item["name"], key=f"dependent_name_{item_key(item)}"
+                )
+                item["age"] = st.number_input(
+                    "Current age", min_value=0, max_value=25,
+                    value=int(item.get("age", 0)), key=f"dependent_age_{item_key(item)}",
+                )
+                item["monthly_cost"] = st.number_input(
+                    "Monthly child cost", min_value=0.0, value=float(item["monthly_cost"]),
+                    step=25.0, format="%.0f", key=f"dependent_cost_{item_key(item)}",
+                )
+                automatic_costs = st.checkbox(
+                    "Add school cost from age 6*",
+                    value=item.get("school_start_age") is not None,
+                    key=f"dependent_school_toggle_{item_key(item)}",
+                )
+                item["school_start_age"] = 6 if automatic_costs else None
+                item["school_monthly_cost"] = st.number_input(
+                    "School monthly cost*", min_value=0.0,
+                    value=float(item.get("school_monthly_cost", 250.0)), step=25.0,
+                    format="%.0f", key=f"dependent_school_cost_{item_key(item)}",
+                    disabled=not automatic_costs,
+                )
+                st.caption("* Illustrative assumption; adjust or disable for your situation.")
+                if st.button("Remove child", key=f"remove_dependent_{item_key(item)}"):
+                    remove_item(st.session_state.dependents, index)
+                    st.rerun()
+
     with st.sidebar:
         st.header("Scenario")
         with st.expander("Import saved scenario"):
@@ -457,154 +635,66 @@ def main():
             **({} if "scenario_years" in st.session_state else {"value": 10}),
             key="scenario_years",
         )
-        st.subheader("Cash")
-        initial_cash = st.number_input(
-            "Starting cash", min_value=0.0, step=500.0, format="%.0f",
-            **({} if "scenario_initial_cash" in st.session_state else {"value": 5000.0}),
-            key="scenario_initial_cash",
-        )
-        yearly_fee = st.number_input(
-            "Annual bank fee", min_value=0.0, step=10.0, format="%.0f",
-            **({} if "scenario_yearly_fee" in st.session_state else {"value": 110.0}),
-            key="scenario_yearly_fee",
-        )
-        st.subheader("Investments")
-        investment_types = sorted(Investment.TOPOLOGY_DETAILS)
-        add_type = st.selectbox("Investment type to add", investment_types,
-                                index=investment_types.index("stock"),
-                                key="investment_type_to_add")
-        if st.button("＋ Add investment", use_container_width=True):
-            add_investment(add_type)
-        for index, item in enumerate(st.session_state.investments):
-            with st.container(border=True):
-                if not card_is_open("investment", item):
-                    st.caption(f"{item['investment_type']} · initial ${item['initial_amount']:,.0f} · monthly ${item['monthly_contribution']:,.0f}")
-                    continue
-                item["name"] = st.text_input("Name", item["name"], key=f"investment_name_{item_key(item)}")
-                item["investment_type"] = st.selectbox(
-                    "Type", investment_types,
-                    index=investment_types.index(item["investment_type"]),
-                    key=f"investment_type_{item_key(item)}",
-                )
-                item["initial_amount"] = st.number_input(
-                    "Initial amount", min_value=0.0, value=float(item["initial_amount"]),
-                    step=100.0, format="%.0f", key=f"investment_initial_{item_key(item)}",
-                )
-                item["monthly_contribution"] = st.number_input(
-                    "Monthly contribution", min_value=0.0,
-                    value=float(item["monthly_contribution"]), step=50.0, format="%.0f",
-                    key=f"investment_contribution_{item_key(item)}",
-                )
-                if st.button("Remove investment", key=f"remove_investment_{item_key(item)}"):
-                    remove_item(st.session_state.investments, index)
-                    st.rerun()
-        st.subheader("Income sources")
-        income_types = sorted(IncomeSource("x", "salary", 1).income_growth)
-        income_to_add = st.selectbox("Income type to add", income_types, key="income_type_to_add")
-        if st.button("＋ Add income", use_container_width=True):
-            add_income(income_to_add)
-        for index, item in enumerate(st.session_state.incomes):
-            with st.container(border=True):
-                if not card_is_open("income", item):
-                    st.caption(f"{item['income_type']} · ${item['monthly_amount']:,.0f}/month")
-                    continue
-                item["name"] = st.text_input("Name", item["name"], key=f"income_name_{item_key(item)}")
-                item["income_type"] = st.selectbox("Type", income_types,
-                    index=income_types.index(item["income_type"]), key=f"income_type_{item_key(item)}")
-                item["monthly_amount"] = st.number_input("Monthly amount", min_value=0.0,
-                    value=float(item["monthly_amount"]), step=100.0, format="%.0f",
-                    key=f"income_amount_{item_key(item)}")
-                item["tax_rate"] = st.number_input("Custom tax rate", 0.0, 100.0,
-                    value=float(item["tax_rate"]), key=f"income_tax_{item_key(item)}")
-                item["bonus_pct"] = st.number_input("Bonus cap (%)", 0.0, 100.0,
-                    value=float(item["bonus_pct"]), key=f"income_bonus_{item_key(item)}")
-                if st.button("Remove income", key=f"remove_income_{item_key(item)}"):
-                    remove_item(st.session_state.incomes, index)
-                    st.rerun()
 
-        st.subheader("Expenses")
-        expense_types = sorted(Expense("x", "housing", 1).expense_growth)
-        expense_to_add = st.selectbox("Expense type to add", expense_types, key="expense_type_to_add")
-        if st.button("＋ Add expense", use_container_width=True):
-            add_expense()
-        for index, item in enumerate(st.session_state.expenses):
-            with st.container(border=True):
-                if not card_is_open("expense", item):
-                    st.caption(f"{item['expense_type']} · ${item['monthly_amount']:,.0f}/month")
-                    continue
-                item["name"] = st.text_input("Name", item["name"], key=f"expense_name_{item_key(item)}")
-                item["expense_type"] = st.selectbox("Type", expense_types,
-                    index=expense_types.index(item["expense_type"]), key=f"expense_type_{item_key(item)}")
-                item["monthly_amount"] = st.number_input("Monthly amount", min_value=0.0,
-                    value=float(item["monthly_amount"]), step=25.0, format="%.0f",
-                    key=f"expense_amount_{item_key(item)}")
-                if st.button("Remove expense", key=f"remove_expense_{item_key(item)}"):
-                    remove_item(st.session_state.expenses, index)
-                    st.rerun()
-
-        st.subheader("Loans")
-        if st.button("＋ Add loan", use_container_width=True):
-            add_loan()
-        for index, item in enumerate(st.session_state.loans):
-            with st.container(border=True):
-                if not card_is_open("loan", item):
-                    st.caption(f"${item['amount']:,.0f} · {item['interest_rate']:.2f}% · {item['duration_years']} years")
-                    continue
-                item["name"] = st.text_input("Name", item["name"], key=f"loan_name_{item_key(item)}")
-                item["amount"] = st.number_input("Amount", min_value=0.0,
-                    value=float(item["amount"]), step=1000.0, format="%.0f",
-                    key=f"loan_amount_{item_key(item)}")
-                item["interest_rate"] = st.number_input("Interest rate (%)", min_value=0.0,
-                    value=float(item["interest_rate"]), step=0.1, key=f"loan_rate_{item_key(item)}")
-                item["duration_years"] = st.number_input("Duration (years)", min_value=1,
-                    value=int(item["duration_years"]), key=f"loan_duration_{item_key(item)}")
-                item["fixed_rate"] = st.checkbox("Fixed rate", value=item["fixed_rate"], key=f"loan_fixed_{item_key(item)}")
-                item["already_paid"] = st.number_input("Already paid", min_value=0.0,
-                    value=float(item["already_paid"]), step=100.0, format="%.0f",
-                    key=f"loan_paid_{item_key(item)}")
-                if st.button("Remove loan", key=f"remove_loan_{item_key(item)}"):
-                    remove_item(st.session_state.loans, index)
-                    st.rerun()
-
-        st.subheader("Current situation")
-        st.caption("Add the people and recurring costs that shape this scenario.")
-        if st.button("＋ Add daughter / child", use_container_width=True):
-            add_dependent()
-        for index, item in enumerate(st.session_state.dependents):
-            with st.container(border=True):
-                if not card_is_open("dependent", item):
-                    st.caption(f"age {item.get('age', 0)} · ${item['monthly_cost']:,.0f}/month")
-                    continue
-                item["name"] = st.text_input("Name", item["name"], key=f"dependent_name_{item_key(item)}")
-                item["age"] = st.number_input("Current age", min_value=0, max_value=25,
-                    value=int(item.get("age", 0)), key=f"dependent_age_{item_key(item)}")
-                item["monthly_cost"] = st.number_input(
-                    "Monthly child cost", min_value=0.0, value=float(item["monthly_cost"]),
-                    step=25.0, format="%.0f", key=f"dependent_cost_{item_key(item)}",
-                )
-                automatic_costs = st.checkbox(
-                    "Add school cost from age 6*", value=item.get("school_start_age") is not None,
-                    key=f"dependent_school_toggle_{item_key(item)}",
-                )
-                item["school_start_age"] = 6 if automatic_costs else None
-                item["school_monthly_cost"] = st.number_input(
-                    "School monthly cost*", min_value=0.0,
-                    value=float(item.get("school_monthly_cost", 250.0)), step=25.0, format="%.0f",
-                    key=f"dependent_school_cost_{item_key(item)}", disabled=not automatic_costs,
-                )
-                st.caption("* Illustrative assumption; adjust or disable for your situation.")
-                if st.button("Remove child", key=f"remove_dependent_{item_key(item)}"):
-                    remove_item(st.session_state.dependents, index)
-                    st.rerun()
-
-        if st.session_state.expenses or st.session_state.dependents:
-            st.caption(
-                f"{len(st.session_state.expenses)} expense(s) · "
-                f"{len(st.session_state.dependents)} dependent(s)"
+        cash_value = st.session_state.get("scenario_initial_cash", 5000.0)
+        fee_value = st.session_state.get("scenario_yearly_fee", 110.0)
+        with st.expander(
+            f"Cash · ${cash_value:,.0f} start · ${fee_value:,.0f}/year",
+            expanded=True,
+        ):
+            initial_cash = st.number_input(
+                "Starting cash", min_value=0.0, step=500.0, format="%.0f",
+                **({} if "scenario_initial_cash" in st.session_state else {"value": 5000.0}),
+                key="scenario_initial_cash",
+            )
+            yearly_fee = st.number_input(
+                "Annual bank fee", min_value=0.0, step=10.0, format="%.0f",
+                **({} if "scenario_yearly_fee" in st.session_state else {"value": 110.0}),
+                key="scenario_yearly_fee",
             )
 
-        st.divider()
+        investments = st.session_state.investments
+        investment_initial = sum(item["initial_amount"] for item in investments)
+        investment_monthly = sum(item["monthly_contribution"] for item in investments)
+        with st.expander(
+            f"Investments · {len(investments)} · ${investment_initial:,.0f} start · "
+            f"${investment_monthly:,.0f}/month"
+        ):
+            render_investments()
+
+        incomes = st.session_state.incomes
+        income_monthly = sum(item["monthly_amount"] for item in incomes)
+        with st.expander(
+            f"Income · {len(incomes)} source(s) · ${income_monthly:,.0f}/month"
+        ):
+            render_incomes()
+
+        expenses = st.session_state.expenses
+        expense_monthly = sum(item["monthly_amount"] for item in expenses)
+        with st.expander(
+            f"Expenses · {len(expenses)} · ${expense_monthly:,.0f}/month"
+        ):
+            render_expenses()
+
+        loans = st.session_state.loans
+        outstanding = sum(item["amount"] - item["already_paid"] for item in loans)
+        with st.expander(f"Loans · {len(loans)} · ${outstanding:,.0f} outstanding"):
+            render_loans()
+
+        dependents = st.session_state.dependents
+        dependent_monthly = sum(item["monthly_cost"] for item in dependents)
+        with st.expander(
+            f"Family · {len(dependents)} dependent(s) · ${dependent_monthly:,.0f}/month"
+        ):
+            render_dependents()
+
+    run_copy, run_controls = st.columns([3, 1], gap="large")
+    with run_copy:
         st.subheader("Run projection")
+        st.caption(
+            "Average multiple stochastic simulations for a smoother long-term projection."
+        )
+    with run_controls:
         simulation_count = st.number_input(
             "Number of simulations", min_value=1, max_value=500, value=25, step=1,
             help="More runs produce a smoother average but take longer.",
@@ -739,7 +829,7 @@ def main():
             ],
         )
         labels = alt.Chart(event_data).mark_text(
-            angle=270, align="right", baseline="middle", dx=-8, fontSize=11,
+            angle=270, align="right", baseline="middle", dx=14, fontSize=11,
         ).encode(
             x=alt.X("month:Q"),
             y=alt.Y("label_height:Q"),

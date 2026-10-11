@@ -98,7 +98,11 @@ the simulation is rerun with the same seed.
 
 Choose a run count and click **Run simulations** to average multiple stochastic
 projections; the random seeds are managed internally rather than exposed in the
-UI. The dashboard combines the average summary metrics with an interactive
+UI. These run controls sit in the main dashboard rather than the scenario
+sidebar. The sidebar categories collapse independently and keep count/amount
+summaries visible in their headings for quick navigation.
+
+The dashboard combines the average summary metrics with an interactive
 Vega-Lite chart. Its explicit color legends distinguish average net worth,
 cash, investments, and event types. Hover for exact monthly values, or pan and
 zoom to explore the projection.
