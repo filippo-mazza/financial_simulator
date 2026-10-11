@@ -221,14 +221,6 @@ def main():
         st.subheader("Cash")
         initial_cash = st.number_input("Starting cash", min_value=0.0, value=5000.0, step=500.0)
         yearly_fee = st.number_input("Annual bank fee", min_value=0.0, value=110.0, step=10.0)
-        st.subheader("Income")
-        income_type = st.selectbox("Income type", sorted(IncomeSource("x", "salary", 1).income_growth))
-        monthly_income = st.number_input("Monthly gross income", min_value=0.0, value=3000.0, step=100.0)
-        tax_rate = st.number_input("Custom tax rate (0 = model default)", 0.0, 100.0, 0.0, step=1.0)
-        bonus_pct = st.number_input("Annual bonus cap (%)", 0.0, 100.0, 0.0, step=1.0)
-        st.subheader("Expenses")
-        expense_type = st.selectbox("Expense type", sorted(Expense("x", "housing", 1).expense_growth))
-        monthly_expense = st.number_input("Monthly expense", min_value=0.0, value=1500.0, step=100.0)
         st.subheader("Investments")
         investment_types = sorted(Investment.TOPOLOGY_DETAILS)
         add_type = st.selectbox("Investment type to add", investment_types,
@@ -256,13 +248,6 @@ def main():
                 if st.button("Remove investment", key=f"remove_investment_{index}"):
                     remove_item(st.session_state.investments, index)
                     st.rerun()
-        st.subheader("Loan")
-        loan_amount = st.number_input("Loan amount", min_value=0.0, value=10000.0, step=1000.0)
-        loan_rate = st.number_input("Interest rate (%)", min_value=0.0, value=2.0, step=0.1)
-        loan_duration = st.number_input("Duration (years)", min_value=1, max_value=50, value=25)
-        fixed_rate = st.checkbox("Fixed-rate repayment")
-        loan_already_paid = st.number_input("Already paid", min_value=0.0, value=0.0, step=100.0)
-
         st.subheader("Income sources")
         income_types = sorted(IncomeSource("x", "salary", 1).income_growth)
         income_to_add = st.selectbox("Income type to add", income_types, key="income_type_to_add")
@@ -341,16 +326,11 @@ def main():
 
     config = SimulationConfig(
         years=years, seed=int(seed), initial_cash=initial_cash, yearly_fee=yearly_fee,
-        monthly_income=monthly_income, income_type=income_type, tax_rate=tax_rate,
-        bonus_pct=bonus_pct, monthly_expense=monthly_expense, expense_type=expense_type,
         investment_type="stock", investment_initial=0.0, investment_contribution=0.0,
         investments=[InvestmentConfig(**item) for item in st.session_state.investments],
         incomes=[IncomeConfig(**item) for item in st.session_state.incomes],
         expenses=[ExpenseConfig(**item) for item in st.session_state.expenses],
         loans=[LoanConfig(**item) for item in st.session_state.loans],
-        loan_amount=loan_amount,
-        loan_rate=loan_rate, loan_duration=loan_duration, fixed_rate=fixed_rate,
-        loan_already_paid=loan_already_paid,
         additional_expenses=[ExpenseConfig(**item) for item in st.session_state.additional_expenses],
         dependents=[DependentConfig(**item) for item in st.session_state.dependents],
     )
