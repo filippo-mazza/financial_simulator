@@ -320,24 +320,6 @@ def main():
 
         st.subheader("Current situation")
         st.caption("Add the people and recurring costs that shape this scenario.")
-        if st.button("＋ Add expense", use_container_width=True):
-            add_expense()
-        for index, item in enumerate(st.session_state.additional_expenses):
-            with st.container(border=True):
-                item["name"] = st.text_input("Name", item["name"], key=f"expense_name_{index}")
-                item["expense_type"] = st.selectbox(
-                    "Type", sorted(Expense("x", "housing", 1).expense_growth),
-                    index=sorted(Expense("x", "housing", 1).expense_growth).index(item["expense_type"]),
-                    key=f"expense_type_{index}",
-                )
-                item["monthly_amount"] = st.number_input(
-                    "Monthly amount", min_value=0.0, value=float(item["monthly_amount"]),
-                    step=25.0, key=f"expense_amount_{index}",
-                )
-                if st.button("Remove expense", key=f"remove_expense_{index}"):
-                    remove_item(st.session_state.additional_expenses, index)
-                    st.rerun()
-
         if st.button("＋ Add daughter / child", use_container_width=True):
             add_dependent()
         for index, item in enumerate(st.session_state.dependents):
@@ -351,9 +333,9 @@ def main():
                     remove_item(st.session_state.dependents, index)
                     st.rerun()
 
-        if st.session_state.additional_expenses or st.session_state.dependents:
+        if st.session_state.expenses or st.session_state.dependents:
             st.caption(
-                f"{len(st.session_state.additional_expenses)} additional expense(s) · "
+                f"{len(st.session_state.expenses)} expense(s) · "
                 f"{len(st.session_state.dependents)} dependent(s)"
             )
 
