@@ -142,3 +142,19 @@ def test_multiple_collections_have_expected_first_month_result():
     # Cash is 5,600; net worth also subtracts the loan's 1,100 balance.
     assert result[0][0] == 4500
     assert result[2]["investments"][-1] == 0
+
+
+def test_child_school_cost_starts_at_configured_age():
+    config = SimulationConfig(
+        years=7, initial_cash=100000, investments=[], incomes=[], expenses=[], loans=[],
+        dependents=[DependentConfig("Child", 100, age=5, school_start_age=6,
+                                   school_monthly_cost=400)],
+    )
+    _, _, _, _, expenses = build_components(config)
+    child = expenses[0]
+    assert child.step() == 100
+    for _ in range(11):
+        child.step()
+    assert child.current_age == 6
+    assert child.monthly_expense == 502
+    assert child.step() == 502
