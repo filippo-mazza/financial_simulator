@@ -37,6 +37,25 @@ class InvestmentConfig:
 
 
 @dataclass
+class IncomeConfig:
+    name: str
+    income_type: str
+    monthly_amount: float
+    tax_rate: float = 0.0
+    bonus_pct: float = 0.0
+
+
+@dataclass
+class LoanConfig:
+    name: str
+    amount: float
+    interest_rate: float
+    duration_years: int
+    fixed_rate: bool = False
+    already_paid: float = 0.0
+
+
+@dataclass
 class SimulationConfig:
     years: int = 10
     seed: int = 42
@@ -61,20 +80,31 @@ class SimulationConfig:
     # None retains the backwards-compatible single-investment defaults;
     # an explicit empty list means the scenario has no investments.
     investments: list[InvestmentConfig] | None = None
+    incomes: list[IncomeConfig] | None = None
+    expenses: list[ExpenseConfig] | None = None
+    loans: list[LoanConfig] | None = None
 
 
 def build_components(config: SimulationConfig):
     """Create fresh model objects from UI/configuration values."""
-    income = IncomeSource(
-        "Primary income", config.income_type, config.monthly_income,
-        specific_taxation=config.tax_rate or None,
-        bonus_pct=config.bonus_pct or None,
-    )
-    expenses = [Expense("Living expenses", config.expense_type, config.monthly_expense)]
-    expenses.extend(
-        Expense(item.name, item.expense_type, item.monthly_amount)
-        for item in config.additional_expenses
-    )
+    if config.incomes is None:
+        income_specs = [IncomeConfig("Primary income", config.income_type,
+                                     config.monthly_income, config.tax_rate, config.bonus_pct)]
+    else:
+        income_specs = config.incomes
+    incomes = [IncomeSource(
+        item.name, item.income_type, item.monthly_amount,
+        specific_taxation=item.tax_rate or None, bonus_pct=item.bonus_pct or None,
+    ) for item in income_specs]
+
+    if config.expenses is None:
+        expense_specs = [ExpenseConfig("Living expenses", config.expense_type,
+                                       config.monthly_expense)]
+    else:
+        expense_specs = config.expenses
+    expense_specs = [*expense_specs, *config.additional_expenses]
+    expenses = [Expense(item.name, item.expense_type, item.monthly_amount)
+                for item in expense_specs]
     # A dependent is a recurring cost in the model. Keeping this explicit makes
     # it easy to evolve into age-based childcare/education rules later.
     expenses.extend(
@@ -91,12 +121,16 @@ def build_components(config: SimulationConfig):
     investments = [Investment(
         item.name, item.investment_type, item.initial_amount, item.monthly_contribution,
     ) for item in investment_specs]
-    loan = Loan(
-        "Loan", config.loan_amount, config.loan_rate, config.loan_duration,
-        config.fixed_rate, config.loan_already_paid,
-    )
+    if config.loans is None:
+        loan_specs = [LoanConfig("Loan", config.loan_amount, config.loan_rate,
+                                 config.loan_duration, config.fixed_rate,
+                                 config.loan_already_paid)]
+    else:
+        loan_specs = config.loans
+    loans = [Loan(item.name, item.amount, item.interest_rate, item.duration_years,
+                  item.fixed_rate, item.already_paid) for item in loan_specs]
     account = BankAccount(config.initial_cash, config.yearly_fee)
-    return account, investments, [loan], [income], expenses
+    return account, investments, loans, incomes, expenses
 
 
 def run_simulation(config: SimulationConfig):
@@ -134,10 +168,22 @@ def main():
         "name": "Portfolio", "investment_type": "stock",
         "initial_amount": 1000.0, "monthly_contribution": 100.0,
     }])
+    st.session_state.setdefault("incomes", [{
+        "name": "Salary", "income_type": "salary", "monthly_amount": 3000.0,
+        "tax_rate": 0.0, "bonus_pct": 0.0,
+    }])
+    st.session_state.setdefault("expenses", [{
+        "name": "Living expenses", "expense_type": "housing", "monthly_amount": 1500.0,
+    }])
+    st.session_state.setdefault("loans", [{
+        "name": "Home loan", "amount": 10000.0, "interest_rate": 2.0,
+        "duration_years": 25, "fixed_rate": False, "already_paid": 0.0,
+    }])
 
     def add_expense():
-        st.session_state.additional_expenses.append({
-            "name": "New expense", "expense_type": "miscellaneous", "monthly_amount": 100.0,
+        st.session_state.expenses.append({
+            "name": f"Expense {len(st.session_state.expenses) + 1}",
+            "expense_type": "miscellaneous", "monthly_amount": 100.0,
         })
 
     def add_dependent():
@@ -149,6 +195,20 @@ def main():
             "name": f"Investment {len(st.session_state.investments) + 1}",
             "investment_type": investment_type, "initial_amount": 1000.0,
             "monthly_contribution": 100.0,
+        })
+
+    def add_income(income_type):
+        st.session_state.incomes.append({
+            "name": f"Income {len(st.session_state.incomes) + 1}",
+            "income_type": income_type, "monthly_amount": 2000.0,
+            "tax_rate": 0.0, "bonus_pct": 0.0,
+        })
+
+    def add_loan():
+        st.session_state.loans.append({
+            "name": f"Loan {len(st.session_state.loans) + 1}", "amount": 10000.0,
+            "interest_rate": 2.0, "duration_years": 25, "fixed_rate": False,
+            "already_paid": 0.0,
         })
 
     def remove_item(collection, index):
@@ -203,6 +263,61 @@ def main():
         fixed_rate = st.checkbox("Fixed-rate repayment")
         loan_already_paid = st.number_input("Already paid", min_value=0.0, value=0.0, step=100.0)
 
+        st.subheader("Income sources")
+        income_types = sorted(IncomeSource("x", "salary", 1).income_growth)
+        income_to_add = st.selectbox("Income type to add", income_types, key="income_type_to_add")
+        if st.button("＋ Add income", use_container_width=True):
+            add_income(income_to_add)
+        for index, item in enumerate(st.session_state.incomes):
+            with st.container(border=True):
+                item["name"] = st.text_input("Name", item["name"], key=f"income_name_{index}")
+                item["income_type"] = st.selectbox("Type", income_types,
+                    index=income_types.index(item["income_type"]), key=f"income_type_{index}")
+                item["monthly_amount"] = st.number_input("Monthly amount", min_value=0.0,
+                    value=float(item["monthly_amount"]), step=100.0, key=f"income_amount_{index}")
+                item["tax_rate"] = st.number_input("Custom tax rate", 0.0, 100.0,
+                    value=float(item["tax_rate"]), key=f"income_tax_{index}")
+                item["bonus_pct"] = st.number_input("Bonus cap (%)", 0.0, 100.0,
+                    value=float(item["bonus_pct"]), key=f"income_bonus_{index}")
+                if st.button("Remove income", key=f"remove_income_{index}"):
+                    remove_item(st.session_state.incomes, index)
+                    st.rerun()
+
+        st.subheader("Expenses")
+        expense_types = sorted(Expense("x", "housing", 1).expense_growth)
+        expense_to_add = st.selectbox("Expense type to add", expense_types, key="expense_type_to_add")
+        if st.button("＋ Add expense", use_container_width=True):
+            add_expense()
+        for index, item in enumerate(st.session_state.expenses):
+            with st.container(border=True):
+                item["name"] = st.text_input("Name", item["name"], key=f"expense_name_{index}")
+                item["expense_type"] = st.selectbox("Type", expense_types,
+                    index=expense_types.index(item["expense_type"]), key=f"expense_type_{index}")
+                item["monthly_amount"] = st.number_input("Monthly amount", min_value=0.0,
+                    value=float(item["monthly_amount"]), step=25.0, key=f"expense_amount_{index}")
+                if st.button("Remove expense", key=f"remove_expense_{index}"):
+                    remove_item(st.session_state.expenses, index)
+                    st.rerun()
+
+        st.subheader("Loans")
+        if st.button("＋ Add loan", use_container_width=True):
+            add_loan()
+        for index, item in enumerate(st.session_state.loans):
+            with st.container(border=True):
+                item["name"] = st.text_input("Name", item["name"], key=f"loan_name_{index}")
+                item["amount"] = st.number_input("Amount", min_value=0.0,
+                    value=float(item["amount"]), step=1000.0, key=f"loan_amount_{index}")
+                item["interest_rate"] = st.number_input("Interest rate (%)", min_value=0.0,
+                    value=float(item["interest_rate"]), step=0.1, key=f"loan_rate_{index}")
+                item["duration_years"] = st.number_input("Duration (years)", min_value=1,
+                    value=int(item["duration_years"]), key=f"loan_duration_{index}")
+                item["fixed_rate"] = st.checkbox("Fixed rate", value=item["fixed_rate"], key=f"loan_fixed_{index}")
+                item["already_paid"] = st.number_input("Already paid", min_value=0.0,
+                    value=float(item["already_paid"]), step=100.0, key=f"loan_paid_{index}")
+                if st.button("Remove loan", key=f"remove_loan_{index}"):
+                    remove_item(st.session_state.loans, index)
+                    st.rerun()
+
         st.subheader("Current situation")
         st.caption("Add the people and recurring costs that shape this scenario.")
         if st.button("＋ Add expense", use_container_width=True):
@@ -248,6 +363,9 @@ def main():
         bonus_pct=bonus_pct, monthly_expense=monthly_expense, expense_type=expense_type,
         investment_type="stock", investment_initial=0.0, investment_contribution=0.0,
         investments=[InvestmentConfig(**item) for item in st.session_state.investments],
+        incomes=[IncomeConfig(**item) for item in st.session_state.incomes],
+        expenses=[ExpenseConfig(**item) for item in st.session_state.expenses],
+        loans=[LoanConfig(**item) for item in st.session_state.loans],
         loan_amount=loan_amount,
         loan_rate=loan_rate, loan_duration=loan_duration, fixed_rate=fixed_rate,
         loan_already_paid=loan_already_paid,

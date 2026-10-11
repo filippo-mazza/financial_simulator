@@ -1,5 +1,5 @@
-from app import (DependentConfig, ExpenseConfig, InvestmentConfig, SimulationConfig,
-                 build_components, run_simulation)
+from app import (DependentConfig, ExpenseConfig, IncomeConfig, InvestmentConfig,
+                 LoanConfig, SimulationConfig, build_components, run_simulation)
 
 
 def test_build_components_exposes_all_model_options():
@@ -48,3 +48,28 @@ def test_investments_are_configurable_and_can_be_empty():
     assert investments == []
     result = run_simulation(empty)
     assert len(result[0]) == 12
+
+
+def test_zero_collections_preserve_initial_cash_and_result_length():
+    config = SimulationConfig(
+        years=2, initial_cash=1250, investments=[], incomes=[], expenses=[], loans=[]
+    )
+    result = run_simulation(config)
+    assert len(result[0]) == 24
+    assert result[0][0] == 1250
+    assert result[0][-1] == 1250
+    assert result[2]["investments"] == [0] * 24
+    assert result[2]["bank_account"] == [1250] * 24
+
+
+def test_multiple_collections_have_expected_first_month_result():
+    config = SimulationConfig(
+        years=1, initial_cash=5000, investments=[],
+        incomes=[IncomeConfig("Salary", "salary", 1000, tax_rate=10)],
+        expenses=[ExpenseConfig("Rent", "housing", 200)],
+        loans=[LoanConfig("Debt", 1200, 0, 1, fixed_rate=True)],
+    )
+    result = run_simulation(config)
+    # Cash is 5,600; net worth also subtracts the loan's 1,100 balance.
+    assert result[0][0] == 4500
+    assert result[2]["investments"][-1] == 0
