@@ -139,7 +139,7 @@ def test_catastrophic_scenario_stops_when_cash_cannot_cover_obligations():
         expenses=[ExpenseConfig("Emergency care", "healthcare", 1000)],
         loans=[LoanConfig("Large debt", 50000, 2, 25)],
     )
-    with pytest.raises(InsufficientFundsException):
+    with pytest.raises(InsufficientFundsException, match="month 1.*expense 'Emergency care'.*available"):
         run_simulation(config)
 
 
