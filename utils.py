@@ -17,6 +17,19 @@ def get_net_worth(investments,loans,bank_account):
     return bank_account.total_balance() + total_investments - total_loans
 
 import random
+from bank_account import InsufficientFundsException
+
+
+def _withdraw_for_simulation(bank_account, amount, month, reason):
+    """Withdraw with enough context to explain an insolvent scenario."""
+    balance = bank_account.subaccounts["Main"]
+    try:
+        bank_account.withdraw(amount, account_name="Main")
+    except InsufficientFundsException as error:
+        raise InsufficientFundsException(
+            f"Simulation stopped in month {month + 1}: unable to pay {reason} "
+            f"of \\${amount:,.2f} with \\${balance:,.2f} available."
+        ) from error
 
 
 def compute_net_worth_over_time(years, bank_account, investments, loans, income_sources,
@@ -55,13 +68,19 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             for expense in expenses:
                 monthly_expense = expense.step()
                 year_expense+=monthly_expense
-                bank_account.withdraw(monthly_expense, account_name="Main")
+                _withdraw_for_simulation(
+                    bank_account, monthly_expense, current_month,
+                    f"expense '{getattr(expense, 'name', 'unnamed')}'",
+                )
             
             # Loan Repayments
             for loan in loans:
                 monthly_repayment = loan.step()
                 if monthly_repayment is not None: # not already paid
-                  bank_account.withdraw(monthly_repayment, account_name="Main")
+                  _withdraw_for_simulation(
+                      bank_account, monthly_repayment, current_month,
+                      f"loan repayment '{getattr(loan, 'name', 'unnamed')}'",
+                  )
                 if loan.is_repaid and loan.name not in loan_repayment_dates:
                     loan_repayment_dates[loan.name] = current_month
             
@@ -97,7 +116,10 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                     if stock_investments:
                         stock_inv = stock_investments[0]
                         x = bank_account.total_balance() * 0.1
-                        bank_account.withdraw(x, account_name="Main")
+                        _withdraw_for_simulation(
+                            bank_account, x, current_month,
+                            f"additional contribution to '{getattr(stock_inv, 'name', 'unnamed')}'",
+                        )
                         stock_inv.add_contribution(x)
                         additional_contributions += 1
 
