@@ -804,6 +804,7 @@ def main():
             "detail_version": 1,
             "fingerprint": scenario_fingerprint,
             "simulation_count": int(simulation_count),
+            "run_id": uuid.uuid4().hex,
             "result": result,
         }
 
@@ -869,7 +870,7 @@ def main():
 
     month_selection = alt.selection_point(
         name="selected_month", fields=["month"], nearest=True,
-        on="click", clear=False,
+        on="click", clear=False, value=[{"month": len(net_worth)}],
     )
     month_data = alt.Data(values=[
         {"month": month} for month in range(1, len(net_worth) + 1)
@@ -924,8 +925,13 @@ def main():
         height=460,
         title=f"Average projected financial position ({simulation_count} simulations)",
     ).interactive()
+    st.caption(
+        "Click any month on the chart to inspect its asset values, balances, "
+        "income, and payments below."
+    )
     chart_state = st.altair_chart(
-        chart, use_container_width=True, key="projection_chart",
+        chart, use_container_width=True,
+        key=f"projection_chart_{stored_result.get('run_id', 'legacy')}",
         on_select="rerun", selection_mode="selected_month",
     )
     if events:
@@ -933,33 +939,29 @@ def main():
             f"month {event['month']}: {event['label']}" for event in events
         ))
     selected = chart_state.selection.get("selected_month", [])
+    selected_month = len(net_worth)
     if selected:
         selection = selected[0] if isinstance(selected, list) else selected
         selected_month = int(round(selection["month"]))
-        if 1 <= selected_month <= len(net_worth):
-            balances, flows = get_month_details(net_worth, details, selected_month)
-            st.subheader(f"Average detail for month {selected_month}")
-            balance_column, flow_column = st.columns(2, gap="large")
-            with balance_column:
-                st.markdown("**Ending balances and asset values**")
-                st.dataframe(
-                    balances, hide_index=True, use_container_width=True,
-                    column_config={
-                        "Amount": st.column_config.NumberColumn(format="$%.0f"),
-                    },
-                )
-            with flow_column:
-                st.markdown("**Income and payments during the month**")
-                st.dataframe(
-                    flows, hide_index=True, use_container_width=True,
-                    column_config={
-                        "Amount": st.column_config.NumberColumn(format="$%.0f"),
-                    },
-                )
-    else:
-        st.info(
-            "Click a month in the chart to inspect individual investments, "
-            "loan balances, income, and expenses."
+    selected_month = min(max(selected_month, 1), len(net_worth))
+    balances, flows = get_month_details(net_worth, details, selected_month)
+    st.subheader(f"Average detail for month {selected_month}")
+    balance_column, flow_column = st.columns(2, gap="large")
+    with balance_column:
+        st.markdown("**Ending balances and asset values**")
+        st.dataframe(
+            balances, hide_index=True, use_container_width=True,
+            column_config={
+                "Amount": st.column_config.NumberColumn(format="$%.0f"),
+            },
+        )
+    with flow_column:
+        st.markdown("**Income and payments during the month**")
+        st.dataframe(
+            flows, hide_index=True, use_container_width=True,
+            column_config={
+                "Amount": st.column_config.NumberColumn(format="$%.0f"),
+            },
         )
     st.caption("Illustrative projection only — this is not financial advice. *Age-based family costs are configurable assumptions, not validated rules.")
 
