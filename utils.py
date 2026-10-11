@@ -75,11 +75,10 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
 
                 # Monthly contribution to investment
                 # only for stock like ones
-                if investment.typology=='stock':
+                if investment.typology == 'stock' and investment.monthly_contribution > 0:
                     if bank_account.subaccounts["Main"] > investment.monthly_contribution:
-                        if investment.typology == 'stock':
-                          bank_account.withdraw(investment.monthly_contribution, account_name="Main")
-                          investment.add_contribution(investment.monthly_contribution)
+                        bank_account.withdraw(investment.monthly_contribution, account_name="Main")
+                        investment.add_contribution(investment.monthly_contribution)
                   
 
             # Apply account fees at the end of each simulated year.

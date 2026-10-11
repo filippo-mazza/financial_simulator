@@ -74,6 +74,22 @@ def test_yearly_bank_fee_reduces_cash_and_net_worth():
     assert result[0][-1] == 780
 
 
+def test_zero_stock_contribution_skips_transaction(monkeypatch):
+    calls = []
+
+    def record_contribution(self, amount):
+        calls.append(amount)
+
+    monkeypatch.setattr("investment.Investment.add_contribution", record_contribution)
+    config = SimulationConfig(
+        years=1, initial_cash=5000, yearly_fee=0,
+        investments=[InvestmentConfig("Stocks", "stock", 1000, 0)],
+        incomes=[], expenses=[], loans=[],
+    )
+    run_simulation(config)
+    assert calls == []
+
+
 def test_multiple_collections_have_expected_first_month_result():
     config = SimulationConfig(
         years=1, initial_cash=5000, investments=[],
