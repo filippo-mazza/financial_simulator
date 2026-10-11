@@ -397,7 +397,7 @@ def main():
         expenses=[ExpenseConfig(**config_values(item)) for item in st.session_state.expenses],
         loans=[LoanConfig(**config_values(item)) for item in st.session_state.loans],
         additional_expenses=[ExpenseConfig(**item) for item in st.session_state.additional_expenses],
-        dependents=[DependentConfig(**item) for item in st.session_state.dependents],
+        dependents=[DependentConfig(**config_values(item)) for item in st.session_state.dependents],
     )
     try:
         net_worth, repayment_dates, details = run_simulation(config)
