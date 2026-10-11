@@ -20,6 +20,8 @@ class Loan:
             return principal
         else:
             # We're using the formula for an annuity to calculate fixed monthly repayments
+            if self.interest_rate == 0:
+                return self.remaining_amount / (self.duration_years * 12)
             return self.remaining_amount * (self.interest_rate / 12) / (1 - math.pow(1 + self.interest_rate / 12, -self.duration_years * 12))
 
     def step(self):

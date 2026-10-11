@@ -90,6 +90,17 @@ def test_zero_stock_contribution_skips_transaction(monkeypatch):
     assert calls == []
 
 
+def test_zero_interest_variable_rate_loan_is_interest_free():
+    config = SimulationConfig(
+        years=1, initial_cash=5000, yearly_fee=0,
+        investments=[], incomes=[], expenses=[],
+        loans=[LoanConfig("Interest-free loan", 1200, 0, 1)],
+    )
+    result = run_simulation(config)
+    assert result[0][0] == 3800
+    assert result[1] == {"Interest-free loan": 11}
+
+
 def test_multiple_collections_have_expected_first_month_result():
     config = SimulationConfig(
         years=1, initial_cash=5000, investments=[],
