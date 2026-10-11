@@ -69,6 +69,18 @@ For repeatable simulations and tests, pass a seed to
 `compute_net_worth_over_time(..., seed=42)`. The simulator restores the random
 state after a seeded run, so it does not affect unrelated random operations.
 
+## Streamlit UI
+
+Run the interactive simulator locally:
+
+```bash
+make install
+make run
+```
+
+The sidebar exposes the simulator's supported income, expense, investment, and
+loan options. Use `make test` to run the unit and end-to-end test suite.
+
 ## Verification status
 
 The project has been tested end to end in Codex (5.6 Luna). The current test
