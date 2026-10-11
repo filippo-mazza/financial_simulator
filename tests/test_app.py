@@ -252,14 +252,45 @@ def test_other_income_uses_default_taxation():
     assert result[2]["bank_account"][0] == 85
 
 
-def test_non_stock_contributions_are_applied():
+def test_real_estate_costs_are_linked_expenses_and_tax_is_annual():
     config = SimulationConfig(
         years=1, initial_cash=5000, yearly_fee=0,
-        investments=[InvestmentConfig("Property", "real_estate", 1000, 100)],
+        investments=[InvestmentConfig(
+            "Property", "real_estate", 1000, monthly_contribution=999,
+            monthly_expenses=100, yearly_tax=1200,
+        )],
         incomes=[], expenses=[], loans=[],
     )
+
+    _, investments, _, _, expenses = build_components(config)
     result = run_simulation(config)
+
+    assert investments[0].monthly_contribution == 0
+    assert [expense.name for expense in expenses] == [
+        "Property — property expenses (linked)",
+        "Property — property tax (linked)",
+    ]
     assert result[2]["bank_account"][0] == 4900
+    assert result[2]["bank_account"][10] == 3900
+    assert result[2]["bank_account"][11] == 2600
+    assert result[2]["expense_values"]["Property — property tax (linked)"][:11] == [0] * 11
+    assert result[2]["expense_values"]["Property — property tax (linked)"][11] == 1200
+
+
+def test_legacy_real_estate_export_maps_contribution_to_property_expenses():
+    config = SimulationConfig(
+        investments=[InvestmentConfig("Property", "real_estate", 1000, 100)]
+    )
+    result = run_simulation(config)
+    document = json.loads(create_simulation_export(config, *result))
+    investment = document["parameters"]["investments"][0]
+    investment.pop("monthly_expenses")
+    investment.pop("yearly_tax")
+
+    restored = read_simulation_export(json.dumps(document))
+
+    assert restored.investments[0].monthly_contribution == 0
+    assert restored.investments[0].monthly_expenses == 100
 
 
 def test_loan_rejects_overpayment():

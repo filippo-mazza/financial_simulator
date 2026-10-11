@@ -12,7 +12,7 @@ from statistics import fmean
 import uuid
 
 from bank_account import BankAccount, InsufficientFundsException
-from expense import AgeBasedExpense, Expense
+from expense import AgeBasedExpense, Expense, YearlyExpense
 from income_source import IncomeSource
 from investment import Investment
 from loan import Loan
@@ -41,6 +41,8 @@ class InvestmentConfig:
     investment_type: str
     initial_amount: float
     monthly_contribution: float
+    monthly_expenses: float = 0.0
+    yearly_tax: float = 0.0
 
 
 @dataclass
@@ -104,6 +106,15 @@ def build_components(config: SimulationConfig):
         specific_taxation=item.tax_rate or None, bonus_pct=item.bonus_pct or None,
     ) for item in income_specs]
 
+    if config.investments is None:
+        investment_specs = [InvestmentConfig(
+            "Portfolio", config.investment_type, config.investment_initial,
+            0 if config.investment_type == "real_estate" else config.investment_contribution,
+            config.investment_contribution if config.investment_type == "real_estate" else 0,
+        )]
+    else:
+        investment_specs = config.investments
+
     if config.expenses is None:
         expense_specs = [ExpenseConfig("Living expenses", config.expense_type,
                                        config.monthly_expense)]
@@ -112,6 +123,19 @@ def build_components(config: SimulationConfig):
     expense_specs = [*expense_specs, *config.additional_expenses]
     expenses = [Expense(item.name, item.expense_type, item.monthly_amount)
                 for item in expense_specs]
+    for investment in investment_specs:
+        if investment.investment_type != "real_estate":
+            continue
+        if investment.monthly_expenses > 0:
+            expenses.append(Expense(
+                f"{investment.name} — property expenses (linked)",
+                "housing", investment.monthly_expenses,
+            ))
+        if investment.yearly_tax > 0:
+            expenses.append(YearlyExpense(
+                f"{investment.name} — property tax (linked)",
+                investment.yearly_tax,
+            ))
     # A dependent is a recurring cost in the model. Keeping this explicit makes
     # it easy to evolve into age-based childcare/education rules later.
     expenses.extend(
@@ -122,15 +146,9 @@ def build_components(config: SimulationConfig):
         )
         for dependent in config.dependents
     )
-    if config.investments is None:
-        investment_specs = [InvestmentConfig(
-            "Portfolio", config.investment_type, config.investment_initial,
-            config.investment_contribution,
-        )]
-    else:
-        investment_specs = config.investments
     investments = [Investment(
-        item.name, item.investment_type, item.initial_amount, item.monthly_contribution,
+        item.name, item.investment_type, item.initial_amount,
+        0 if item.investment_type == "real_estate" else item.monthly_contribution,
     ) for item in investment_specs]
     if config.loans is None:
         loan_specs = [LoanConfig("Loan", config.loan_amount, config.loan_rate,
@@ -336,7 +354,16 @@ def read_simulation_export(data):
         if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
             raise ValueError(f"The exported {name} must be a list.")
         try:
-            return [config_type(**item) for item in items]
+            rebuilt = []
+            for item in items:
+                values = dict(item)
+                if (name == "investments"
+                        and values.get("investment_type") == "real_estate"
+                        and "monthly_expenses" not in values):
+                    values["monthly_expenses"] = values.get("monthly_contribution", 0)
+                    values["monthly_contribution"] = 0
+                rebuilt.append(config_type(**values))
+            return rebuilt
         except TypeError as error:
             raise ValueError(f"The exported {name} are invalid: {error}") from error
 
@@ -373,6 +400,7 @@ def main():
     st.session_state.setdefault("investments", [{
         "name": "Portfolio", "investment_type": "stock",
         "initial_amount": 1000.0, "monthly_contribution": 100.0,
+        "monthly_expenses": 0.0, "yearly_tax": 0.0,
     }])
     st.session_state.setdefault("incomes", [{
         "name": "Salary", "income_type": "salary", "monthly_amount": 3000.0,
@@ -388,6 +416,15 @@ def main():
     for collection_name in ("investments", "incomes", "expenses", "loans", "dependents"):
         for item in st.session_state[collection_name]:
             item.setdefault("_id", uuid.uuid4().hex)
+            if collection_name == "investments":
+                if "monthly_expenses" not in item:
+                    item["monthly_expenses"] = (
+                        item.get("monthly_contribution", 0.0)
+                        if item.get("investment_type") == "real_estate" else 0.0
+                    )
+                    if item.get("investment_type") == "real_estate":
+                        item["monthly_contribution"] = 0.0
+                item.setdefault("yearly_tax", 0.0)
 
     def item_key(item):
         return item["_id"]
@@ -408,8 +445,12 @@ def main():
         st.session_state.investments = editable_items(
             imported.investments if imported.investments is not None else [
                 InvestmentConfig("Portfolio", imported.investment_type,
-                                 imported.investment_initial, imported.investment_contribution)
-            ], ("initial_amount", "monthly_contribution")
+                                 imported.investment_initial,
+                                 0 if imported.investment_type == "real_estate"
+                                 else imported.investment_contribution,
+                                 imported.investment_contribution
+                                 if imported.investment_type == "real_estate" else 0)
+            ], ("initial_amount", "monthly_contribution", "monthly_expenses", "yearly_tax")
         )
         st.session_state.incomes = editable_items(
             imported.incomes if imported.incomes is not None else [
@@ -470,7 +511,9 @@ def main():
         st.session_state.investments.append({
             "name": f"Investment {len(st.session_state.investments) + 1}",
             "investment_type": investment_type, "initial_amount": 1000.0,
-            "monthly_contribution": 100.0,
+            "monthly_contribution": 0.0 if investment_type == "real_estate" else 100.0,
+            "monthly_expenses": 100.0 if investment_type == "real_estate" else 0.0,
+            "yearly_tax": 1000.0 if investment_type == "real_estate" else 0.0,
             "_id": uuid.uuid4().hex,
         })
 
@@ -504,11 +547,18 @@ def main():
         for index, item in enumerate(st.session_state.investments):
             with st.container(border=True):
                 if not card_is_open("investment", item):
-                    st.caption(
-                        f"{item['investment_type']} · initial "
-                        f"${item['initial_amount']:,.0f} · monthly "
-                        f"${item['monthly_contribution']:,.0f}"
-                    )
+                    if item["investment_type"] == "real_estate":
+                        st.caption(
+                            f"real estate · value ${item['initial_amount']:,.0f} · "
+                            f"expenses ${item['monthly_expenses']:,.0f}/month · "
+                            f"tax ${item['yearly_tax']:,.0f}/year"
+                        )
+                    else:
+                        st.caption(
+                            f"{item['investment_type']} · initial "
+                            f"${item['initial_amount']:,.0f} · monthly contribution "
+                            f"${item['monthly_contribution']:,.0f}"
+                        )
                     continue
                 item["name"] = st.text_input(
                     "Name", item["name"], key=f"investment_name_{item_key(item)}"
@@ -522,11 +572,28 @@ def main():
                     "Initial amount", min_value=0.0, value=float(item["initial_amount"]),
                     step=100.0, format="%.0f", key=f"investment_initial_{item_key(item)}",
                 )
-                item["monthly_contribution"] = st.number_input(
-                    "Monthly contribution", min_value=0.0,
-                    value=float(item["monthly_contribution"]), step=50.0, format="%.0f",
-                    key=f"investment_contribution_{item_key(item)}",
-                )
+                if item["investment_type"] == "real_estate":
+                    item["monthly_expenses"] = st.number_input(
+                        "Monthly property expenses", min_value=0.0,
+                        value=float(item["monthly_expenses"]), step=50.0, format="%.0f",
+                        key=f"investment_expenses_{item_key(item)}",
+                        help="Maintenance, insurance, management, and similar recurring costs.",
+                    )
+                    item["yearly_tax"] = st.number_input(
+                        "Yearly property tax", min_value=0.0,
+                        value=float(item["yearly_tax"]), step=100.0, format="%.0f",
+                        key=f"investment_tax_{item_key(item)}",
+                    )
+                    st.caption(
+                        "These costs are deducted by the simulation and linked read-only "
+                        "in the Expenses category."
+                    )
+                else:
+                    item["monthly_contribution"] = st.number_input(
+                        "Monthly contribution", min_value=0.0,
+                        value=float(item["monthly_contribution"]), step=50.0,
+                        format="%.0f", key=f"investment_contribution_{item_key(item)}",
+                    )
                 if st.button("Remove investment", key=f"remove_investment_{item_key(item)}"):
                     remove_item(st.session_state.investments, index)
                     st.rerun()
@@ -593,6 +660,21 @@ def main():
                 if st.button("Remove expense", key=f"remove_expense_{item_key(item)}"):
                     remove_item(st.session_state.expenses, index)
                     st.rerun()
+
+        linked_properties = [
+            item for item in st.session_state.investments
+            if item["investment_type"] == "real_estate"
+        ]
+        if linked_properties:
+            st.markdown("**Linked real-estate costs**")
+            st.caption("Read-only here — edit these values in Investments.")
+        for item in linked_properties:
+            with st.container(border=True):
+                st.markdown(f"**↗ {item['name']}**")
+                st.caption(
+                    f"Property expenses: ${item['monthly_expenses']:,.0f}/month · "
+                    f"Property tax: ${item['yearly_tax']:,.0f}/year"
+                )
 
     def render_loans():
         if st.button("＋ Add loan", use_container_width=True):
@@ -715,7 +797,10 @@ def main():
 
         investments = st.session_state.investments
         investment_initial = sum(item["initial_amount"] for item in investments)
-        investment_monthly = sum(item["monthly_contribution"] for item in investments)
+        investment_monthly = sum(
+            item["monthly_contribution"] for item in investments
+            if item["investment_type"] != "real_estate"
+        )
         with st.expander(
             f"Investments · {len(investments)} · ${investment_initial:,.0f} start · "
             f"${investment_monthly:,.0f}/month"
@@ -730,9 +815,15 @@ def main():
             render_incomes()
 
         expenses = st.session_state.expenses
-        expense_monthly = sum(item["monthly_amount"] for item in expenses)
+        linked_properties = [
+            item for item in investments if item["investment_type"] == "real_estate"
+        ]
+        linked_monthly = sum(item["monthly_expenses"] for item in linked_properties)
+        linked_yearly_tax = sum(item["yearly_tax"] for item in linked_properties)
+        expense_monthly = sum(item["monthly_amount"] for item in expenses) + linked_monthly
         with st.expander(
-            f"Expenses · {len(expenses)} · ${expense_monthly:,.0f}/month"
+            f"Expenses · {len(expenses)} editable + {len(linked_properties)} linked · "
+            f"${expense_monthly:,.0f}/month · ${linked_yearly_tax:,.0f}/year tax"
         ):
             render_expenses()
 
@@ -770,6 +861,7 @@ def main():
         investments=[InvestmentConfig(
             item["name"], item["investment_type"], _whole_amount(item["initial_amount"]),
             _whole_amount(item["monthly_contribution"]),
+            _whole_amount(item["monthly_expenses"]), _whole_amount(item["yearly_tax"]),
         ) for item in st.session_state.investments],
         incomes=[IncomeConfig(
             item["name"], item["income_type"], _whole_amount(item["monthly_amount"]),

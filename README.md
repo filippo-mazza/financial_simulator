@@ -102,6 +102,12 @@ UI. These run controls sit in the main dashboard rather than the scenario
 sidebar. The sidebar categories collapse independently and keep count/amount
 summaries visible in their headings for quick navigation.
 
+Real-estate investments use **Monthly property expenses** instead of a monthly
+investment contribution and also expose a **Yearly property tax**. Monthly
+property costs are deducted every month; the tax is charged once in month 12 of
+each simulation year. Both appear as read-only linked costs in the Expenses
+category and must be edited from the corresponding investment.
+
 The dashboard combines the average summary metrics with an interactive
 Vega-Lite chart. Its explicit color legends distinguish average net worth,
 cash, investments, and event types. Hover for exact monthly values, or pan and

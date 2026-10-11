@@ -119,3 +119,18 @@ class AgeBasedExpense(Expense):
         self.monthly_expense = self.starting_monthly_expense + sum(
             amount for age, amount in self.age_costs.items() if age <= self.current_age
         )
+
+
+class YearlyExpense(Expense):
+    """An expense charged once per year and adjusted annually for inflation."""
+
+    def __init__(self, name, yearly_expense, expense_type="housing"):
+        super().__init__(name, expense_type, yearly_expense)
+
+    def step(self):
+        self.months_passed += 1
+        if self.months_passed % 12 != 0:
+            return 0
+        current_expense = self.monthly_expense
+        self._adjust_yearly_expense()
+        return current_expense
