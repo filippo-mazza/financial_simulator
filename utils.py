@@ -82,6 +82,10 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                           investment.add_contribution(investment.monthly_contribution)
                   
 
+            # Apply account fees at the end of each simulated year.
+            if month == 11:
+                bank_account.apply_yearly_fees()
+
             # Store details
             monthly_details["investments"].append(total_investment_value(investments))
             monthly_details["bank_account"].append(bank_account.subaccounts["Main"])

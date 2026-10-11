@@ -52,7 +52,7 @@ def test_investments_are_configurable_and_can_be_empty():
 
 def test_zero_collections_preserve_initial_cash_and_result_length():
     config = SimulationConfig(
-        years=2, initial_cash=1250, investments=[], incomes=[], expenses=[], loans=[]
+        years=2, initial_cash=1250, yearly_fee=0, investments=[], incomes=[], expenses=[], loans=[]
     )
     result = run_simulation(config)
     assert len(result[0]) == 24
@@ -60,6 +60,18 @@ def test_zero_collections_preserve_initial_cash_and_result_length():
     assert result[0][-1] == 1250
     assert result[2]["investments"] == [0] * 24
     assert result[2]["bank_account"] == [1250] * 24
+
+
+def test_yearly_bank_fee_reduces_cash_and_net_worth():
+    config = SimulationConfig(
+        years=2, initial_cash=1000, yearly_fee=110,
+        investments=[], incomes=[], expenses=[], loans=[],
+    )
+    result = run_simulation(config)
+    assert result[2]["bank_account"][10] == 1000
+    assert result[2]["bank_account"][11] == 890
+    assert result[0][11] == 890
+    assert result[0][-1] == 780
 
 
 def test_multiple_collections_have_expected_first_month_result():
