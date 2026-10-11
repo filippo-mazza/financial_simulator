@@ -110,10 +110,12 @@ class AgeBasedExpense(Expense):
         if self.months_passed > 0 and self.months_passed % 12 == 0:
             self.current_age += 1
             if self.current_age in self.age_costs:
-                self.monthly_expense = self.age_costs[self.current_age]
+                self.monthly_expense += self.age_costs[self.current_age]
         return amount
 
     def reset(self):
         super().reset()
         self.current_age = self.initial_age
-        self.monthly_expense = self.starting_monthly_expense
+        self.monthly_expense = self.starting_monthly_expense + sum(
+            amount for age, amount in self.age_costs.items() if age <= self.current_age
+        )

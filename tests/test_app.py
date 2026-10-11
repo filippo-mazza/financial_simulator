@@ -156,5 +156,5 @@ def test_child_school_cost_starts_at_configured_age():
     for _ in range(11):
         child.step()
     assert child.current_age == 6
-    assert child.monthly_expense == 400
-    assert child.step() == 400
+    assert child.monthly_expense == 502
+    assert child.step() == 502
