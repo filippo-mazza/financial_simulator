@@ -158,6 +158,11 @@ def _money(value):
     return f"${value:,.0f}"
 
 
+def _whole_amount(value):
+    """Discard cents from large UI amounts where that precision is not useful."""
+    return int(value)
+
+
 def create_simulation_export(config, net_worth, repayment_dates, details, exported_at=None):
     """Return a JSON export containing reproducible inputs and monthly results."""
     exported_at = exported_at or datetime.now(timezone.utc)
@@ -275,45 +280,51 @@ def main():
     def item_key(item):
         return item["_id"]
 
-    def config_values(item):
-        return {key: value for key, value in item.items() if key != "_id"}
-
-    def editable_items(items):
-        return [{**asdict(item), "_id": uuid.uuid4().hex} for item in items]
+    def editable_items(items, money_fields=()):
+        editable = []
+        for item in items:
+            values = asdict(item)
+            for field_name in money_fields:
+                values[field_name] = float(_whole_amount(values[field_name]))
+            editable.append({**values, "_id": uuid.uuid4().hex})
+        return editable
 
     def import_config(imported):
         st.session_state.scenario_years = imported.years
         st.session_state.scenario_seed = imported.seed
-        st.session_state.scenario_initial_cash = imported.initial_cash
-        st.session_state.scenario_yearly_fee = imported.yearly_fee
+        st.session_state.scenario_initial_cash = float(_whole_amount(imported.initial_cash))
+        st.session_state.scenario_yearly_fee = float(_whole_amount(imported.yearly_fee))
         st.session_state.investments = editable_items(
             imported.investments if imported.investments is not None else [
                 InvestmentConfig("Portfolio", imported.investment_type,
                                  imported.investment_initial, imported.investment_contribution)
-            ]
+            ], ("initial_amount", "monthly_contribution")
         )
         st.session_state.incomes = editable_items(
             imported.incomes if imported.incomes is not None else [
                 IncomeConfig("Primary income", imported.income_type, imported.monthly_income,
                              imported.tax_rate, imported.bonus_pct)
-            ]
+            ], ("monthly_amount",)
         )
         st.session_state.expenses = editable_items(
             imported.expenses if imported.expenses is not None else [
                 ExpenseConfig("Living expenses", imported.expense_type, imported.monthly_expense)
-            ]
+            ], ("monthly_amount",)
         )
         st.session_state.loans = editable_items(
             imported.loans if imported.loans is not None else [
                 LoanConfig("Loan", imported.loan_amount, imported.loan_rate,
                            imported.loan_duration, imported.fixed_rate,
                            imported.loan_already_paid)
-            ]
+            ], ("amount", "already_paid")
         )
         st.session_state.additional_expenses = [
-            asdict(item) for item in imported.additional_expenses
+            {**asdict(item), "monthly_amount": float(_whole_amount(item.monthly_amount))}
+            for item in imported.additional_expenses
         ]
-        st.session_state.dependents = editable_items(imported.dependents)
+        st.session_state.dependents = editable_items(
+            imported.dependents, ("monthly_cost", "school_monthly_cost")
+        )
         st.session_state.active_card = None
 
     def card_is_open(collection, item):
@@ -401,12 +412,12 @@ def main():
         )
         st.subheader("Cash")
         initial_cash = st.number_input(
-            "Starting cash", min_value=0.0, step=500.0,
+            "Starting cash", min_value=0.0, step=500.0, format="%.0f",
             **({} if "scenario_initial_cash" in st.session_state else {"value": 5000.0}),
             key="scenario_initial_cash",
         )
         yearly_fee = st.number_input(
-            "Annual bank fee", min_value=0.0, step=10.0,
+            "Annual bank fee", min_value=0.0, step=10.0, format="%.0f",
             **({} if "scenario_yearly_fee" in st.session_state else {"value": 110.0}),
             key="scenario_yearly_fee",
         )
@@ -430,11 +441,11 @@ def main():
                 )
                 item["initial_amount"] = st.number_input(
                     "Initial amount", min_value=0.0, value=float(item["initial_amount"]),
-                    step=100.0, key=f"investment_initial_{item_key(item)}",
+                    step=100.0, format="%.0f", key=f"investment_initial_{item_key(item)}",
                 )
                 item["monthly_contribution"] = st.number_input(
                     "Monthly contribution", min_value=0.0,
-                    value=float(item["monthly_contribution"]), step=50.0,
+                    value=float(item["monthly_contribution"]), step=50.0, format="%.0f",
                     key=f"investment_contribution_{item_key(item)}",
                 )
                 if st.button("Remove investment", key=f"remove_investment_{item_key(item)}"):
@@ -454,7 +465,8 @@ def main():
                 item["income_type"] = st.selectbox("Type", income_types,
                     index=income_types.index(item["income_type"]), key=f"income_type_{item_key(item)}")
                 item["monthly_amount"] = st.number_input("Monthly amount", min_value=0.0,
-                    value=float(item["monthly_amount"]), step=100.0, key=f"income_amount_{item_key(item)}")
+                    value=float(item["monthly_amount"]), step=100.0, format="%.0f",
+                    key=f"income_amount_{item_key(item)}")
                 item["tax_rate"] = st.number_input("Custom tax rate", 0.0, 100.0,
                     value=float(item["tax_rate"]), key=f"income_tax_{item_key(item)}")
                 item["bonus_pct"] = st.number_input("Bonus cap (%)", 0.0, 100.0,
@@ -477,7 +489,8 @@ def main():
                 item["expense_type"] = st.selectbox("Type", expense_types,
                     index=expense_types.index(item["expense_type"]), key=f"expense_type_{item_key(item)}")
                 item["monthly_amount"] = st.number_input("Monthly amount", min_value=0.0,
-                    value=float(item["monthly_amount"]), step=25.0, key=f"expense_amount_{item_key(item)}")
+                    value=float(item["monthly_amount"]), step=25.0, format="%.0f",
+                    key=f"expense_amount_{item_key(item)}")
                 if st.button("Remove expense", key=f"remove_expense_{item_key(item)}"):
                     remove_item(st.session_state.expenses, index)
                     st.rerun()
@@ -492,14 +505,16 @@ def main():
                     continue
                 item["name"] = st.text_input("Name", item["name"], key=f"loan_name_{item_key(item)}")
                 item["amount"] = st.number_input("Amount", min_value=0.0,
-                    value=float(item["amount"]), step=1000.0, key=f"loan_amount_{item_key(item)}")
+                    value=float(item["amount"]), step=1000.0, format="%.0f",
+                    key=f"loan_amount_{item_key(item)}")
                 item["interest_rate"] = st.number_input("Interest rate (%)", min_value=0.0,
                     value=float(item["interest_rate"]), step=0.1, key=f"loan_rate_{item_key(item)}")
                 item["duration_years"] = st.number_input("Duration (years)", min_value=1,
                     value=int(item["duration_years"]), key=f"loan_duration_{item_key(item)}")
                 item["fixed_rate"] = st.checkbox("Fixed rate", value=item["fixed_rate"], key=f"loan_fixed_{item_key(item)}")
                 item["already_paid"] = st.number_input("Already paid", min_value=0.0,
-                    value=float(item["already_paid"]), step=100.0, key=f"loan_paid_{item_key(item)}")
+                    value=float(item["already_paid"]), step=100.0, format="%.0f",
+                    key=f"loan_paid_{item_key(item)}")
                 if st.button("Remove loan", key=f"remove_loan_{item_key(item)}"):
                     remove_item(st.session_state.loans, index)
                     st.rerun()
@@ -518,7 +533,7 @@ def main():
                     value=int(item.get("age", 0)), key=f"dependent_age_{item_key(item)}")
                 item["monthly_cost"] = st.number_input(
                     "Monthly child cost", min_value=0.0, value=float(item["monthly_cost"]),
-                    step=25.0, key=f"dependent_cost_{item_key(item)}",
+                    step=25.0, format="%.0f", key=f"dependent_cost_{item_key(item)}",
                 )
                 automatic_costs = st.checkbox(
                     "Add school cost from age 6*", value=item.get("school_start_age") is not None,
@@ -527,7 +542,7 @@ def main():
                 item["school_start_age"] = 6 if automatic_costs else None
                 item["school_monthly_cost"] = st.number_input(
                     "School monthly cost*", min_value=0.0,
-                    value=float(item.get("school_monthly_cost", 250.0)), step=25.0,
+                    value=float(item.get("school_monthly_cost", 250.0)), step=25.0, format="%.0f",
                     key=f"dependent_school_cost_{item_key(item)}", disabled=not automatic_costs,
                 )
                 st.caption("* Illustrative assumption; adjust or disable for your situation.")
@@ -542,14 +557,31 @@ def main():
             )
 
     config = SimulationConfig(
-        years=years, seed=int(seed), initial_cash=initial_cash, yearly_fee=yearly_fee,
+        years=years, seed=int(seed), initial_cash=_whole_amount(initial_cash),
+        yearly_fee=_whole_amount(yearly_fee),
         investment_type="stock", investment_initial=0.0, investment_contribution=0.0,
-        investments=[InvestmentConfig(**config_values(item)) for item in st.session_state.investments],
-        incomes=[IncomeConfig(**config_values(item)) for item in st.session_state.incomes],
-        expenses=[ExpenseConfig(**config_values(item)) for item in st.session_state.expenses],
-        loans=[LoanConfig(**config_values(item)) for item in st.session_state.loans],
-        additional_expenses=[ExpenseConfig(**item) for item in st.session_state.additional_expenses],
-        dependents=[DependentConfig(**config_values(item)) for item in st.session_state.dependents],
+        investments=[InvestmentConfig(
+            item["name"], item["investment_type"], _whole_amount(item["initial_amount"]),
+            _whole_amount(item["monthly_contribution"]),
+        ) for item in st.session_state.investments],
+        incomes=[IncomeConfig(
+            item["name"], item["income_type"], _whole_amount(item["monthly_amount"]),
+            item["tax_rate"], item["bonus_pct"],
+        ) for item in st.session_state.incomes],
+        expenses=[ExpenseConfig(
+            item["name"], item["expense_type"], _whole_amount(item["monthly_amount"]),
+        ) for item in st.session_state.expenses],
+        loans=[LoanConfig(
+            item["name"], _whole_amount(item["amount"]), item["interest_rate"],
+            item["duration_years"], item["fixed_rate"], _whole_amount(item["already_paid"]),
+        ) for item in st.session_state.loans],
+        additional_expenses=[ExpenseConfig(
+            item["name"], item["expense_type"], _whole_amount(item["monthly_amount"]),
+        ) for item in st.session_state.additional_expenses],
+        dependents=[DependentConfig(
+            item["name"], _whole_amount(item["monthly_cost"]), item["age"],
+            item["school_start_age"], _whole_amount(item["school_monthly_cost"]),
+        ) for item in st.session_state.dependents],
     )
     try:
         net_worth, repayment_dates, details = run_simulation(config)

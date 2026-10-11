@@ -4,7 +4,7 @@ import json
 import pytest
 
 from bank_account import InsufficientFundsException
-from app import (DependentConfig, ExpenseConfig, IncomeConfig, InvestmentConfig,
+from app import (_whole_amount, DependentConfig, ExpenseConfig, IncomeConfig, InvestmentConfig,
                  LoanConfig, SimulationConfig, build_components,
                  create_simulation_export, read_simulation_export, run_simulation)
 
@@ -18,6 +18,10 @@ def test_build_components_exposes_all_model_options():
     assert loans[0].is_fixed_rate is True
     assert incomes[0].income_type == "freelance"
     assert expenses[0].expense_type == "unexpected"
+
+
+def test_major_ui_amounts_discard_cents():
+    assert _whole_amount(5000.15) == 5000
 
 
 def test_run_simulation_is_reproducible_and_isolated():
