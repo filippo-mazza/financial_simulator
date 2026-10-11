@@ -5,7 +5,7 @@ import pytest
 
 from bank_account import InsufficientFundsException
 from app import (_whole_amount, DependentConfig, ExpenseConfig, IncomeConfig, InvestmentConfig,
-                 LoanConfig, SimulationConfig, build_components,
+                 LoanConfig, SimulationConfig, build_components, build_simulation_events,
                  create_simulation_export, read_simulation_export, run_simulation)
 
 
@@ -22,6 +22,23 @@ def test_build_components_exposes_all_model_options():
 
 def test_major_ui_amounts_discard_cents():
     assert _whole_amount(5000.15) == 5000
+
+
+def test_chart_events_include_school_starts_and_loan_repayments():
+    config = SimulationConfig(dependents=[
+        DependentConfig("Child 1", 300, age=5, school_start_age=6),
+        DependentConfig("Child 2", 300, age=3, school_start_age=6),
+        DependentConfig("Already enrolled", 300, age=7, school_start_age=6),
+        DependentConfig("No school cost", 300, age=2, school_start_age=None),
+    ])
+
+    events = build_simulation_events(config, {"Home loan": 11}, months_simulated=48)
+
+    assert events == [
+        {"month": 12, "label": "Home loan repaid", "event_type": "Loan repaid"},
+        {"month": 13, "label": "School starts for Child 1", "event_type": "School starts"},
+        {"month": 37, "label": "School starts for Child 2", "event_type": "School starts"},
+    ]
 
 
 def test_run_simulation_is_reproducible_and_isolated():
@@ -59,6 +76,10 @@ def test_simulation_export_contains_parameters_and_monthly_results():
     }
     assert document["results"]["loan_repayments"] == [
         {"name": "Short loan", "month": repayment_dates["Short loan"] + 1}
+    ]
+    assert document["results"]["events"] == [
+        {"month": repayment_dates["Short loan"] + 1,
+         "label": "Short loan repaid", "event_type": "Loan repaid"}
     ]
 
 

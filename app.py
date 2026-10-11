@@ -163,6 +163,33 @@ def _whole_amount(value):
     return int(value)
 
 
+def build_simulation_events(config, repayment_dates, months_simulated):
+    """Return chart events with human-friendly, one-based month numbers."""
+    events = [
+        {
+            "month": month_index + 1,
+            "label": f"{name} repaid",
+            "event_type": "Loan repaid",
+        }
+        for name, month_index in repayment_dates.items()
+        if month_index < months_simulated
+    ]
+    for dependent in config.dependents:
+        if (dependent.school_start_age is None
+                or dependent.age >= dependent.school_start_age):
+            continue
+        # AgeBasedExpense changes age after each twelfth month, so the new
+        # school cost first affects the following month.
+        month = (dependent.school_start_age - dependent.age) * 12 + 1
+        if month <= months_simulated:
+            events.append({
+                "month": month,
+                "label": f"School starts for {dependent.name}",
+                "event_type": "School starts",
+            })
+    return sorted(events, key=lambda event: (event["month"], event["label"]))
+
+
 def create_simulation_export(config, net_worth, repayment_dates, details, exported_at=None):
     """Return a JSON export containing reproducible inputs and monthly results."""
     exported_at = exported_at or datetime.now(timezone.utc)
@@ -193,6 +220,7 @@ def create_simulation_export(config, net_worth, repayment_dates, details, export
                 {"name": name, "month": month_index + 1}
                 for name, month_index in repayment_dates.items()
             ],
+            "events": build_simulation_events(config, repayment_dates, len(net_worth)),
         },
     }
     return json.dumps(export, indent=2, ensure_ascii=False)
@@ -243,7 +271,7 @@ def read_simulation_export(data):
 
 
 def main():
-    import matplotlib.pyplot as plt
+    import altair as alt
     import streamlit as st
 
     st.set_page_config(page_title="Financial Simulator", page_icon="📈", layout="wide")
@@ -605,17 +633,72 @@ def main():
         help="Download the scenario inputs and month-by-month results as JSON.",
     )
 
-    figure, axis = plt.subplots(figsize=(12, 5))
-    axis.plot(net_worth, label="Net worth", linewidth=2.5, color="#35c99a")
-    axis.plot(details["bank_account"], label="Cash", alpha=0.8, color="#5b8def")
-    axis.plot(details["investments"], label="Investments", alpha=0.8, color="#f4b942")
-    for month, name in ((month, name) for name, month in repayment_dates.items()):
-        axis.axvline(month, linestyle="--", alpha=0.4, color="#e06c75")
-        axis.text(month, final_net_worth, name, rotation=90, fontsize=8)
-    axis.set(xlabel="Month", ylabel="Amount", title="Projected financial position")
-    axis.grid(alpha=0.2)
-    axis.legend(loc="upper left")
-    st.pyplot(figure, use_container_width=True)
+    chart_values = []
+    for month, (worth, cash, investments) in enumerate(zip(
+            net_worth, details["bank_account"], details["investments"]), start=1):
+        chart_values.extend([
+            {"month": month, "amount": worth, "series": "Net worth"},
+            {"month": month, "amount": cash, "series": "Cash"},
+            {"month": month, "amount": investments, "series": "Investments"},
+        ])
+
+    lines = alt.Chart(alt.Data(values=chart_values)).mark_line(strokeWidth=2.5).encode(
+        x=alt.X("month:Q", title="Month", scale=alt.Scale(domain=[1, len(net_worth)])),
+        y=alt.Y("amount:Q", title="Amount", axis=alt.Axis(format="$,.0f")),
+        color=alt.Color(
+            "series:N", title=None,
+            scale=alt.Scale(
+                domain=["Net worth", "Cash", "Investments"],
+                range=["#35c99a", "#5b8def", "#f4b942"],
+            ),
+        ),
+        tooltip=[
+            alt.Tooltip("month:Q", title="Month", format=".0f"),
+            alt.Tooltip("series:N", title="Series"),
+            alt.Tooltip("amount:Q", title="Amount", format="$,.0f"),
+        ],
+    )
+
+    events = build_simulation_events(config, repayment_dates, len(net_worth))
+    chart = lines
+    if events:
+        label_height = max(
+            max(net_worth), max(details["bank_account"]), max(details["investments"])
+        )
+        event_values = [{**event, "label_height": label_height} for event in events]
+        event_data = alt.Data(values=event_values)
+        event_colors = alt.Scale(
+            domain=["Loan repaid", "School starts"],
+            range=["#e06c75", "#b7791f"],
+        )
+        rules = alt.Chart(event_data).mark_rule(
+            strokeDash=[7, 5], strokeWidth=2, opacity=0.85,
+        ).encode(
+            x=alt.X("month:Q"),
+            color=alt.Color("event_type:N", title="Events", scale=event_colors),
+            tooltip=[
+                alt.Tooltip("label:N", title="Event"),
+                alt.Tooltip("month:Q", title="Month", format=".0f"),
+            ],
+        )
+        labels = alt.Chart(event_data).mark_text(
+            angle=270, align="right", baseline="middle", dx=-8, fontSize=11,
+        ).encode(
+            x=alt.X("month:Q"),
+            y=alt.Y("label_height:Q"),
+            text=alt.Text("label:N"),
+            color=alt.Color("event_type:N", scale=event_colors, legend=None),
+        )
+        chart = lines + rules + labels
+
+    chart = chart.properties(
+        height=460, title="Projected financial position",
+    ).interactive()
+    st.altair_chart(chart, use_container_width=True)
+    if events:
+        st.caption("Events: " + " · ".join(
+            f"month {event['month']}: {event['label']}" for event in events
+        ))
     st.caption("Illustrative projection only — this is not financial advice. *Age-based family costs are configurable assumptions, not validated rules.")
 
 
