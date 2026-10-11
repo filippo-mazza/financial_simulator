@@ -29,6 +29,14 @@ class DependentConfig:
 
 
 @dataclass
+class InvestmentConfig:
+    name: str
+    investment_type: str
+    initial_amount: float
+    monthly_contribution: float
+
+
+@dataclass
 class SimulationConfig:
     years: int = 10
     seed: int = 42
@@ -50,6 +58,9 @@ class SimulationConfig:
     loan_already_paid: float = 0.0
     additional_expenses: list[ExpenseConfig] = field(default_factory=list)
     dependents: list[DependentConfig] = field(default_factory=list)
+    # None retains the backwards-compatible single-investment defaults;
+    # an explicit empty list means the scenario has no investments.
+    investments: list[InvestmentConfig] | None = None
 
 
 def build_components(config: SimulationConfig):
@@ -70,16 +81,22 @@ def build_components(config: SimulationConfig):
         Expense(f"{dependent.name} (child)", "education", dependent.monthly_cost)
         for dependent in config.dependents
     )
-    investment = Investment(
-        "Portfolio", config.investment_type, config.investment_initial,
-        config.investment_contribution,
-    )
+    if config.investments is None:
+        investment_specs = [InvestmentConfig(
+            "Portfolio", config.investment_type, config.investment_initial,
+            config.investment_contribution,
+        )]
+    else:
+        investment_specs = config.investments
+    investments = [Investment(
+        item.name, item.investment_type, item.initial_amount, item.monthly_contribution,
+    ) for item in investment_specs]
     loan = Loan(
         "Loan", config.loan_amount, config.loan_rate, config.loan_duration,
         config.fixed_rate, config.loan_already_paid,
     )
     account = BankAccount(config.initial_cash, config.yearly_fee)
-    return account, [investment], [loan], [income], expenses
+    return account, investments, [loan], [income], expenses
 
 
 def run_simulation(config: SimulationConfig):
@@ -113,6 +130,10 @@ def main():
 
     st.session_state.setdefault("additional_expenses", [])
     st.session_state.setdefault("dependents", [])
+    st.session_state.setdefault("investments", [{
+        "name": "Portfolio", "investment_type": "stock",
+        "initial_amount": 1000.0, "monthly_contribution": 100.0,
+    }])
 
     def add_expense():
         st.session_state.additional_expenses.append({
@@ -122,6 +143,13 @@ def main():
     def add_dependent():
         number = len(st.session_state.dependents) + 1
         st.session_state.dependents.append({"name": f"Child {number}", "monthly_cost": 300.0})
+
+    def add_investment(investment_type):
+        st.session_state.investments.append({
+            "name": f"Investment {len(st.session_state.investments) + 1}",
+            "investment_type": investment_type, "initial_amount": 1000.0,
+            "monthly_contribution": 100.0,
+        })
 
     def remove_item(collection, index):
         collection.pop(index)
@@ -141,12 +169,33 @@ def main():
         st.subheader("Expenses")
         expense_type = st.selectbox("Expense type", sorted(Expense("x", "housing", 1).expense_growth))
         monthly_expense = st.number_input("Monthly expense", min_value=0.0, value=1500.0, step=100.0)
-        st.subheader("Investment")
+        st.subheader("Investments")
         investment_types = sorted(Investment.TOPOLOGY_DETAILS)
-        investment_type = st.selectbox("Investment type", investment_types,
-                                       index=investment_types.index("stock"))
-        investment_initial = st.number_input("Initial investment", min_value=0.0, value=1000.0, step=100.0)
-        investment_contribution = st.number_input("Monthly contribution", min_value=0.0, value=100.0, step=50.0)
+        add_type = st.selectbox("Investment type to add", investment_types,
+                                index=investment_types.index("stock"),
+                                key="investment_type_to_add")
+        if st.button("＋ Add investment", use_container_width=True):
+            add_investment(add_type)
+        for index, item in enumerate(st.session_state.investments):
+            with st.container(border=True):
+                item["name"] = st.text_input("Name", item["name"], key=f"investment_name_{index}")
+                item["investment_type"] = st.selectbox(
+                    "Type", investment_types,
+                    index=investment_types.index(item["investment_type"]),
+                    key=f"investment_type_{index}",
+                )
+                item["initial_amount"] = st.number_input(
+                    "Initial amount", min_value=0.0, value=float(item["initial_amount"]),
+                    step=100.0, key=f"investment_initial_{index}",
+                )
+                item["monthly_contribution"] = st.number_input(
+                    "Monthly contribution", min_value=0.0,
+                    value=float(item["monthly_contribution"]), step=50.0,
+                    key=f"investment_contribution_{index}",
+                )
+                if st.button("Remove investment", key=f"remove_investment_{index}"):
+                    remove_item(st.session_state.investments, index)
+                    st.rerun()
         st.subheader("Loan")
         loan_amount = st.number_input("Loan amount", min_value=0.0, value=10000.0, step=1000.0)
         loan_rate = st.number_input("Interest rate (%)", min_value=0.0, value=2.0, step=0.1)
@@ -197,8 +246,9 @@ def main():
         years=years, seed=int(seed), initial_cash=initial_cash, yearly_fee=yearly_fee,
         monthly_income=monthly_income, income_type=income_type, tax_rate=tax_rate,
         bonus_pct=bonus_pct, monthly_expense=monthly_expense, expense_type=expense_type,
-        investment_type=investment_type, investment_initial=investment_initial,
-        investment_contribution=investment_contribution, loan_amount=loan_amount,
+        investment_type="stock", investment_initial=0.0, investment_contribution=0.0,
+        investments=[InvestmentConfig(**item) for item in st.session_state.investments],
+        loan_amount=loan_amount,
         loan_rate=loan_rate, loan_duration=loan_duration, fixed_rate=fixed_rate,
         loan_already_paid=loan_already_paid,
         additional_expenses=[ExpenseConfig(**item) for item in st.session_state.additional_expenses],

@@ -1,4 +1,5 @@
-from app import DependentConfig, ExpenseConfig, SimulationConfig, build_components, run_simulation
+from app import (DependentConfig, ExpenseConfig, InvestmentConfig, SimulationConfig,
+                 build_components, run_simulation)
 
 
 def test_build_components_exposes_all_model_options():
@@ -32,3 +33,18 @@ def test_current_situation_items_become_model_expenses():
         "Living expenses", "Gym", "Daughter (child)"
     ]
     assert sum(expense.monthly_expense for expense in expenses) == 1850
+
+
+def test_investments_are_configurable_and_can_be_empty():
+    config = SimulationConfig(investments=[
+        InvestmentConfig("Stocks", "stock", 1000, 50),
+        InvestmentConfig("Bonds", "bonds", 500, 0),
+    ])
+    _, investments, _, _, _ = build_components(config)
+    assert [investment.name for investment in investments] == ["Stocks", "Bonds"]
+
+    empty = SimulationConfig(years=1, initial_cash=10000, investments=[])
+    _, investments, _, _, _ = build_components(empty)
+    assert investments == []
+    result = run_simulation(empty)
+    assert len(result[0]) == 12
