@@ -57,11 +57,11 @@ class Investment:
         """
         Adds a specified amount to the investment.
         """
-        if self.typology in ['stock','bonds','safe']:
+        if self.typology in ['stock', 'bonds', 'safe']:
           amount = amount - 50 # fees
-        else:
-
-          raise TypeError('Can\'t add to non stock-like accounts: ' + str(self))
+        # Real-estate contributions are supported without the stock-like
+        # transaction fee so the UI's contribution field is honored for every
+        # offered investment type.
         self.current_value += amount
 
     def reset(self):

@@ -73,14 +73,17 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                     total_monthly_investments += gain
                     bank_account.deposit(gain, account_name="Main")
 
-                # Monthly contribution to investment
-                # only for stock like ones
-                if investment.typology=='stock':
+                # Monthly contribution to every investment type. Zero skips
+                # the transaction entirely, including any fixed fee.
+                if investment.monthly_contribution > 0:
                     if bank_account.subaccounts["Main"] > investment.monthly_contribution:
-                        if investment.typology == 'stock':
-                          bank_account.withdraw(investment.monthly_contribution, account_name="Main")
-                          investment.add_contribution(investment.monthly_contribution)
+                        bank_account.withdraw(investment.monthly_contribution, account_name="Main")
+                        investment.add_contribution(investment.monthly_contribution)
                   
+
+            # Apply account fees at the end of each simulated year.
+            if month == 11:
+                bank_account.apply_yearly_fees()
 
             # Store details
             monthly_details["investments"].append(total_investment_value(investments))
@@ -90,11 +93,13 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             # Yearly additional to stocks
             if bank_account.subaccounts['Main'] > 10000 and additional_contributions < 3:  # todo monthly
                 if year_expense < year_income * 0.8:
-                    stock_inv = list(filter(lambda x: x.typology == 'stock', investments))[0]
-                    x = bank_account.total_balance() * 0.1
-                    bank_account.withdraw(x, account_name="Main")
-                    stock_inv.add_contribution(x)
-                    additional_contributions += 1
+                    stock_investments = [x for x in investments if x.typology == 'stock']
+                    if stock_investments:
+                        stock_inv = stock_investments[0]
+                        x = bank_account.total_balance() * 0.1
+                        bank_account.withdraw(x, account_name="Main")
+                        stock_inv.add_contribution(x)
+                        additional_contributions += 1
 
             # Compute net worth for the month
             net_worth = get_net_worth(investments, loans, bank_account)

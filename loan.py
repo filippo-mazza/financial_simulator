@@ -3,6 +3,10 @@ import math
 class Loan:
     def __init__(self, name, amount, interest_rate=2, duration_years=25, 
                  is_fixed_rate=False, already_paid=0):
+        if amount < 0 or already_paid < 0 or already_paid > amount:
+            raise ValueError("already_paid must be between 0 and the loan amount")
+        if duration_years <= 0:
+            raise ValueError("duration_years must be positive")
         self.name = name
         self.initial_amount = amount
         self.remaining_amount = amount - already_paid  # Deduct the already paid amount
@@ -20,6 +24,8 @@ class Loan:
             return principal
         else:
             # We're using the formula for an annuity to calculate fixed monthly repayments
+            if self.interest_rate == 0:
+                return self.remaining_amount / (self.duration_years * 12)
             return self.remaining_amount * (self.interest_rate / 12) / (1 - math.pow(1 + self.interest_rate / 12, -self.duration_years * 12))
 
     def step(self):

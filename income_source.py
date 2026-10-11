@@ -34,7 +34,8 @@ class IncomeSource:
             'dividend': 20.0,    # Taxation on dividends
             'royalty': 15.0,     # Royalties might have varied tax structures
             'freelance': 30.0,   # Freelancers might pay higher taxes depending on expenses and deductions
-            'pension': 10.0      # Lower taxes on pensions
+            'pension': 10.0,     # Lower taxes on pensions
+            'other': 15.0
             # ... Add other types as needed.
         }
 
