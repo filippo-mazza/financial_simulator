@@ -96,8 +96,12 @@ the simulation is rerun with the same seed.
 
 ### Screenshots
 
-The dashboard combines summary metrics with an interactive Vega-Lite chart.
-Hover for exact monthly values, or pan and zoom to explore the projection.
+Choose a run count and click **Run simulations** to average multiple stochastic
+projections; the random seeds are managed internally rather than exposed in the
+UI. The dashboard combines the average summary metrics with an interactive
+Vega-Lite chart. Its explicit color legends distinguish average net worth,
+cash, investments, and event types. Hover for exact monthly values, or pan and
+zoom to explore the projection.
 Major events—including loan repayments and the configured start of school for
 each dependent—appear as labeled vertical dashed lines. The standalone Python
 Matplotlib helpers in `plots.py` remain available for notebook and script use.

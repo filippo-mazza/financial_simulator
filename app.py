@@ -4,10 +4,11 @@ The model-building functions are intentionally independent of Streamlit so they
 can be exercised in unit tests and reused by another front end later.
 """
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 import json
 import random
+from statistics import fmean
 import uuid
 
 from bank_account import BankAccount, InsufficientFundsException
@@ -154,6 +155,27 @@ def run_simulation(config: SimulationConfig):
         random.setstate(random_state)
 
 
+def run_simulations(config: SimulationConfig, simulation_count: int):
+    """Run distinct reproducible scenarios and average their monthly results."""
+    if simulation_count < 1:
+        raise ValueError("simulation_count must be at least 1")
+
+    runs = [
+        run_simulation(replace(config, seed=config.seed + run_number))
+        for run_number in range(simulation_count)
+    ]
+    average_net_worth = [fmean(month) for month in zip(*(run[0] for run in runs))]
+    average_details = {
+        detail_name: [
+            fmean(month) for month in zip(*(run[2][detail_name] for run in runs))
+        ]
+        for detail_name in ("bank_account", "investments")
+    }
+    # Loan schedules do not depend on the stochastic investment/income paths.
+    repayment_dates = runs[0][1]
+    return average_net_worth, repayment_dates, average_details
+
+
 def _money(value):
     return f"${value:,.0f}"
 
@@ -190,7 +212,8 @@ def build_simulation_events(config, repayment_dates, months_simulated):
     return sorted(events, key=lambda event: (event["month"], event["label"]))
 
 
-def create_simulation_export(config, net_worth, repayment_dates, details, exported_at=None):
+def create_simulation_export(config, net_worth, repayment_dates, details,
+                             exported_at=None, simulation_count=1):
     """Return a JSON export containing reproducible inputs and monthly results."""
     exported_at = exported_at or datetime.now(timezone.utc)
     monthly_results = [
@@ -208,6 +231,7 @@ def create_simulation_export(config, net_worth, repayment_dates, details, export
         "exported_at_utc": exported_at.astimezone(timezone.utc).isoformat(),
         "parameters": asdict(config),
         "results": {
+            "simulation_count": simulation_count,
             "summary": {
                 "months_simulated": len(net_worth),
                 "final_net_worth": net_worth[-1],
@@ -319,7 +343,6 @@ def main():
 
     def import_config(imported):
         st.session_state.scenario_years = imported.years
-        st.session_state.scenario_seed = imported.seed
         st.session_state.scenario_initial_cash = float(_whole_amount(imported.initial_cash))
         st.session_state.scenario_yearly_fee = float(_whole_amount(imported.yearly_fee))
         st.session_state.investments = editable_items(
@@ -354,6 +377,7 @@ def main():
             imported.dependents, ("monthly_cost", "school_monthly_cost")
         )
         st.session_state.active_card = None
+        st.session_state.pop("simulation_result", None)
 
     def card_is_open(collection, item):
         active = st.session_state.get("active_card")
@@ -432,11 +456,6 @@ def main():
             "Simulation horizon (years)", 1, 50,
             **({} if "scenario_years" in st.session_state else {"value": 10}),
             key="scenario_years",
-        )
-        seed = st.number_input(
-            "Random seed", 0, 1_000_000,
-            **({} if "scenario_seed" in st.session_state else {"value": 42}),
-            key="scenario_seed",
         )
         st.subheader("Cash")
         initial_cash = st.number_input(
@@ -584,8 +603,18 @@ def main():
                 f"{len(st.session_state.dependents)} dependent(s)"
             )
 
+        st.divider()
+        st.subheader("Run projection")
+        simulation_count = st.number_input(
+            "Number of simulations", min_value=1, max_value=500, value=25, step=1,
+            help="More runs produce a smoother average but take longer.",
+        )
+        run_requested = st.button(
+            "▶ Run simulations", type="primary", use_container_width=True,
+        )
+
     config = SimulationConfig(
-        years=years, seed=int(seed), initial_cash=_whole_amount(initial_cash),
+        years=years, seed=42, initial_cash=_whole_amount(initial_cash),
         yearly_fee=_whole_amount(yearly_fee),
         investment_type="stock", investment_initial=0.0, investment_contribution=0.0,
         investments=[InvestmentConfig(
@@ -611,24 +640,48 @@ def main():
             item["school_start_age"], _whole_amount(item["school_monthly_cost"]),
         ) for item in st.session_state.dependents],
     )
-    try:
-        net_worth, repayment_dates, details = run_simulation(config)
-    except (ValueError, TypeError, KeyError, InsufficientFundsException) as error:
-        st.error(f"This scenario cannot be simulated: {error}")
+
+    scenario_fingerprint = json.dumps(asdict(config), sort_keys=True)
+    if run_requested:
+        try:
+            with st.spinner(f"Running {simulation_count} simulations..."):
+                result = run_simulations(config, int(simulation_count))
+        except (ValueError, TypeError, KeyError, InsufficientFundsException) as error:
+            st.session_state.pop("simulation_result", None)
+            st.error(f"This scenario cannot be simulated: {error}")
+            return
+        st.session_state.simulation_result = {
+            "fingerprint": scenario_fingerprint,
+            "simulation_count": int(simulation_count),
+            "result": result,
+        }
+
+    stored_result = st.session_state.get("simulation_result")
+    if stored_result is None:
+        st.info("Choose the number of simulations and click **Run simulations**.")
         return
+    if (stored_result["fingerprint"] != scenario_fingerprint
+            or stored_result["simulation_count"] != int(simulation_count)):
+        st.warning("The scenario or run count changed. Click **Run simulations** to refresh.")
+        return
+
+    net_worth, repayment_dates, details = stored_result["result"]
 
     final_net_worth = net_worth[-1]
     starting_net_worth = net_worth[0]
     columns = st.columns(4)
-    columns[0].metric("Final net worth", _money(final_net_worth), f"{final_net_worth - starting_net_worth:+,.0f}")
-    columns[1].metric("Final cash", _money(details["bank_account"][-1]))
-    columns[2].metric("Final investments", _money(details["investments"][-1]))
+    columns[0].metric("Average final net worth", _money(final_net_worth), f"{final_net_worth - starting_net_worth:+,.0f}")
+    columns[1].metric("Average final cash", _money(details["bank_account"][-1]))
+    columns[2].metric("Average final investments", _money(details["investments"][-1]))
     columns[3].metric("Loans repaid", len(repayment_dates))
 
     st.download_button(
         "⬇️ Export parameters and results",
-        data=create_simulation_export(config, net_worth, repayment_dates, details),
-        file_name=f"financial-simulation-{config.years}y-seed-{config.seed}.json",
+        data=create_simulation_export(
+            config, net_worth, repayment_dates, details,
+            simulation_count=int(simulation_count),
+        ),
+        file_name=f"financial-simulation-{config.years}y-{simulation_count}-runs.json",
         mime="application/json",
         help="Download the scenario inputs and month-by-month results as JSON.",
     )
@@ -637,20 +690,21 @@ def main():
     for month, (worth, cash, investments) in enumerate(zip(
             net_worth, details["bank_account"], details["investments"]), start=1):
         chart_values.extend([
-            {"month": month, "amount": worth, "series": "Net worth"},
-            {"month": month, "amount": cash, "series": "Cash"},
-            {"month": month, "amount": investments, "series": "Investments"},
+            {"month": month, "amount": worth, "series": "Average net worth"},
+            {"month": month, "amount": cash, "series": "Average cash"},
+            {"month": month, "amount": investments, "series": "Average investments"},
         ])
 
     lines = alt.Chart(alt.Data(values=chart_values)).mark_line(strokeWidth=2.5).encode(
         x=alt.X("month:Q", title="Month", scale=alt.Scale(domain=[1, len(net_worth)])),
         y=alt.Y("amount:Q", title="Amount", axis=alt.Axis(format="$,.0f")),
         color=alt.Color(
-            "series:N", title=None,
+            "series:N", title="Financial series",
             scale=alt.Scale(
-                domain=["Net worth", "Cash", "Investments"],
+                domain=["Average net worth", "Average cash", "Average investments"],
                 range=["#35c99a", "#5b8def", "#f4b942"],
             ),
+            legend=alt.Legend(orient="top", direction="horizontal"),
         ),
         tooltip=[
             alt.Tooltip("month:Q", title="Month", format=".0f"),
@@ -675,7 +729,10 @@ def main():
             strokeDash=[7, 5], strokeWidth=2, opacity=0.85,
         ).encode(
             x=alt.X("month:Q"),
-            color=alt.Color("event_type:N", title="Events", scale=event_colors),
+            color=alt.Color(
+                "event_type:N", title="Events", scale=event_colors,
+                legend=alt.Legend(orient="top", direction="horizontal"),
+            ),
             tooltip=[
                 alt.Tooltip("label:N", title="Event"),
                 alt.Tooltip("month:Q", title="Month", format=".0f"),
@@ -689,10 +746,11 @@ def main():
             text=alt.Text("label:N"),
             color=alt.Color("event_type:N", scale=event_colors, legend=None),
         )
-        chart = lines + rules + labels
+        chart = (lines + rules + labels).resolve_scale(color="independent")
 
     chart = chart.properties(
-        height=460, title="Projected financial position",
+        height=460,
+        title=f"Average projected financial position ({simulation_count} simulations)",
     ).interactive()
     st.altair_chart(chart, use_container_width=True)
     if events:

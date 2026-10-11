@@ -1,12 +1,15 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
+import math
 
 import pytest
 
 from bank_account import InsufficientFundsException
 from app import (_whole_amount, DependentConfig, ExpenseConfig, IncomeConfig, InvestmentConfig,
                  LoanConfig, SimulationConfig, build_components, build_simulation_events,
-                 create_simulation_export, read_simulation_export, run_simulation)
+                 create_simulation_export, read_simulation_export, run_simulation,
+                 run_simulations)
 
 
 def test_build_components_exposes_all_model_options():
@@ -50,6 +53,30 @@ def test_run_simulation_is_reproducible_and_isolated():
     assert set(first[2]) == {"investments", "bank_account"}
 
 
+def test_multiple_simulations_return_monthly_averages():
+    config = SimulationConfig(
+        years=1, seed=20, initial_cash=5000, expenses=[], incomes=[], loans=[],
+        investments=[InvestmentConfig("Stocks", "stock", 1000, 0)],
+    )
+    individual_runs = [run_simulation(replace(config, seed=seed)) for seed in (20, 21, 22)]
+
+    averaged = run_simulations(config, 3)
+
+    assert math.isclose(
+        averaged[0][0], sum(run[0][0] for run in individual_runs) / 3,
+    )
+    assert math.isclose(
+        averaged[2]["investments"][-1],
+        sum(run[2]["investments"][-1] for run in individual_runs) / 3,
+    )
+    assert averaged[1] == individual_runs[0][1]
+
+
+def test_multiple_simulations_require_positive_count():
+    with pytest.raises(ValueError, match="at least 1"):
+        run_simulations(SimulationConfig(), 0)
+
+
 def test_simulation_export_contains_parameters_and_monthly_results():
     config = SimulationConfig(
         years=1, seed=17, initial_cash=5000, investments=[], expenses=[],
@@ -64,6 +91,7 @@ def test_simulation_export_contains_parameters_and_monthly_results():
 
     assert document["format"] == "financial-simulator-export"
     assert document["schema_version"] == 1
+    assert document["results"]["simulation_count"] == 1
     assert document["exported_at_utc"] == "2026-10-11T12:30:00+00:00"
     assert document["parameters"]["seed"] == 17
     assert document["parameters"]["loans"][0]["name"] == "Short loan"
