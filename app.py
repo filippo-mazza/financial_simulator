@@ -187,7 +187,7 @@ def main():
         "name": "Home loan", "amount": 10000.0, "interest_rate": 2.0,
         "duration_years": 25, "fixed_rate": False, "already_paid": 0.0,
     }])
-    for collection_name in ("investments", "incomes", "expenses", "loans"):
+    for collection_name in ("investments", "incomes", "expenses", "loans", "dependents"):
         for item in st.session_state[collection_name]:
             item.setdefault("_id", uuid.uuid4().hex)
 
@@ -196,6 +196,18 @@ def main():
 
     def config_values(item):
         return {key: value for key, value in item.items() if key != "_id"}
+
+    def card_is_open(collection, item):
+        active = st.session_state.get("active_card")
+        card_id = f"{collection}:{item_key(item)}"
+        if st.button(
+            f"{'▾' if active == card_id else '▸'} {item['name']}",
+            key=f"toggle_{collection}_{item_key(item)}",
+            use_container_width=True,
+        ):
+            st.session_state.active_card = None if active == card_id else card_id
+            st.rerun()
+        return st.session_state.get("active_card") == card_id
 
     def add_expense():
         st.session_state.expenses.append({
@@ -209,6 +221,7 @@ def main():
         st.session_state.dependents.append({
             "name": f"Child {number}", "monthly_cost": 300.0, "age": 0,
             "school_start_age": 6, "school_monthly_cost": 250.0,
+            "_id": uuid.uuid4().hex,
         })
 
     def add_investment(investment_type):
@@ -254,6 +267,9 @@ def main():
             add_investment(add_type)
         for index, item in enumerate(st.session_state.investments):
             with st.container(border=True):
+                if not card_is_open("investment", item):
+                    st.caption(f"{item['investment_type']} · initial ${item['initial_amount']:,.0f} · monthly ${item['monthly_contribution']:,.0f}")
+                    continue
                 item["name"] = st.text_input("Name", item["name"], key=f"investment_name_{item_key(item)}")
                 item["investment_type"] = st.selectbox(
                     "Type", investment_types,
@@ -279,6 +295,9 @@ def main():
             add_income(income_to_add)
         for index, item in enumerate(st.session_state.incomes):
             with st.container(border=True):
+                if not card_is_open("income", item):
+                    st.caption(f"{item['income_type']} · ${item['monthly_amount']:,.0f}/month")
+                    continue
                 item["name"] = st.text_input("Name", item["name"], key=f"income_name_{item_key(item)}")
                 item["income_type"] = st.selectbox("Type", income_types,
                     index=income_types.index(item["income_type"]), key=f"income_type_{item_key(item)}")
@@ -299,6 +318,9 @@ def main():
             add_expense()
         for index, item in enumerate(st.session_state.expenses):
             with st.container(border=True):
+                if not card_is_open("expense", item):
+                    st.caption(f"{item['expense_type']} · ${item['monthly_amount']:,.0f}/month")
+                    continue
                 item["name"] = st.text_input("Name", item["name"], key=f"expense_name_{item_key(item)}")
                 item["expense_type"] = st.selectbox("Type", expense_types,
                     index=expense_types.index(item["expense_type"]), key=f"expense_type_{item_key(item)}")
@@ -313,6 +335,9 @@ def main():
             add_loan()
         for index, item in enumerate(st.session_state.loans):
             with st.container(border=True):
+                if not card_is_open("loan", item):
+                    st.caption(f"${item['amount']:,.0f} · {item['interest_rate']:.2f}% · {item['duration_years']} years")
+                    continue
                 item["name"] = st.text_input("Name", item["name"], key=f"loan_name_{item_key(item)}")
                 item["amount"] = st.number_input("Amount", min_value=0.0,
                     value=float(item["amount"]), step=1000.0, key=f"loan_amount_{item_key(item)}")
@@ -333,25 +358,28 @@ def main():
             add_dependent()
         for index, item in enumerate(st.session_state.dependents):
             with st.container(border=True):
-                item["name"] = st.text_input("Name", item["name"], key=f"dependent_name_{index}")
+                if not card_is_open("dependent", item):
+                    st.caption(f"age {item.get('age', 0)} · ${item['monthly_cost']:,.0f}/month")
+                    continue
+                item["name"] = st.text_input("Name", item["name"], key=f"dependent_name_{item_key(item)}")
                 item["age"] = st.number_input("Current age", min_value=0, max_value=25,
-                    value=int(item.get("age", 0)), key=f"dependent_age_{index}")
+                    value=int(item.get("age", 0)), key=f"dependent_age_{item_key(item)}")
                 item["monthly_cost"] = st.number_input(
                     "Monthly child cost", min_value=0.0, value=float(item["monthly_cost"]),
-                    step=25.0, key=f"dependent_cost_{index}",
+                    step=25.0, key=f"dependent_cost_{item_key(item)}",
                 )
                 automatic_costs = st.checkbox(
                     "Add school cost from age 6*", value=item.get("school_start_age") is not None,
-                    key=f"dependent_school_toggle_{index}",
+                    key=f"dependent_school_toggle_{item_key(item)}",
                 )
                 item["school_start_age"] = 6 if automatic_costs else None
                 item["school_monthly_cost"] = st.number_input(
                     "School monthly cost*", min_value=0.0,
                     value=float(item.get("school_monthly_cost", 250.0)), step=25.0,
-                    key=f"dependent_school_cost_{index}", disabled=not automatic_costs,
+                    key=f"dependent_school_cost_{item_key(item)}", disabled=not automatic_costs,
                 )
                 st.caption("* Illustrative assumption; adjust or disable for your situation.")
-                if st.button("Remove child", key=f"remove_dependent_{index}"):
+                if st.button("Remove child", key=f"remove_dependent_{item_key(item)}"):
                     remove_item(st.session_state.dependents, index)
                     st.rerun()
 
