@@ -89,3 +89,31 @@ class Expense:
 
     def __repr__(self):
         return f"Expense(name={self.name}, monthly={self.monthly_expense})"
+
+
+class AgeBasedExpense(Expense):
+    """A recurring expense whose amount changes when a dependent reaches an age.
+
+    ``age_costs`` maps ages to the monthly amount that starts at that age. The
+    values are assumptions supplied by the scenario, not financial guidance.
+    """
+
+    def __init__(self, name, monthly_expense, current_age, age_costs=None):
+        self.current_age = current_age
+        self.initial_age = current_age
+        self.age_costs = dict(age_costs or {})
+        self.starting_monthly_expense = monthly_expense
+        super().__init__(name, "education", monthly_expense)
+
+    def step(self):
+        amount = super().step()
+        if self.months_passed > 0 and self.months_passed % 12 == 0:
+            self.current_age += 1
+            if self.current_age in self.age_costs:
+                self.monthly_expense = self.age_costs[self.current_age]
+        return amount
+
+    def reset(self):
+        super().reset()
+        self.current_age = self.initial_age
+        self.monthly_expense = self.starting_monthly_expense

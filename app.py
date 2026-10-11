@@ -9,7 +9,7 @@ import random
 import uuid
 
 from bank_account import BankAccount, InsufficientFundsException
-from expense import Expense
+from expense import AgeBasedExpense, Expense
 from income_source import IncomeSource
 from investment import Investment
 from loan import Loan
@@ -27,6 +27,9 @@ class ExpenseConfig:
 class DependentConfig:
     name: str
     monthly_cost: float
+    age: int = 0
+    school_start_age: int | None = 6
+    school_monthly_cost: float = 250.0
 
 
 @dataclass
@@ -109,7 +112,11 @@ def build_components(config: SimulationConfig):
     # A dependent is a recurring cost in the model. Keeping this explicit makes
     # it easy to evolve into age-based childcare/education rules later.
     expenses.extend(
-        Expense(f"{dependent.name} (child)", "education", dependent.monthly_cost)
+        AgeBasedExpense(
+            f"{dependent.name} (child)", dependent.monthly_cost, dependent.age,
+            {dependent.school_start_age: dependent.school_monthly_cost}
+            if dependent.school_start_age is not None else {},
+        )
         for dependent in config.dependents
     )
     if config.investments is None:
@@ -196,7 +203,10 @@ def main():
 
     def add_dependent():
         number = len(st.session_state.dependents) + 1
-        st.session_state.dependents.append({"name": f"Child {number}", "monthly_cost": 300.0})
+        st.session_state.dependents.append({
+            "name": f"Child {number}", "monthly_cost": 300.0, "age": 0,
+            "school_start_age": 6, "school_monthly_cost": 250.0,
+        })
 
     def add_investment(investment_type):
         st.session_state.investments.append({
@@ -321,10 +331,23 @@ def main():
         for index, item in enumerate(st.session_state.dependents):
             with st.container(border=True):
                 item["name"] = st.text_input("Name", item["name"], key=f"dependent_name_{index}")
+                item["age"] = st.number_input("Current age", min_value=0, max_value=25,
+                    value=int(item.get("age", 0)), key=f"dependent_age_{index}")
                 item["monthly_cost"] = st.number_input(
                     "Monthly child cost", min_value=0.0, value=float(item["monthly_cost"]),
                     step=25.0, key=f"dependent_cost_{index}",
                 )
+                automatic_costs = st.checkbox(
+                    "Add school cost from age 6*", value=item.get("school_start_age") is not None,
+                    key=f"dependent_school_toggle_{index}",
+                )
+                item["school_start_age"] = 6 if automatic_costs else None
+                item["school_monthly_cost"] = st.number_input(
+                    "School monthly cost*", min_value=0.0,
+                    value=float(item.get("school_monthly_cost", 250.0)), step=25.0,
+                    key=f"dependent_school_cost_{index}", disabled=not automatic_costs,
+                )
+                st.caption("* Illustrative assumption; adjust or disable for your situation.")
                 if st.button("Remove child", key=f"remove_dependent_{index}"):
                     remove_item(st.session_state.dependents, index)
                     st.rerun()
@@ -370,7 +393,7 @@ def main():
     axis.grid(alpha=0.2)
     axis.legend(loc="upper left")
     st.pyplot(figure, use_container_width=True)
-    st.caption("Illustrative projection only — this is not financial advice. Results vary with the random seed.")
+    st.caption("Illustrative projection only — this is not financial advice. *Age-based family costs are configurable assumptions, not validated rules.")
 
 
 if __name__ == "__main__":
