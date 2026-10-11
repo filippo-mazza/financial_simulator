@@ -171,6 +171,17 @@ def run_simulations(config: SimulationConfig, simulation_count: int):
         ]
         for detail_name in ("bank_account", "investments")
     }
+    for detail_name in (
+        "investment_values", "income_values", "expense_values",
+        "loan_balances", "loan_payments",
+    ):
+        average_details[detail_name] = {
+            item_name: [
+                fmean(month)
+                for month in zip(*(run[2][detail_name][item_name] for run in runs))
+            ]
+            for item_name in runs[0][2][detail_name]
+        }
     # Loan schedules do not depend on the stochastic investment/income paths.
     repayment_dates = runs[0][1]
     return average_net_worth, repayment_dates, average_details
@@ -212,6 +223,39 @@ def build_simulation_events(config, repayment_dates, months_simulated):
     return sorted(events, key=lambda event: (event["month"], event["label"]))
 
 
+def get_month_details(net_worth, details, month):
+    """Build balance and flow rows for a one-based simulation month."""
+    if month < 1 or month > len(net_worth):
+        raise ValueError("month is outside the simulation range")
+    index = month - 1
+    balances = [
+        {"Category": "Overview", "Item": "Net worth", "Amount": net_worth[index]},
+        {"Category": "Overview", "Item": "Cash", "Amount": details["bank_account"][index]},
+        {"Category": "Overview", "Item": "Investments total",
+         "Amount": details["investments"][index]},
+    ]
+    balances.extend(
+        {"Category": "Investment", "Item": name, "Amount": values[index]}
+        for name, values in details["investment_values"].items()
+    )
+    balances.extend(
+        {"Category": "Loan balance", "Item": name, "Amount": values[index]}
+        for name, values in details["loan_balances"].items()
+    )
+
+    flows = []
+    for category, detail_name in (
+        ("Income received", "income_values"),
+        ("Expense paid", "expense_values"),
+        ("Loan payment", "loan_payments"),
+    ):
+        flows.extend(
+            {"Category": category, "Item": name, "Amount": values[index]}
+            for name, values in details[detail_name].items()
+        )
+    return balances, flows
+
+
 def create_simulation_export(config, net_worth, repayment_dates, details,
                              exported_at=None, simulation_count=1):
     """Return a JSON export containing reproducible inputs and monthly results."""
@@ -222,6 +266,22 @@ def create_simulation_export(config, net_worth, repayment_dates, details,
             "net_worth": value,
             "cash": details["bank_account"][index],
             "investments": details["investments"][index],
+            "investment_values": {
+                name: values[index]
+                for name, values in details["investment_values"].items()
+            },
+            "income_values": {
+                name: values[index] for name, values in details["income_values"].items()
+            },
+            "expense_values": {
+                name: values[index] for name, values in details["expense_values"].items()
+            },
+            "loan_balances": {
+                name: values[index] for name, values in details["loan_balances"].items()
+            },
+            "loan_payments": {
+                name: values[index] for name, values in details["loan_payments"].items()
+            },
         }
         for index, value in enumerate(net_worth)
     ]
@@ -741,6 +801,7 @@ def main():
             st.error(f"This scenario cannot be simulated: {error}")
             return
         st.session_state.simulation_result = {
+            "detail_version": 1,
             "fingerprint": scenario_fingerprint,
             "simulation_count": int(simulation_count),
             "result": result,
@@ -749,6 +810,9 @@ def main():
     stored_result = st.session_state.get("simulation_result")
     if stored_result is None:
         st.info("Choose the number of simulations and click **Run simulations**.")
+        return
+    if stored_result.get("detail_version") != 1:
+        st.warning("The available result predates monthly details. Run the simulations again.")
         return
     if (stored_result["fingerprint"] != scenario_fingerprint
             or stored_result["simulation_count"] != int(simulation_count)):
@@ -803,8 +867,26 @@ def main():
         ],
     )
 
+    month_selection = alt.selection_point(
+        name="selected_month", fields=["month"], nearest=True,
+        on="click", clear=False,
+    )
+    month_data = alt.Data(values=[
+        {"month": month} for month in range(1, len(net_worth) + 1)
+    ])
+    month_hitboxes = alt.Chart(month_data).mark_rule(
+        opacity=0, strokeWidth=14,
+    ).encode(
+        x=alt.X("month:Q"),
+    ).add_params(month_selection)
+    selected_month_rule = alt.Chart(month_data).mark_rule(
+        color="#8b5cf6", strokeWidth=2, opacity=0.75,
+    ).encode(
+        x=alt.X("month:Q"),
+    ).transform_filter(month_selection)
+
     events = build_simulation_events(config, repayment_dates, len(net_worth))
-    chart = lines
+    chart = lines + month_hitboxes + selected_month_rule
     if events:
         label_height = max(
             max(net_worth), max(details["bank_account"]), max(details["investments"])
@@ -829,24 +911,56 @@ def main():
             ],
         )
         labels = alt.Chart(event_data).mark_text(
-            angle=270, align="right", baseline="middle", dx=14, fontSize=11,
+            angle=270, align="right", baseline="middle", dx=32, fontSize=11,
         ).encode(
             x=alt.X("month:Q"),
             y=alt.Y("label_height:Q"),
             text=alt.Text("label:N"),
             color=alt.Color("event_type:N", scale=event_colors, legend=None),
         )
-        chart = (lines + rules + labels).resolve_scale(color="independent")
+        chart = (chart + rules + labels).resolve_scale(color="independent")
 
     chart = chart.properties(
         height=460,
         title=f"Average projected financial position ({simulation_count} simulations)",
     ).interactive()
-    st.altair_chart(chart, use_container_width=True)
+    chart_state = st.altair_chart(
+        chart, use_container_width=True, key="projection_chart",
+        on_select="rerun", selection_mode="selected_month",
+    )
     if events:
         st.caption("Events: " + " · ".join(
             f"month {event['month']}: {event['label']}" for event in events
         ))
+    selected = chart_state.selection.get("selected_month", [])
+    if selected:
+        selection = selected[0] if isinstance(selected, list) else selected
+        selected_month = int(round(selection["month"]))
+        if 1 <= selected_month <= len(net_worth):
+            balances, flows = get_month_details(net_worth, details, selected_month)
+            st.subheader(f"Average detail for month {selected_month}")
+            balance_column, flow_column = st.columns(2, gap="large")
+            with balance_column:
+                st.markdown("**Ending balances and asset values**")
+                st.dataframe(
+                    balances, hide_index=True, use_container_width=True,
+                    column_config={
+                        "Amount": st.column_config.NumberColumn(format="$%.0f"),
+                    },
+                )
+            with flow_column:
+                st.markdown("**Income and payments during the month**")
+                st.dataframe(
+                    flows, hide_index=True, use_container_width=True,
+                    column_config={
+                        "Amount": st.column_config.NumberColumn(format="$%.0f"),
+                    },
+                )
+    else:
+        st.info(
+            "Click a month in the chart to inspect individual investments, "
+            "loan balances, income, and expenses."
+        )
     st.caption("Illustrative projection only — this is not financial advice. *Age-based family costs are configurable assumptions, not validated rules.")
 
 

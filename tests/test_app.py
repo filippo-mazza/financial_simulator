@@ -8,8 +8,8 @@ import pytest
 from bank_account import InsufficientFundsException
 from app import (_whole_amount, DependentConfig, ExpenseConfig, IncomeConfig, InvestmentConfig,
                  LoanConfig, SimulationConfig, build_components, build_simulation_events,
-                 create_simulation_export, read_simulation_export, run_simulation,
-                 run_simulations)
+                 create_simulation_export, get_month_details, read_simulation_export,
+                 run_simulation, run_simulations)
 
 
 def test_build_components_exposes_all_model_options():
@@ -50,7 +50,10 @@ def test_run_simulation_is_reproducible_and_isolated():
     second = run_simulation(config)
     assert first == second
     assert len(first[0]) == 24
-    assert set(first[2]) == {"investments", "bank_account"}
+    assert set(first[2]) == {
+        "investments", "bank_account", "investment_values", "income_values",
+        "expense_values", "loan_balances", "loan_payments",
+    }
 
 
 def test_multiple_simulations_return_monthly_averages():
@@ -69,7 +72,29 @@ def test_multiple_simulations_return_monthly_averages():
         averaged[2]["investments"][-1],
         sum(run[2]["investments"][-1] for run in individual_runs) / 3,
     )
+    assert math.isclose(
+        averaged[2]["investment_values"]["Stocks"][-1],
+        sum(run[2]["investment_values"]["Stocks"][-1] for run in individual_runs) / 3,
+    )
     assert averaged[1] == individual_runs[0][1]
+
+
+def test_month_details_expose_individual_balances_and_flows():
+    config = SimulationConfig(
+        years=1, initial_cash=5000,
+        investments=[InvestmentConfig("House", "real_estate", 1000, 0)],
+        incomes=[IncomeConfig("Salary", "salary", 1000)],
+        expenses=[ExpenseConfig("Groceries", "groceries", 200)],
+        loans=[LoanConfig("Mortgage", 1200, 0, 1)],
+    )
+    net_worth, _, details = run_simulation(config)
+
+    balances, flows = get_month_details(net_worth, details, month=1)
+
+    assert any(row["Item"] == "House" for row in balances)
+    assert any(row["Item"] == "Mortgage" for row in balances)
+    assert any(row["Item"] == "Salary" for row in flows)
+    assert any(row["Item"] == "Groceries" for row in flows)
 
 
 def test_multiple_simulations_require_positive_count():
@@ -96,12 +121,12 @@ def test_simulation_export_contains_parameters_and_monthly_results():
     assert document["parameters"]["seed"] == 17
     assert document["parameters"]["loans"][0]["name"] == "Short loan"
     assert document["results"]["summary"]["months_simulated"] == 12
-    assert document["results"]["monthly"][0] == {
-        "month": 1,
-        "net_worth": net_worth[0],
-        "cash": details["bank_account"][0],
-        "investments": details["investments"][0],
-    }
+    first_month = document["results"]["monthly"][0]
+    assert first_month["month"] == 1
+    assert first_month["net_worth"] == net_worth[0]
+    assert first_month["cash"] == details["bank_account"][0]
+    assert first_month["investments"] == details["investments"][0]
+    assert first_month["loan_balances"]["Short loan"] == details["loan_balances"]["Short loan"][0]
     assert document["results"]["loan_repayments"] == [
         {"name": "Short loan", "month": repayment_dates["Short loan"] + 1}
     ]

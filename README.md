@@ -109,6 +109,9 @@ zoom to explore the projection.
 Major events—including loan repayments and the configured start of school for
 each dependent—appear as labeled vertical dashed lines. The standalone Python
 Matplotlib helpers in `plots.py` remain available for notebook and script use.
+Click any month in the interactive chart to inspect its average ending balances
+and asset values—including each named investment—alongside itemized income,
+expenses, and loan payments for that month.
 
 ![Streamlit dashboard](docs/screenshots/streamlit-dashboard.png)
 

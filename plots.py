@@ -10,6 +10,10 @@ def plot_net_worth(monthly_net_worth, loan_repayment_dates, monthly_details=None
     # If monthly_details is provided, plot the values
     if monthly_details is not None:
         for key, values in monthly_details.items():
+            # Streamlit drill-down data is grouped by item. Keep this Python
+            # overview chart focused on its original aggregate series.
+            if isinstance(values, dict):
+                continue
             plt.plot(values, '-o', markersize=3, label=key.capitalize())
 
     for loan_name, date in loan_repayment_dates.items():

@@ -44,7 +44,31 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
     if seed is not None:
         random.seed(seed)
 
-    monthly_details = {"investments": [], "bank_account": []}
+    investment_names = [
+        getattr(item, "name", f"Investment {index + 1}")
+        for index, item in enumerate(investments)
+    ]
+    income_names = [
+        getattr(item, "name", f"Income {index + 1}")
+        for index, item in enumerate(income_sources)
+    ]
+    expense_names = [
+        getattr(item, "name", f"Expense {index + 1}")
+        for index, item in enumerate(expenses)
+    ]
+    loan_names = [
+        getattr(item, "name", f"Loan {index + 1}")
+        for index, item in enumerate(loans)
+    ]
+    monthly_details = {
+        "investments": [],
+        "bank_account": [],
+        "investment_values": {name: [] for name in investment_names},
+        "income_values": {name: [] for name in income_names},
+        "expense_values": {name: [] for name in expense_names},
+        "loan_balances": {name: [] for name in loan_names},
+        "loan_payments": {name: [] for name in loan_names},
+    }
     monthly_net_worth = []
     loan_repayment_dates = {}
      
@@ -57,32 +81,44 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
         
         for month in range(12):
             current_month = year * 12 + month  # Counting months from the start
+            month_income_values = {}
+            month_expense_values = {}
+            month_loan_payments = {}
             
             # Income
-            for source in income_sources:
+            for source, source_name in zip(income_sources, income_names):
                 monthly_income = source.step()
                 year_income+=monthly_income
                 bank_account.deposit(monthly_income, account_name="Main")
+                month_income_values[source_name] = (
+                    month_income_values.get(source_name, 0) + monthly_income
+                )
             
             # Expenses
-            for expense in expenses:
+            for expense, expense_name in zip(expenses, expense_names):
                 monthly_expense = expense.step()
                 year_expense+=monthly_expense
+                month_expense_values[expense_name] = (
+                    month_expense_values.get(expense_name, 0) + monthly_expense
+                )
                 _withdraw_for_simulation(
                     bank_account, monthly_expense, current_month,
-                    f"expense '{getattr(expense, 'name', 'unnamed')}'",
+                    f"expense '{expense_name}'",
                 )
             
             # Loan Repayments
-            for loan in loans:
+            for loan, loan_name in zip(loans, loan_names):
                 monthly_repayment = loan.step()
+                month_loan_payments[loan_name] = (
+                    month_loan_payments.get(loan_name, 0) + (monthly_repayment or 0)
+                )
                 if monthly_repayment is not None: # not already paid
                   _withdraw_for_simulation(
                       bank_account, monthly_repayment, current_month,
-                      f"loan repayment '{getattr(loan, 'name', 'unnamed')}'",
+                      f"loan repayment '{loan_name}'",
                   )
-                if loan.is_repaid and loan.name not in loan_repayment_dates:
-                    loan_repayment_dates[loan.name] = current_month
+                if loan.is_repaid and loan_name not in loan_repayment_dates:
+                    loan_repayment_dates[loan_name] = current_month
             
             # Investments
             total_monthly_investments = 0
@@ -107,6 +143,26 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             # Store details
             monthly_details["investments"].append(total_investment_value(investments))
             monthly_details["bank_account"].append(bank_account.subaccounts["Main"])
+            investment_values = {}
+            for investment, investment_name in zip(investments, investment_names):
+                investment_values[investment_name] = (
+                    investment_values.get(investment_name, 0) + investment.current_value
+                )
+            loan_balances = {}
+            for loan, loan_name in zip(loans, loan_names):
+                loan_balances[loan_name] = (
+                    loan_balances.get(loan_name, 0) + loan.remaining_amount
+                )
+            for name, values in monthly_details["investment_values"].items():
+                values.append(investment_values.get(name, 0))
+            for name, values in monthly_details["income_values"].items():
+                values.append(month_income_values.get(name, 0))
+            for name, values in monthly_details["expense_values"].items():
+                values.append(month_expense_values.get(name, 0))
+            for name, values in monthly_details["loan_balances"].items():
+                values.append(loan_balances.get(name, 0))
+            for name, values in monthly_details["loan_payments"].items():
+                values.append(month_loan_payments.get(name, 0))
             
 
             # Yearly additional to stocks
