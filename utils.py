@@ -28,7 +28,7 @@ def _withdraw_for_simulation(bank_account, amount, month, reason):
     except InsufficientFundsException as error:
         raise InsufficientFundsException(
             f"Simulation stopped in month {month + 1}: unable to pay {reason} "
-            f"of ${amount:,.2f} with ${balance:,.2f} available."
+            f"of \\${amount:,.2f} with \\${balance:,.2f} available."
         ) from error
 
 
