@@ -190,7 +190,7 @@ def run_simulations(config: SimulationConfig, simulation_count: int):
         for detail_name in ("bank_account", "investments")
     }
     for detail_name in (
-        "investment_values", "income_values", "expense_values",
+        "investment_values", "income_rates", "income_values", "expense_values",
         "loan_balances", "loan_payments",
     ):
         average_details[detail_name] = {
@@ -263,6 +263,7 @@ def get_month_details(net_worth, details, month):
 
     flows = []
     for category, detail_name in (
+        ("Gross monthly income rate", "income_rates"),
         ("Income received", "income_values"),
         ("Expense paid", "expense_values"),
         ("Loan payment", "loan_payments"),
@@ -290,6 +291,9 @@ def create_simulation_export(config, net_worth, repayment_dates, details,
             },
             "income_values": {
                 name: values[index] for name, values in details["income_values"].items()
+            },
+            "income_rates": {
+                name: values[index] for name, values in details["income_rates"].items()
             },
             "expense_values": {
                 name: values[index] for name, values in details["expense_values"].items()

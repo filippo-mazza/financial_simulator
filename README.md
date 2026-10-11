@@ -117,8 +117,11 @@ each dependent—appear as labeled vertical dashed lines. The standalone Python
 Matplotlib helpers in `plots.py` remain available for notebook and script use.
 Click any month in the interactive chart to inspect its average ending balances
 and asset values—including each named investment—alongside itemized income,
-expenses, and loan payments for that month. A new run selects the final month by
-default, so only one selection marker and its details are shown initially.
+expenses, and loan payments for that month. The detail table also shows each
+income source's regular gross monthly rate, making annual inflation adjustments
+and salary increases visible separately from net income received. A new run
+selects the final month by default, so only one selection marker and its details
+are shown initially.
 
 ![Streamlit dashboard](docs/screenshots/streamlit-dashboard.png)
 

@@ -51,8 +51,8 @@ def test_run_simulation_is_reproducible_and_isolated():
     assert first == second
     assert len(first[0]) == 24
     assert set(first[2]) == {
-        "investments", "bank_account", "investment_values", "income_values",
-        "expense_values", "loan_balances", "loan_payments",
+        "investments", "bank_account", "investment_values", "income_rates",
+        "income_values", "expense_values", "loan_balances", "loan_payments",
     }
 
 
@@ -81,7 +81,7 @@ def test_multiple_simulations_return_monthly_averages():
 
 def test_month_details_expose_individual_balances_and_flows():
     config = SimulationConfig(
-        years=1, initial_cash=5000,
+        years=2, initial_cash=5000,
         investments=[InvestmentConfig("House", "real_estate", 1000, 0)],
         incomes=[IncomeConfig("Salary", "salary", 1000)],
         expenses=[ExpenseConfig("Groceries", "groceries", 200)],
@@ -95,6 +95,23 @@ def test_month_details_expose_individual_balances_and_flows():
     assert any(row["Item"] == "Mortgage" for row in balances)
     assert any(row["Item"] == "Salary" for row in flows)
     assert any(row["Item"] == "Groceries" for row in flows)
+
+
+def test_month_details_show_salary_inflation_from_following_year():
+    config = SimulationConfig(
+        years=2, seed=1, initial_cash=0,
+        investments=[], incomes=[IncomeConfig("Salary", "salary", 1000)],
+        expenses=[], loans=[],
+    )
+    net_worth, _, details = run_simulation(config)
+
+    _, month_13_flows = get_month_details(net_worth, details, month=13)
+    salary_rate = next(
+        row for row in month_13_flows
+        if row["Category"] == "Gross monthly income rate" and row["Item"] == "Salary"
+    )
+    assert details["income_rates"]["Salary"][11] == 1000
+    assert salary_rate["Amount"] == 1020
 
 
 def test_multiple_simulations_require_positive_count():
@@ -126,6 +143,9 @@ def test_simulation_export_contains_parameters_and_monthly_results():
     assert first_month["net_worth"] == net_worth[0]
     assert first_month["cash"] == details["bank_account"][0]
     assert first_month["investments"] == details["investments"][0]
+    assert first_month["income_rates"] == {
+        name: values[0] for name, values in details["income_rates"].items()
+    }
     assert first_month["loan_balances"]["Short loan"] == details["loan_balances"]["Short loan"][0]
     assert document["results"]["loan_repayments"] == [
         {"name": "Short loan", "month": repayment_dates["Short loan"] + 1}

@@ -64,6 +64,7 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
         "investments": [],
         "bank_account": [],
         "investment_values": {name: [] for name in investment_names},
+        "income_rates": {name: [] for name in income_names},
         "income_values": {name: [] for name in income_names},
         "expense_values": {name: [] for name in expense_names},
         "loan_balances": {name: [] for name in loan_names},
@@ -81,12 +82,20 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
         
         for month in range(12):
             current_month = year * 12 + month  # Counting months from the start
+            month_income_rates = {}
             month_income_values = {}
             month_expense_values = {}
             month_loan_payments = {}
             
             # Income
             for source, source_name in zip(income_sources, income_names):
+                # Capture the regular gross monthly rate used for this month.
+                # ``step`` applies annual growth after month 12, so recording it
+                # first makes the new rate correctly appear from month 13.
+                month_income_rates[source_name] = (
+                    month_income_rates.get(source_name, 0)
+                    + getattr(source, "monthly_income", getattr(source, "amount", 0))
+                )
                 monthly_income = source.step()
                 year_income+=monthly_income
                 bank_account.deposit(monthly_income, account_name="Main")
@@ -155,6 +164,8 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 )
             for name, values in monthly_details["investment_values"].items():
                 values.append(investment_values.get(name, 0))
+            for name, values in monthly_details["income_rates"].items():
+                values.append(month_income_rates.get(name, 0))
             for name, values in monthly_details["income_values"].items():
                 values.append(month_income_values.get(name, 0))
             for name, values in monthly_details["expense_values"].items():
