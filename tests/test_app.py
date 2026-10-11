@@ -1,3 +1,5 @@
+import pytest
+
 from app import (DependentConfig, ExpenseConfig, IncomeConfig, InvestmentConfig,
                  LoanConfig, SimulationConfig, build_components, run_simulation)
 
@@ -99,6 +101,34 @@ def test_zero_interest_variable_rate_loan_is_interest_free():
     result = run_simulation(config)
     assert result[0][0] == 3800
     assert result[1] == {"Interest-free loan": 11}
+
+
+def test_other_income_uses_default_taxation():
+    config = SimulationConfig(
+        years=1, initial_cash=0, yearly_fee=0, investments=[], expenses=[], loans=[],
+        incomes=[IncomeConfig("Other", "other", 100)],
+    )
+    result = run_simulation(config)
+    assert result[2]["bank_account"][0] == 85
+
+
+def test_non_stock_contributions_are_applied():
+    config = SimulationConfig(
+        years=1, initial_cash=5000, yearly_fee=0,
+        investments=[InvestmentConfig("Property", "real_estate", 1000, 100)],
+        incomes=[], expenses=[], loans=[],
+    )
+    result = run_simulation(config)
+    assert result[2]["bank_account"][0] == 4900
+
+
+def test_loan_rejects_overpayment():
+    config = SimulationConfig(
+        years=1, initial_cash=5000, investments=[], incomes=[], expenses=[],
+        loans=[LoanConfig("Invalid", 1000, 2, 10, already_paid=1001)],
+    )
+    with pytest.raises(ValueError, match="already_paid"):
+        run_simulation(config)
 
 
 def test_multiple_collections_have_expected_first_month_result():

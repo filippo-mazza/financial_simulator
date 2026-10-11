@@ -6,6 +6,7 @@ can be exercised in unit tests and reused by another front end later.
 
 from dataclasses import dataclass, field
 import random
+import uuid
 
 from bank_account import BankAccount, InsufficientFundsException
 from expense import Expense
@@ -179,11 +180,18 @@ def main():
         "name": "Home loan", "amount": 10000.0, "interest_rate": 2.0,
         "duration_years": 25, "fixed_rate": False, "already_paid": 0.0,
     }])
+    for collection_name in ("investments", "incomes", "expenses", "loans"):
+        for item in st.session_state[collection_name]:
+            item.setdefault("_id", uuid.uuid4().hex)
+
+    def item_key(item):
+        return item["_id"]
 
     def add_expense():
         st.session_state.expenses.append({
             "name": f"Expense {len(st.session_state.expenses) + 1}",
             "expense_type": "miscellaneous", "monthly_amount": 100.0,
+            "_id": uuid.uuid4().hex,
         })
 
     def add_dependent():
@@ -195,6 +203,7 @@ def main():
             "name": f"Investment {len(st.session_state.investments) + 1}",
             "investment_type": investment_type, "initial_amount": 1000.0,
             "monthly_contribution": 100.0,
+            "_id": uuid.uuid4().hex,
         })
 
     def add_income(income_type):
@@ -202,6 +211,7 @@ def main():
             "name": f"Income {len(st.session_state.incomes) + 1}",
             "income_type": income_type, "monthly_amount": 2000.0,
             "tax_rate": 0.0, "bonus_pct": 0.0,
+            "_id": uuid.uuid4().hex,
         })
 
     def add_loan():
@@ -209,6 +219,7 @@ def main():
             "name": f"Loan {len(st.session_state.loans) + 1}", "amount": 10000.0,
             "interest_rate": 2.0, "duration_years": 25, "fixed_rate": False,
             "already_paid": 0.0,
+            "_id": uuid.uuid4().hex,
         })
 
     def remove_item(collection, index):
@@ -230,22 +241,22 @@ def main():
             add_investment(add_type)
         for index, item in enumerate(st.session_state.investments):
             with st.container(border=True):
-                item["name"] = st.text_input("Name", item["name"], key=f"investment_name_{index}")
+                item["name"] = st.text_input("Name", item["name"], key=f"investment_name_{item_key(item)}")
                 item["investment_type"] = st.selectbox(
                     "Type", investment_types,
                     index=investment_types.index(item["investment_type"]),
-                    key=f"investment_type_{index}",
+                    key=f"investment_type_{item_key(item)}",
                 )
                 item["initial_amount"] = st.number_input(
                     "Initial amount", min_value=0.0, value=float(item["initial_amount"]),
-                    step=100.0, key=f"investment_initial_{index}",
+                    step=100.0, key=f"investment_initial_{item_key(item)}",
                 )
                 item["monthly_contribution"] = st.number_input(
                     "Monthly contribution", min_value=0.0,
                     value=float(item["monthly_contribution"]), step=50.0,
-                    key=f"investment_contribution_{index}",
+                    key=f"investment_contribution_{item_key(item)}",
                 )
-                if st.button("Remove investment", key=f"remove_investment_{index}"):
+                if st.button("Remove investment", key=f"remove_investment_{item_key(item)}"):
                     remove_item(st.session_state.investments, index)
                     st.rerun()
         st.subheader("Income sources")
@@ -255,16 +266,16 @@ def main():
             add_income(income_to_add)
         for index, item in enumerate(st.session_state.incomes):
             with st.container(border=True):
-                item["name"] = st.text_input("Name", item["name"], key=f"income_name_{index}")
+                item["name"] = st.text_input("Name", item["name"], key=f"income_name_{item_key(item)}")
                 item["income_type"] = st.selectbox("Type", income_types,
-                    index=income_types.index(item["income_type"]), key=f"income_type_{index}")
+                    index=income_types.index(item["income_type"]), key=f"income_type_{item_key(item)}")
                 item["monthly_amount"] = st.number_input("Monthly amount", min_value=0.0,
-                    value=float(item["monthly_amount"]), step=100.0, key=f"income_amount_{index}")
+                    value=float(item["monthly_amount"]), step=100.0, key=f"income_amount_{item_key(item)}")
                 item["tax_rate"] = st.number_input("Custom tax rate", 0.0, 100.0,
-                    value=float(item["tax_rate"]), key=f"income_tax_{index}")
+                    value=float(item["tax_rate"]), key=f"income_tax_{item_key(item)}")
                 item["bonus_pct"] = st.number_input("Bonus cap (%)", 0.0, 100.0,
-                    value=float(item["bonus_pct"]), key=f"income_bonus_{index}")
-                if st.button("Remove income", key=f"remove_income_{index}"):
+                    value=float(item["bonus_pct"]), key=f"income_bonus_{item_key(item)}")
+                if st.button("Remove income", key=f"remove_income_{item_key(item)}"):
                     remove_item(st.session_state.incomes, index)
                     st.rerun()
 
@@ -275,12 +286,12 @@ def main():
             add_expense()
         for index, item in enumerate(st.session_state.expenses):
             with st.container(border=True):
-                item["name"] = st.text_input("Name", item["name"], key=f"expense_name_{index}")
+                item["name"] = st.text_input("Name", item["name"], key=f"expense_name_{item_key(item)}")
                 item["expense_type"] = st.selectbox("Type", expense_types,
-                    index=expense_types.index(item["expense_type"]), key=f"expense_type_{index}")
+                    index=expense_types.index(item["expense_type"]), key=f"expense_type_{item_key(item)}")
                 item["monthly_amount"] = st.number_input("Monthly amount", min_value=0.0,
-                    value=float(item["monthly_amount"]), step=25.0, key=f"expense_amount_{index}")
-                if st.button("Remove expense", key=f"remove_expense_{index}"):
+                    value=float(item["monthly_amount"]), step=25.0, key=f"expense_amount_{item_key(item)}")
+                if st.button("Remove expense", key=f"remove_expense_{item_key(item)}"):
                     remove_item(st.session_state.expenses, index)
                     st.rerun()
 
@@ -289,17 +300,17 @@ def main():
             add_loan()
         for index, item in enumerate(st.session_state.loans):
             with st.container(border=True):
-                item["name"] = st.text_input("Name", item["name"], key=f"loan_name_{index}")
+                item["name"] = st.text_input("Name", item["name"], key=f"loan_name_{item_key(item)}")
                 item["amount"] = st.number_input("Amount", min_value=0.0,
-                    value=float(item["amount"]), step=1000.0, key=f"loan_amount_{index}")
+                    value=float(item["amount"]), step=1000.0, key=f"loan_amount_{item_key(item)}")
                 item["interest_rate"] = st.number_input("Interest rate (%)", min_value=0.0,
-                    value=float(item["interest_rate"]), step=0.1, key=f"loan_rate_{index}")
+                    value=float(item["interest_rate"]), step=0.1, key=f"loan_rate_{item_key(item)}")
                 item["duration_years"] = st.number_input("Duration (years)", min_value=1,
-                    value=int(item["duration_years"]), key=f"loan_duration_{index}")
-                item["fixed_rate"] = st.checkbox("Fixed rate", value=item["fixed_rate"], key=f"loan_fixed_{index}")
+                    value=int(item["duration_years"]), key=f"loan_duration_{item_key(item)}")
+                item["fixed_rate"] = st.checkbox("Fixed rate", value=item["fixed_rate"], key=f"loan_fixed_{item_key(item)}")
                 item["already_paid"] = st.number_input("Already paid", min_value=0.0,
-                    value=float(item["already_paid"]), step=100.0, key=f"loan_paid_{index}")
-                if st.button("Remove loan", key=f"remove_loan_{index}"):
+                    value=float(item["already_paid"]), step=100.0, key=f"loan_paid_{item_key(item)}")
+                if st.button("Remove loan", key=f"remove_loan_{item_key(item)}"):
                     remove_item(st.session_state.loans, index)
                     st.rerun()
 

@@ -73,9 +73,9 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                     total_monthly_investments += gain
                     bank_account.deposit(gain, account_name="Main")
 
-                # Monthly contribution to investment
-                # only for stock like ones
-                if investment.typology == 'stock' and investment.monthly_contribution > 0:
+                # Monthly contribution to every investment type. Zero skips
+                # the transaction entirely, including any fixed fee.
+                if investment.monthly_contribution > 0:
                     if bank_account.subaccounts["Main"] > investment.monthly_contribution:
                         bank_account.withdraw(investment.monthly_contribution, account_name="Main")
                         investment.add_contribution(investment.monthly_contribution)
