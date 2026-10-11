@@ -1,4 +1,4 @@
-from app import SimulationConfig, build_components, run_simulation
+from app import DependentConfig, ExpenseConfig, SimulationConfig, build_components, run_simulation
 
 
 def test_build_components_exposes_all_model_options():
@@ -19,3 +19,16 @@ def test_run_simulation_is_reproducible_and_isolated():
     assert first == second
     assert len(first[0]) == 24
     assert set(first[2]) == {"investments", "bank_account"}
+
+
+def test_current_situation_items_become_model_expenses():
+    config = SimulationConfig(
+        years=1,
+        additional_expenses=[ExpenseConfig("Gym", "healthcare", 50)],
+        dependents=[DependentConfig("Daughter", 300)],
+    )
+    _, _, _, _, expenses = build_components(config)
+    assert [expense.name for expense in expenses] == [
+        "Living expenses", "Gym", "Daughter (child)"
+    ]
+    assert sum(expense.monthly_expense for expense in expenses) == 1850

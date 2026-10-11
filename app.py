@@ -4,15 +4,28 @@ The model-building functions are intentionally independent of Streamlit so they
 can be exercised in unit tests and reused by another front end later.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import random
 
-from bank_account import BankAccount
+from bank_account import BankAccount, InsufficientFundsException
 from expense import Expense
 from income_source import IncomeSource
 from investment import Investment
 from loan import Loan
 from utils import compute_net_worth_over_time
+
+
+@dataclass
+class ExpenseConfig:
+    name: str
+    expense_type: str
+    monthly_amount: float
+
+
+@dataclass
+class DependentConfig:
+    name: str
+    monthly_cost: float
 
 
 @dataclass
@@ -35,6 +48,8 @@ class SimulationConfig:
     loan_duration: int = 25
     fixed_rate: bool = False
     loan_already_paid: float = 0.0
+    additional_expenses: list[ExpenseConfig] = field(default_factory=list)
+    dependents: list[DependentConfig] = field(default_factory=list)
 
 
 def build_components(config: SimulationConfig):
@@ -44,7 +59,17 @@ def build_components(config: SimulationConfig):
         specific_taxation=config.tax_rate or None,
         bonus_pct=config.bonus_pct or None,
     )
-    expense = Expense("Living expenses", config.expense_type, config.monthly_expense)
+    expenses = [Expense("Living expenses", config.expense_type, config.monthly_expense)]
+    expenses.extend(
+        Expense(item.name, item.expense_type, item.monthly_amount)
+        for item in config.additional_expenses
+    )
+    # A dependent is a recurring cost in the model. Keeping this explicit makes
+    # it easy to evolve into age-based childcare/education rules later.
+    expenses.extend(
+        Expense(f"{dependent.name} (child)", "education", dependent.monthly_cost)
+        for dependent in config.dependents
+    )
     investment = Investment(
         "Portfolio", config.investment_type, config.investment_initial,
         config.investment_contribution,
@@ -54,7 +79,7 @@ def build_components(config: SimulationConfig):
         config.fixed_rate, config.loan_already_paid,
     )
     account = BankAccount(config.initial_cash, config.yearly_fee)
-    return account, [investment], [loan], [income], [expense]
+    return account, [investment], [loan], [income], expenses
 
 
 def run_simulation(config: SimulationConfig):
@@ -86,6 +111,21 @@ def main():
     st.title("📈 Financial Simulator")
     st.caption("Explore a simple, stochastic projection of cash, investments, income, expenses, and debt.")
 
+    st.session_state.setdefault("additional_expenses", [])
+    st.session_state.setdefault("dependents", [])
+
+    def add_expense():
+        st.session_state.additional_expenses.append({
+            "name": "New expense", "expense_type": "miscellaneous", "monthly_amount": 100.0,
+        })
+
+    def add_dependent():
+        number = len(st.session_state.dependents) + 1
+        st.session_state.dependents.append({"name": f"Child {number}", "monthly_cost": 300.0})
+
+    def remove_item(collection, index):
+        collection.pop(index)
+
     with st.sidebar:
         st.header("Scenario")
         years = st.slider("Simulation horizon (years)", 1, 50, 10)
@@ -114,13 +154,59 @@ def main():
         fixed_rate = st.checkbox("Fixed-rate repayment")
         loan_already_paid = st.number_input("Already paid", min_value=0.0, value=0.0, step=100.0)
 
-    config = SimulationConfig(years, int(seed), initial_cash, yearly_fee, monthly_income,
-                              income_type, tax_rate, bonus_pct, monthly_expense, expense_type,
-                              investment_type, investment_initial, investment_contribution,
-                              loan_amount, loan_rate, loan_duration, fixed_rate, loan_already_paid)
+        st.subheader("Current situation")
+        st.caption("Add the people and recurring costs that shape this scenario.")
+        if st.button("＋ Add expense", use_container_width=True):
+            add_expense()
+        for index, item in enumerate(st.session_state.additional_expenses):
+            with st.container(border=True):
+                item["name"] = st.text_input("Name", item["name"], key=f"expense_name_{index}")
+                item["expense_type"] = st.selectbox(
+                    "Type", sorted(Expense("x", "housing", 1).expense_growth),
+                    index=sorted(Expense("x", "housing", 1).expense_growth).index(item["expense_type"]),
+                    key=f"expense_type_{index}",
+                )
+                item["monthly_amount"] = st.number_input(
+                    "Monthly amount", min_value=0.0, value=float(item["monthly_amount"]),
+                    step=25.0, key=f"expense_amount_{index}",
+                )
+                if st.button("Remove expense", key=f"remove_expense_{index}"):
+                    remove_item(st.session_state.additional_expenses, index)
+                    st.rerun()
+
+        if st.button("＋ Add daughter / child", use_container_width=True):
+            add_dependent()
+        for index, item in enumerate(st.session_state.dependents):
+            with st.container(border=True):
+                item["name"] = st.text_input("Name", item["name"], key=f"dependent_name_{index}")
+                item["monthly_cost"] = st.number_input(
+                    "Monthly child cost", min_value=0.0, value=float(item["monthly_cost"]),
+                    step=25.0, key=f"dependent_cost_{index}",
+                )
+                if st.button("Remove child", key=f"remove_dependent_{index}"):
+                    remove_item(st.session_state.dependents, index)
+                    st.rerun()
+
+        if st.session_state.additional_expenses or st.session_state.dependents:
+            st.caption(
+                f"{len(st.session_state.additional_expenses)} additional expense(s) · "
+                f"{len(st.session_state.dependents)} dependent(s)"
+            )
+
+    config = SimulationConfig(
+        years=years, seed=int(seed), initial_cash=initial_cash, yearly_fee=yearly_fee,
+        monthly_income=monthly_income, income_type=income_type, tax_rate=tax_rate,
+        bonus_pct=bonus_pct, monthly_expense=monthly_expense, expense_type=expense_type,
+        investment_type=investment_type, investment_initial=investment_initial,
+        investment_contribution=investment_contribution, loan_amount=loan_amount,
+        loan_rate=loan_rate, loan_duration=loan_duration, fixed_rate=fixed_rate,
+        loan_already_paid=loan_already_paid,
+        additional_expenses=[ExpenseConfig(**item) for item in st.session_state.additional_expenses],
+        dependents=[DependentConfig(**item) for item in st.session_state.dependents],
+    )
     try:
         net_worth, repayment_dates, details = run_simulation(config)
-    except (ValueError, TypeError, KeyError) as error:
+    except (ValueError, TypeError, KeyError, InsufficientFundsException) as error:
         st.error(f"This scenario cannot be simulated: {error}")
         return
 
