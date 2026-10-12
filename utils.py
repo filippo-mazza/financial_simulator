@@ -176,7 +176,13 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                     bank_account, gross_contribution, current_month,
                     f"automatic contribution to '{investment_name}'",
                 )
-                fee = investment.add_contribution(gross_contribution) or 0
+                value_before_contribution = investment.current_value
+                reported_fee = investment.add_contribution(gross_contribution)
+                if reported_fee is None:
+                    net_credit = investment.current_value - value_before_contribution
+                    fee = max(0, gross_contribution - net_credit)
+                else:
+                    fee = reported_fee
                 month_automatic_contributions[investment_name] = (
                     month_automatic_contributions.get(investment_name, 0)
                     + gross_contribution

@@ -20,6 +20,7 @@ from utils import compute_net_worth_over_time
 
 AUTO_INVEST_EXPORT_VERSION = 1
 SIMULATION_DETAIL_VERSION = 2
+AUTO_INVEST_TYPES = frozenset({"stock", "safe"})
 LEGACY_AUTO_INVEST_WARNING = (
     "This export predates or uses an unsupported version of configurable "
     "automatic investment contributions. "
@@ -159,14 +160,29 @@ def build_components(config: SimulationConfig):
         )
         for dependent in config.dependents
     )
-    investments = [Investment(
-        item.name, item.investment_type, item.initial_amount,
-        0 if item.investment_type == "real_estate" else item.monthly_contribution,
-        auto_invest_enabled=item.auto_invest_enabled,
-        auto_invest_min_cash=item.auto_invest_min_cash,
-        auto_invest_percentage=item.auto_invest_percentage,
-        auto_invest_max_per_year=item.auto_invest_max_per_year,
-    ) for item in investment_specs]
+    investments = []
+    for item in investment_specs:
+        if item.auto_invest_enabled and item.investment_type not in AUTO_INVEST_TYPES:
+            raise ValueError(
+                "Automatic contributions are only supported for stock and safe investments"
+            )
+        if item.auto_invest_min_cash < 0:
+            raise ValueError("Automatic contribution minimum cash cannot be negative")
+        if not 0 < item.auto_invest_percentage <= 100:
+            raise ValueError("Automatic contribution percentage must be between 0 and 100")
+        if item.auto_invest_max_per_year < 1:
+            raise ValueError("Automatic contribution maximum per year must be positive")
+        investment = Investment(
+            item.name, item.investment_type, item.initial_amount,
+            0 if item.investment_type == "real_estate" else item.monthly_contribution,
+        )
+        # Set policy attributes after construction so a Streamlit hot reload
+        # remains compatible with an Investment class cached from older code.
+        investment.auto_invest_enabled = item.auto_invest_enabled
+        investment.auto_invest_min_cash = item.auto_invest_min_cash
+        investment.auto_invest_percentage = item.auto_invest_percentage
+        investment.auto_invest_max_per_year = item.auto_invest_max_per_year
+        investments.append(investment)
     if config.loans is None:
         loan_specs = [LoanConfig("Loan", config.loan_amount, config.loan_rate,
                                  config.loan_duration, config.fixed_rate,
@@ -626,7 +642,7 @@ def main():
                         )
                     else:
                         auto_summary = ""
-                        if (item["investment_type"] in Investment.AUTO_INVEST_TYPES
+                        if (item["investment_type"] in AUTO_INVEST_TYPES
                                 and item["auto_invest_enabled"]):
                             auto_summary = (
                                 f" · auto {item['auto_invest_percentage']:g}% when cash > "
@@ -672,7 +688,7 @@ def main():
                         value=float(item["monthly_contribution"]), step=50.0,
                         format="%.0f", key=f"investment_contribution_{item_key(item)}",
                     )
-                    if item["investment_type"] in Investment.AUTO_INVEST_TYPES:
+                    if item["investment_type"] in AUTO_INVEST_TYPES:
                         item["auto_invest_enabled"] = st.checkbox(
                             "Enable automatic cash-sweep contributions",
                             value=bool(item["auto_invest_enabled"]),
@@ -983,7 +999,7 @@ def main():
             _whole_amount(item["monthly_expenses"]), _whole_amount(item["yearly_tax"]),
             auto_invest_enabled=(
                 bool(item["auto_invest_enabled"])
-                if item["investment_type"] in Investment.AUTO_INVEST_TYPES else False
+                if item["investment_type"] in AUTO_INVEST_TYPES else False
             ),
             auto_invest_min_cash=_whole_amount(item["auto_invest_min_cash"]),
             auto_invest_percentage=float(item["auto_invest_percentage"]),
