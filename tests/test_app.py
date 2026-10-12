@@ -6,10 +6,11 @@ import math
 import pytest
 
 from bank_account import InsufficientFundsException
-from app import (_whole_amount, DependentConfig, ExpenseConfig, IncomeConfig, InvestmentConfig,
-                 LoanConfig, SimulationConfig, build_components, build_simulation_events,
-                 create_simulation_export, get_month_details, read_simulation_export,
-                 run_simulation, run_simulations)
+from app import (_consume_run_request, _whole_amount, DependentConfig, ExpenseConfig,
+                 IncomeConfig, InvestmentConfig, LoanConfig, SimulationConfig,
+                 build_components, build_simulation_events, create_simulation_export,
+                 get_month_details, read_simulation_export, run_simulation,
+                 run_simulations)
 
 
 def test_build_components_exposes_all_model_options():
@@ -25,6 +26,14 @@ def test_build_components_exposes_all_model_options():
 
 def test_major_ui_amounts_discard_cents():
     assert _whole_amount(5000.15) == 5000
+
+
+def test_import_run_request_is_consumed_once():
+    session_state = {"run_after_import": True}
+
+    assert _consume_run_request(session_state, button_clicked=False) is True
+    assert "run_after_import" not in session_state
+    assert _consume_run_request(session_state, button_clicked=False) is False
 
 
 def test_chart_events_include_school_starts_and_loan_repayments():
