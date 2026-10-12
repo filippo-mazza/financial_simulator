@@ -1,0 +1,219 @@
+FINANCIAL SIMULATOR: TECHNICAL SUMMARY FOR AI AGENTS
+====================================================
+
+PURPOSE
+-------
+This is a small Python personal-finance simulator with two entry points:
+1. app.py: the primary Streamlit UI and its configuration/export helpers.
+2. example.py: a standalone Python example using the model directly.
+
+Outputs are illustrative, stochastic projections, not financial advice.
+
+
+FAST START
+----------
+Install:  python3 -m pip install -r requirements-dev.txt
+Test:     python3 -m pytest -q        (or: make test)
+Run UI:   python3 -m streamlit run app.py  (or: make run)
+
+Runtime dependencies are in requirements.txt; pytest is added by
+requirements-dev.txt. There is no package/build system, database, API service,
+or JavaScript source tree. Modules are imported directly from the repo root.
+
+
+FILE MAP
+--------
+app.py
+  Streamlit UI; scenario dataclasses; model construction; single/multi-run
+  orchestration; chart events; month drill-down; JSON import/export.
+
+utils.py
+  Core month-by-month simulation loop and net-worth calculation. This is the
+  main engine used by both app.py and example.py.
+
+bank_account.py
+  Cash account, deposits/withdrawals, annual account fee, and
+  InsufficientFundsException.
+
+income_source.py
+  Income types, taxation, annual growth, bonuses, freelance variability, and
+  stochastic salary raises/promotions.
+
+expense.py
+  Recurring Expense, age-dependent AgeBasedExpense, and annual YearlyExpense.
+
+investment.py
+  Stock, real-estate, bond, and safe investments with stochastic annual returns,
+  monthly compounding, stock dividends, and contributions.
+
+loan.py
+  Fixed-payment amortization and optional fixed-interest behavior.
+
+plots.py
+  Standalone Matplotlib charts. Preserve these when changing the Streamlit
+  Altair/Vega-Lite chart; the Python chart supports dashed loan-event lines.
+
+tests/
+  Pytest unit, integration, family-scenario, and subprocess example coverage.
+
+README.md
+  User-facing setup and current UI behavior. documentation.md is older and may
+  not reflect recent implementation details.
+
+
+CONFIGURATION AND OBJECT CONSTRUCTION
+-------------------------------------
+app.py defines these dataclasses:
+  SimulationConfig, InvestmentConfig, IncomeConfig, ExpenseConfig, LoanConfig,
+  DependentConfig.
+
+build_components(config) converts them into fresh model objects and returns:
+  (BankAccount, investments, loans, incomes, expenses)
+This order intentionally matches compute_net_worth_over_time(years, ...).
+
+Collection semantics matter:
+  - None uses the legacy single-item defaults in SimulationConfig.
+  - [] explicitly means no items.
+Do not replace an explicit empty list with defaults.
+
+Real estate is special:
+  - monthly_contribution is forced to zero;
+  - monthly_expenses becomes a linked housing Expense;
+  - yearly_tax becomes a linked YearlyExpense;
+  - linked costs are displayed read-only under Expenses and edited under the
+    real-estate investment;
+  - annual property tax is charged in months 12, 24, ... and then inflated by
+    the housing rate for the next year.
+
+Dependents become AgeBasedExpense objects. At the configured school-start age,
+school_monthly_cost is added to the base monthly cost.
+
+
+SIMULATION FLOW
+---------------
+run_simulation(config) builds fresh components and runs one seeded scenario.
+run_simulations(config, count) runs seeds config.seed + 0..count-1 and returns
+the month-by-month arithmetic mean. The seed is intentionally not shown in the
+UI, but remains in SimulationConfig and exports for reproducibility.
+
+compute_net_worth_over_time() processes each simulated month in this order:
+  1. Receive each income after tax.
+  2. Pay each expense.
+  3. Pay each active loan and record its first repayment-completion month.
+  4. Advance investments, receive stock dividends, and make contributions.
+  5. In each year's month 12, apply the bank's annual fee.
+  6. Store detailed balances and flows.
+  7. When cash/expense conditions allow, move an extra 10% of cash into the
+     first stock investment, at most three times per simulation year.
+  8. Calculate net worth = cash + investments - remaining loan balances.
+
+Withdrawals for expenses, loans, and automatic stock contributions use the
+cash account. An unaffordable required expense/loan raises
+InsufficientFundsException with the month, obligation, and available cash.
+
+Seeded runs save and restore Python's global random state. Preserve this
+isolation when adding stochastic behavior.
+
+
+ANNUAL ADJUSTMENTS AND STOCHASTIC RULES
+---------------------------------------
+IncomeSource.step():
+  - Returns income after tax.
+  - Regular income grows after every 12th month, affecting month 13 onward.
+  - Salary growth is 2% yearly; other growth rates are in income_growth.
+  - Salaries can also receive stochastic raises/promotions at year-end.
+  - A configured bonus is paid in the 12th month of a year before tax.
+  - Freelance income may be zero or half in a month.
+
+Expense.step():
+  - Regular expenses inflate after every 12th month, affecting month 13 onward.
+  - Rates vary by expense type and live in expense_growth.
+  - "unexpected" expenses occur stochastically rather than monthly.
+
+Investment.step():
+  - Uses a Gaussian annual return by investment type, compounded monthly.
+  - Chooses a new annual rate every 12 months.
+  - Stocks pay modeled dividends quarterly.
+  - Contributions to stock/bond/safe investments incur a fixed $50 fee.
+
+
+RESULT SHAPE
+------------
+compute_net_worth_over_time() and run_simulation() return:
+  (monthly_net_worth, loan_repayment_dates, monthly_details)
+
+loan_repayment_dates maps loan name -> zero-based month index.
+
+monthly_details contains:
+  investments       list: aggregate ending investment value by month
+  bank_account      list: ending main cash balance by month
+  investment_values dict: named investment -> monthly values
+  income_rates      dict: named income -> regular gross monthly rate used
+  income_values     dict: named income -> actual net amount received
+  expense_values    dict: named expense -> amount paid
+  loan_balances     dict: named loan -> remaining balance
+  loan_payments     dict: named loan -> amount paid
+
+Most UI event/month labels are one-based. The engine's current_month and loan
+repayment indices are zero-based; build_simulation_events() performs conversion.
+
+
+STREAMLIT UI AND EXPORTS
+------------------------
+main() owns Streamlit session state. Sidebar categories are independent
+expanders with collapsed summaries. The simulation count and run button live in
+the main area. Large money inputs intentionally discard cents via _whole_amount.
+
+The result chart is Altair/Vega-Lite and includes net worth, cash, investments,
+legends, pan/zoom, click-to-select month, and dashed event lines for loan payoff
+and school start. A fresh run selects the final month by default. Selected-month
+tables come from get_month_details() and include named balances, gross regular
+income rates, actual net income, expenses, and loan payments.
+
+create_simulation_export() writes schema_version 1 JSON with parameters, summary,
+monthly results, repayment dates, and chart events. read_simulation_export()
+validates and restores parameters only; importing triggers a fresh run. It also
+migrates old real-estate exports by treating legacy monthly_contribution as
+monthly_expenses. Keep old schema files readable or explicitly version a
+breaking format change.
+
+
+TESTING AND CHANGE CHECKLIST
+----------------------------
+Primary command: python3 -m pytest -q
+
+Before changing behavior:
+  - Add/update tests in tests/test_app.py for app/config/result behavior.
+  - Use tests/test_family_scenarios.py for dependent-age scenarios.
+  - Use tests/test_bank_account.py or tests/test_utils.py for engine mechanics.
+  - Keep tests/test_end_to_end.py and example.py working.
+
+For Streamlit UI changes, also run a smoke test with
+streamlit.testing.v1.AppTest: load app.py, assert no exceptions, run a
+simulation, assert no exceptions again, and inspect relevant widgets/tables.
+
+When adding a monthly detail field, update all of:
+  1. utils.py monthly_details initialization and per-month append logic;
+  2. app.py run_simulations() averaging;
+  3. get_month_details() if it should appear in the UI;
+  4. create_simulation_export() if it belongs in saved results;
+  5. tests for one run, averaged runs, detail rows, and export as appropriate.
+
+When adding a scenario input, update its dataclass, build_components(), session
+state defaults/migration, import restoration, sidebar editor/summary, export
+round trip, and tests.
+
+
+IMPORTANT INVARIANTS / GOTCHAS
+------------------------------
+  - Item names are dictionary keys in monthly details; unique names are safest.
+  - Engine repayment dates are zero-based; UI/export months are one-based.
+  - Annual adjustments happen after calculating month 12, so new regular rates
+    normally first apply in month 13.
+  - YearlyExpense is paid in month 12, not divided across months.
+  - UI major-money inputs display whole dollars by design.
+  - Multi-run results are averages; wording in metrics/chart/detail should say
+    "Average" where relevant.
+  - Do not remove or replace plots.py merely because the Streamlit chart is
+    interactive.
+  - This is exploratory software; preserve the financial-advice disclaimer.
