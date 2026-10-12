@@ -21,7 +21,8 @@ from utils import compute_net_worth_over_time
 AUTO_INVEST_EXPORT_VERSION = 1
 SIMULATION_DETAIL_VERSION = 2
 LEGACY_AUTO_INVEST_WARNING = (
-    "This export predates configurable automatic investment contributions. "
+    "This export predates or uses an unsupported version of configurable "
+    "automatic investment contributions. "
     "Automatic contributions were disabled for safety; review each stock or "
     "safe investment before running the imported scenario."
 )
@@ -391,7 +392,8 @@ def read_simulation_export(data, include_warnings=False):
     feature_version = features.get(
         "automatic_investment_contributions"
     )
-    if feature_version != AUTO_INVEST_EXPORT_VERSION:
+    auto_invest_feature_supported = feature_version == AUTO_INVEST_EXPORT_VERSION
+    if not auto_invest_feature_supported:
         import_warnings.append(LEGACY_AUTO_INVEST_WARNING)
 
     def rebuild_collection(name, config_type):
@@ -414,6 +416,8 @@ def read_simulation_export(data, include_warnings=False):
                     values.setdefault("auto_invest_min_cash", 10000.0)
                     values.setdefault("auto_invest_percentage", 10.0)
                     values.setdefault("auto_invest_max_per_year", 3)
+                    if not auto_invest_feature_supported:
+                        values["auto_invest_enabled"] = False
                 rebuilt.append(config_type(**values))
             return rebuilt
         except TypeError as error:

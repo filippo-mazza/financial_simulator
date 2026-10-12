@@ -385,6 +385,27 @@ def test_legacy_real_estate_export_maps_contribution_to_property_expenses():
     assert "disabled for safety" in import_warnings[0]
 
 
+@pytest.mark.parametrize("feature_version", [None, 999])
+def test_unrecognized_auto_invest_export_version_forces_policy_off(feature_version):
+    config = SimulationConfig(investments=[InvestmentConfig(
+        "Stocks", "stock", 1000, 0, auto_invest_enabled=True,
+    )])
+    document = json.loads(create_simulation_export(config, *run_simulation(config)))
+    if feature_version is None:
+        document.pop("features")
+    else:
+        document["features"]["automatic_investment_contributions"] = feature_version
+
+    restored, import_warnings = read_simulation_export(
+        json.dumps(document), include_warnings=True,
+    )
+
+    assert document["parameters"]["investments"][0]["auto_invest_enabled"] is True
+    assert restored.investments[0].auto_invest_enabled is False
+    assert len(import_warnings) == 1
+    assert "disabled for safety" in import_warnings[0]
+
+
 def test_loan_rejects_overpayment():
     config = SimulationConfig(
         years=1, initial_cash=5000, investments=[], incomes=[], expenses=[],
