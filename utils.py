@@ -177,12 +177,17 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                     f"automatic contribution to '{investment_name}'",
                 )
                 value_before_contribution = investment.current_value
-                reported_fee = investment.add_contribution(gross_contribution)
-                if reported_fee is None:
-                    net_credit = investment.current_value - value_before_contribution
-                    fee = max(0, gross_contribution - net_credit)
-                else:
-                    fee = reported_fee
+                investment.add_contribution(gross_contribution)
+                fee = min(
+                    getattr(investment, "CONTRIBUTION_FEE", 50),
+                    gross_contribution,
+                )
+                # A cached pre-feature class always subtracts $50, which can
+                # make a small contribution reduce the investment. Normalize
+                # its mutation to the current capped-fee semantics.
+                investment.current_value = (
+                    value_before_contribution + gross_contribution - fee
+                )
                 month_automatic_contributions[investment_name] = (
                     month_automatic_contributions.get(investment_name, 0)
                     + gross_contribution

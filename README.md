@@ -154,5 +154,5 @@ subprocess smoke test that runs the documented five-year example with the real
 financial model components.
 
 ```text
-49 passed
+50 passed
 ```
