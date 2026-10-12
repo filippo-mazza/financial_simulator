@@ -108,6 +108,21 @@ property costs are deducted every month; the tax is charged once in month 12 of
 each simulation year. Both appear as read-only linked costs in the Expenses
 category and must be edited from the corresponding investment.
 
+Stock and safe investments can optionally enable **automatic cash-sweep
+contributions**. The policy is disabled by default. For each enabled investment,
+the UI configures a cash threshold, the percentage of current cash to transfer,
+and a yearly transaction limit. A sweep occurs only while cumulative yearly
+expenses are below 80% of cumulative net income. Enabled investments are
+evaluated in their displayed order, so earlier investments can reduce the cash
+available to later ones. Each transaction has the model's investment fee of up
+to $50. The monthly detail table and JSON export report the gross automatic
+contribution and fee separately. This is a simple legacy heuristic—not an
+optimized allocation strategy, tax model, or recommendation.
+
+Exports created before automatic contribution settings were added remain
+importable. The UI warns that their automatic policies were disabled for safety
+and asks the user to review each eligible investment.
+
 The dashboard combines the average summary metrics with an interactive
 Vega-Lite chart. Its explicit color legends distinguish average net worth,
 cash, investments, and event types. Hover for exact monthly values, or pan and
@@ -117,7 +132,8 @@ each dependent—appear as labeled vertical dashed lines. The standalone Python
 Matplotlib helpers in `plots.py` remain available for notebook and script use.
 Click any month in the interactive chart to inspect its average ending balances
 and asset values—including each named investment—alongside itemized income,
-expenses, and loan payments for that month. The detail table also shows each
+expenses, loan payments, and automatic investment transactions for that month.
+The detail table also shows each
 income source's regular gross monthly rate, making annual inflation adjustments
 and salary increases visible separately from net income received. A new run
 selects the final month by default, so only one selection marker and its details
@@ -138,5 +154,5 @@ subprocess smoke test that runs the documented five-year example with the real
 financial model components.
 
 ```text
-28 passed
+48 passed
 ```

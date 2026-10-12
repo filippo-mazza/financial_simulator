@@ -94,7 +94,7 @@ def test_net_worth_over_six_months():
 
 
 def test_net_worth_over_one_year():
-    """The final month applies an extra 10% investment contribution."""
+    """The direct engine does not make implicit investment contributions."""
     bank = BankAccount(initial_balance=1000)
     inv = DummyInvestment()
     income = DummyIncome(1000)
@@ -109,6 +109,5 @@ def test_net_worth_over_one_year():
         expenses=[expense],
     )
 
-    # Month 12 triggers an additional contribution leaving 9540 cash and 1610 in investments
-    assert net_worth[11] == 11150
+    assert net_worth[11] == 11200
 

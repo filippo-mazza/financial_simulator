@@ -44,7 +44,8 @@ expense.py
 
 investment.py
   Stock, real-estate, bond, and safe investments with stochastic annual returns,
-  monthly compounding, stock dividends, and contributions.
+  monthly compounding, stock dividends, explicit contributions, per-investment
+  automatic contribution settings, and contribution fees.
 
 loan.py
   Fixed-payment amortization and optional fixed-interest behavior.
@@ -85,6 +86,13 @@ Real estate is special:
   - annual property tax is charged in months 12, 24, ... and then inflated by
     the housing rate for the next year.
 
+Automatic cash-sweep contributions are configured per investment and supported
+only for stock and safe types. They default to disabled. Each enabled investment
+has a cash threshold, percentage of current cash, and yearly limit. The legacy
+expense guard (cumulative yearly expenses below 80% of cumulative net income)
+is fixed rather than user-configurable. Eligible investments are processed in
+list/UI order, so earlier sweeps reduce cash available to later investments.
+
 Dependents become AgeBasedExpense objects. At the configured school-start age,
 school_monthly_cost is added to the base monthly cost.
 
@@ -102,8 +110,8 @@ compute_net_worth_over_time() processes each simulated month in this order:
   3. Pay each active loan and record its first repayment-completion month.
   4. Advance investments, receive stock dividends, and make contributions.
   5. In each year's month 12, apply the bank's annual fee.
-  6. When cash/expense conditions allow, move an extra 10% of cash into the
-     first stock investment, at most three times per simulation year.
+  6. Apply any enabled per-investment automatic contribution policies in list
+     order, recording gross transfers and fees separately.
   7. Store ending detailed balances and flows after all monthly transactions.
   8. Calculate net worth = cash + investments - remaining loan balances.
 
@@ -130,11 +138,13 @@ Expense.step():
   - Rates vary by expense type and live in expense_growth.
   - "unexpected" expenses occur stochastically rather than monthly.
 
-Investment.step():
+Investment.step() / add_contribution():
   - Uses a Gaussian annual return by investment type, compounded monthly.
   - Chooses a new annual rate every 12 months.
   - Stocks pay modeled dividends quarterly.
-  - Contributions to stock/bond/safe investments incur a fixed $50 fee.
+  - Contributions to stock/bond/safe investments incur a fee of up to $50;
+    add_contribution() returns the charged fee.
+  - Automatic policies are supported only for stock/safe and default off.
 
 
 RESULT SHAPE
@@ -148,6 +158,8 @@ monthly_details contains:
   investments       list: aggregate ending investment value by month
   bank_account      list: ending main cash balance by month
   investment_values dict: named investment -> monthly values
+  automatic_contributions dict: named investment -> gross automatic transfers
+  automatic_contribution_fees dict: named investment -> associated fees
   income_rates      dict: named income -> regular gross monthly rate used
   income_values     dict: named income -> actual net amount received
   expense_values    dict: named expense -> amount paid
@@ -168,15 +180,18 @@ The result chart is Altair/Vega-Lite and includes net worth, cash, investments,
 legends, pan/zoom, click-to-select month, and dashed event lines for loan payoff
 and school start. A fresh run selects the final month by default. Selected-month
 tables come from get_month_details() and include named balances, gross regular
-income rates, actual net income, expenses, and loan payments.
+income rates, actual net income, expenses, loan payments, and itemized automatic
+investment contributions/fees.
 
 create_simulation_export() writes schema_version 1 JSON with parameters, summary,
 monthly results, repayment dates, and chart events. read_simulation_export()
 validates and restores parameters only. The import action sets a one-shot session
 flag so the next Streamlit rerun automatically simulates the restored scenario.
 It also migrates old real-estate exports by treating legacy
-monthly_contribution as monthly_expenses. Keep old schema files readable or
-explicitly version a breaking format change.
+monthly_contribution as monthly_expenses. Exports without the automatic-policy
+feature marker import with all automatic policies disabled and surface a safety
+warning. Keep old schema files readable or explicitly version a breaking format
+change.
 
 
 TESTING AND CHANGE CHECKLIST
@@ -211,8 +226,10 @@ IMPORTANT INVARIANTS / GOTCHAS
   - Engine repayment dates are zero-based; UI/export months are one-based.
   - Annual adjustments happen after calculating month 12, so new regular rates
     normally first apply in month 13.
-  - Monthly cash and investment snapshots are recorded after automatic stock
+  - Monthly cash and investment snapshots are recorded after automatic
     transfers and must reconcile with that month's net worth and loan balances.
+  - Automatic contributions are opt-in heuristics, not optimization advice;
+    list order matters when multiple policies are enabled.
   - YearlyExpense is paid in month 12, not divided across months.
   - UI major-money inputs display whole dollars by design.
   - Multi-run results are averages; wording in metrics/chart/detail should say
