@@ -40,7 +40,7 @@ def test_contribution_limit_and_variable_use():
     income = DummyIncome(1000)
     expense = DummyExpense(100)
 
-    compute_net_worth_over_time(
+    net_worth, _, details = compute_net_worth_over_time(
         years=1,
         bank_account=bank,
         investments=[inv],
@@ -50,6 +50,12 @@ def test_contribution_limit_and_variable_use():
     )
 
     assert inv.added_counts == 3
+    assert all(
+        value == cash + investments
+        for value, cash, investments in zip(
+            net_worth, details["bank_account"], details["investments"]
+        )
+    )
 
 
 def test_contributions_reset_each_year():

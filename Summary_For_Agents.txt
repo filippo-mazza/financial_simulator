@@ -102,9 +102,9 @@ compute_net_worth_over_time() processes each simulated month in this order:
   3. Pay each active loan and record its first repayment-completion month.
   4. Advance investments, receive stock dividends, and make contributions.
   5. In each year's month 12, apply the bank's annual fee.
-  6. Store detailed balances and flows.
-  7. When cash/expense conditions allow, move an extra 10% of cash into the
+  6. When cash/expense conditions allow, move an extra 10% of cash into the
      first stock investment, at most three times per simulation year.
+  7. Store ending detailed balances and flows after all monthly transactions.
   8. Calculate net worth = cash + investments - remaining loan balances.
 
 Withdrawals for expenses, loans, and automatic stock contributions use the
@@ -172,10 +172,11 @@ income rates, actual net income, expenses, and loan payments.
 
 create_simulation_export() writes schema_version 1 JSON with parameters, summary,
 monthly results, repayment dates, and chart events. read_simulation_export()
-validates and restores parameters only; importing triggers a fresh run. It also
-migrates old real-estate exports by treating legacy monthly_contribution as
-monthly_expenses. Keep old schema files readable or explicitly version a
-breaking format change.
+validates and restores parameters only. The import action sets a one-shot session
+flag so the next Streamlit rerun automatically simulates the restored scenario.
+It also migrates old real-estate exports by treating legacy
+monthly_contribution as monthly_expenses. Keep old schema files readable or
+explicitly version a breaking format change.
 
 
 TESTING AND CHANGE CHECKLIST
@@ -210,6 +211,8 @@ IMPORTANT INVARIANTS / GOTCHAS
   - Engine repayment dates are zero-based; UI/export months are one-based.
   - Annual adjustments happen after calculating month 12, so new regular rates
     normally first apply in month 13.
+  - Monthly cash and investment snapshots are recorded after automatic stock
+    transfers and must reconcile with that month's net worth and loan balances.
   - YearlyExpense is paid in month 12, not divided across months.
   - UI major-money inputs display whole dollars by design.
   - Multi-run results are averages; wording in metrics/chart/detail should say

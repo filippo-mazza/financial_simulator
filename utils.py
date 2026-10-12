@@ -149,7 +149,22 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             if month == 11:
                 bank_account.apply_yearly_fees()
 
-            # Store details
+            # Yearly additional to stocks
+            if bank_account.subaccounts['Main'] > 10000 and additional_contributions < 3:  # todo monthly
+                if year_expense < year_income * 0.8:
+                    stock_investments = [x for x in investments if x.typology == 'stock']
+                    if stock_investments:
+                        stock_inv = stock_investments[0]
+                        x = bank_account.total_balance() * 0.1
+                        _withdraw_for_simulation(
+                            bank_account, x, current_month,
+                            f"additional contribution to '{getattr(stock_inv, 'name', 'unnamed')}'",
+                        )
+                        stock_inv.add_contribution(x)
+                        additional_contributions += 1
+
+            # Store ending details after every transaction for the month, so
+            # cash and investments reconcile with the net-worth snapshot.
             monthly_details["investments"].append(total_investment_value(investments))
             monthly_details["bank_account"].append(bank_account.subaccounts["Main"])
             investment_values = {}
@@ -174,21 +189,6 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 values.append(loan_balances.get(name, 0))
             for name, values in monthly_details["loan_payments"].items():
                 values.append(month_loan_payments.get(name, 0))
-            
-
-            # Yearly additional to stocks
-            if bank_account.subaccounts['Main'] > 10000 and additional_contributions < 3:  # todo monthly
-                if year_expense < year_income * 0.8:
-                    stock_investments = [x for x in investments if x.typology == 'stock']
-                    if stock_investments:
-                        stock_inv = stock_investments[0]
-                        x = bank_account.total_balance() * 0.1
-                        _withdraw_for_simulation(
-                            bank_account, x, current_month,
-                            f"additional contribution to '{getattr(stock_inv, 'name', 'unnamed')}'",
-                        )
-                        stock_inv.add_contribution(x)
-                        additional_contributions += 1
 
             # Compute net worth for the month
             net_worth = get_net_worth(investments, loans, bank_account)

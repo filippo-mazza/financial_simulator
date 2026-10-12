@@ -214,6 +214,12 @@ def _whole_amount(value):
     return int(value)
 
 
+def _consume_run_request(session_state, button_clicked):
+    """Combine a manual run click with the one-shot post-import run request."""
+    run_after_import = bool(session_state.pop("run_after_import", False))
+    return bool(button_clicked or run_after_import)
+
+
 def build_simulation_events(config, repayment_dates, months_simulated):
     """Return chart events with human-friendly, one-based month numbers."""
     events = [
@@ -483,6 +489,7 @@ def main():
         )
         st.session_state.active_card = None
         st.session_state.pop("simulation_result", None)
+        st.session_state.run_after_import = True
 
     def card_is_open(collection, item):
         active = st.session_state.get("active_card")
@@ -854,8 +861,9 @@ def main():
             "Number of simulations", min_value=1, max_value=500, value=25, step=1,
             help="More runs produce a smoother average but take longer.",
         )
-        run_requested = st.button(
-            "▶ Run simulations", type="primary", use_container_width=True,
+        run_requested = _consume_run_request(
+            st.session_state,
+            st.button("▶ Run simulations", type="primary", use_container_width=True),
         )
 
     config = SimulationConfig(
