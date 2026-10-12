@@ -18,6 +18,14 @@ from investment import Investment
 from loan import Loan
 from utils import compute_net_worth_over_time
 
+AUTO_INVEST_EXPORT_VERSION = 1
+SIMULATION_DETAIL_VERSION = 2
+LEGACY_AUTO_INVEST_WARNING = (
+    "This export predates configurable automatic investment contributions. "
+    "Automatic contributions were disabled for safety; review each stock or "
+    "safe investment before running the imported scenario."
+)
+
 
 @dataclass
 class ExpenseConfig:
@@ -43,6 +51,10 @@ class InvestmentConfig:
     monthly_contribution: float
     monthly_expenses: float = 0.0
     yearly_tax: float = 0.0
+    auto_invest_enabled: bool = False
+    auto_invest_min_cash: float = 10000.0
+    auto_invest_percentage: float = 10.0
+    auto_invest_max_per_year: int = 3
 
 
 @dataclass
@@ -149,6 +161,10 @@ def build_components(config: SimulationConfig):
     investments = [Investment(
         item.name, item.investment_type, item.initial_amount,
         0 if item.investment_type == "real_estate" else item.monthly_contribution,
+        auto_invest_enabled=item.auto_invest_enabled,
+        auto_invest_min_cash=item.auto_invest_min_cash,
+        auto_invest_percentage=item.auto_invest_percentage,
+        auto_invest_max_per_year=item.auto_invest_max_per_year,
     ) for item in investment_specs]
     if config.loans is None:
         loan_specs = [LoanConfig("Loan", config.loan_amount, config.loan_rate,
@@ -190,8 +206,9 @@ def run_simulations(config: SimulationConfig, simulation_count: int):
         for detail_name in ("bank_account", "investments")
     }
     for detail_name in (
-        "investment_values", "income_rates", "income_values", "expense_values",
-        "loan_balances", "loan_payments",
+        "investment_values", "automatic_contributions",
+        "automatic_contribution_fees", "income_rates", "income_values",
+        "expense_values", "loan_balances", "loan_payments",
     ):
         average_details[detail_name] = {
             item_name: [
@@ -271,6 +288,8 @@ def get_month_details(net_worth, details, month):
     for category, detail_name in (
         ("Gross monthly income rate", "income_rates"),
         ("Income received", "income_values"),
+        ("Automatic investment contribution", "automatic_contributions"),
+        ("Automatic contribution fee", "automatic_contribution_fees"),
         ("Expense paid", "expense_values"),
         ("Loan payment", "loan_payments"),
     ):
@@ -295,6 +314,14 @@ def create_simulation_export(config, net_worth, repayment_dates, details,
                 name: values[index]
                 for name, values in details["investment_values"].items()
             },
+            "automatic_contributions": {
+                name: values[index]
+                for name, values in details["automatic_contributions"].items()
+            },
+            "automatic_contribution_fees": {
+                name: values[index]
+                for name, values in details["automatic_contribution_fees"].items()
+            },
             "income_values": {
                 name: values[index] for name, values in details["income_values"].items()
             },
@@ -316,6 +343,7 @@ def create_simulation_export(config, net_worth, repayment_dates, details,
     export = {
         "format": "financial-simulator-export",
         "schema_version": 1,
+        "features": {"automatic_investment_contributions": AUTO_INVEST_EXPORT_VERSION},
         "exported_at_utc": exported_at.astimezone(timezone.utc).isoformat(),
         "parameters": asdict(config),
         "results": {
@@ -338,8 +366,8 @@ def create_simulation_export(config, net_worth, repayment_dates, details,
     return json.dumps(export, indent=2, ensure_ascii=False)
 
 
-def read_simulation_export(data):
-    """Validate an exported JSON document and rebuild its simulation config."""
+def read_simulation_export(data, include_warnings=False):
+    """Validate an export and rebuild its config, optionally with warnings."""
     try:
         if isinstance(data, bytes):
             data = data.decode("utf-8")
@@ -356,6 +384,15 @@ def read_simulation_export(data):
         raise ValueError("The export does not contain simulation parameters.")
 
     parameters = dict(parameters)
+    import_warnings = []
+    features = document.get("features")
+    if not isinstance(features, dict):
+        features = {}
+    feature_version = features.get(
+        "automatic_investment_contributions"
+    )
+    if feature_version != AUTO_INVEST_EXPORT_VERSION:
+        import_warnings.append(LEGACY_AUTO_INVEST_WARNING)
 
     def rebuild_collection(name, config_type):
         items = parameters.get(name)
@@ -372,6 +409,11 @@ def read_simulation_export(data):
                         and "monthly_expenses" not in values):
                     values["monthly_expenses"] = values.get("monthly_contribution", 0)
                     values["monthly_contribution"] = 0
+                if name == "investments":
+                    values.setdefault("auto_invest_enabled", False)
+                    values.setdefault("auto_invest_min_cash", 10000.0)
+                    values.setdefault("auto_invest_percentage", 10.0)
+                    values.setdefault("auto_invest_max_per_year", 3)
                 rebuilt.append(config_type(**values))
             return rebuilt
         except TypeError as error:
@@ -386,9 +428,10 @@ def read_simulation_export(data):
     )
     parameters["dependents"] = rebuild_collection("dependents", DependentConfig) or []
     try:
-        return SimulationConfig(**parameters)
+        config = SimulationConfig(**parameters)
     except TypeError as error:
         raise ValueError(f"The exported parameters are invalid: {error}") from error
+    return (config, import_warnings) if include_warnings else config
 
 
 def main():
@@ -404,6 +447,8 @@ def main():
     """, unsafe_allow_html=True)
     st.title("📈 Financial Simulator")
     st.caption("Explore a simple, stochastic projection of cash, investments, income, expenses, and debt.")
+    for import_warning in st.session_state.pop("import_warnings", []):
+        st.warning(import_warning)
 
     st.session_state.setdefault("additional_expenses", [])
     st.session_state.setdefault("dependents", [])
@@ -411,6 +456,8 @@ def main():
         "name": "Portfolio", "investment_type": "stock",
         "initial_amount": 1000.0, "monthly_contribution": 100.0,
         "monthly_expenses": 0.0, "yearly_tax": 0.0,
+        "auto_invest_enabled": False, "auto_invest_min_cash": 10000.0,
+        "auto_invest_percentage": 10.0, "auto_invest_max_per_year": 3,
     }])
     st.session_state.setdefault("incomes", [{
         "name": "Salary", "income_type": "salary", "monthly_amount": 3000.0,
@@ -435,6 +482,10 @@ def main():
                     if item.get("investment_type") == "real_estate":
                         item["monthly_contribution"] = 0.0
                 item.setdefault("yearly_tax", 0.0)
+                item.setdefault("auto_invest_enabled", False)
+                item.setdefault("auto_invest_min_cash", 10000.0)
+                item.setdefault("auto_invest_percentage", 10.0)
+                item.setdefault("auto_invest_max_per_year", 3)
 
     def item_key(item):
         return item["_id"]
@@ -460,7 +511,10 @@ def main():
                                  else imported.investment_contribution,
                                  imported.investment_contribution
                                  if imported.investment_type == "real_estate" else 0)
-            ], ("initial_amount", "monthly_contribution", "monthly_expenses", "yearly_tax")
+            ], (
+                "initial_amount", "monthly_contribution", "monthly_expenses", "yearly_tax",
+                "auto_invest_min_cash",
+            )
         )
         st.session_state.incomes = editable_items(
             imported.incomes if imported.incomes is not None else [
@@ -525,6 +579,8 @@ def main():
             "monthly_contribution": 0.0 if investment_type == "real_estate" else 100.0,
             "monthly_expenses": 100.0 if investment_type == "real_estate" else 0.0,
             "yearly_tax": 1000.0 if investment_type == "real_estate" else 0.0,
+            "auto_invest_enabled": False, "auto_invest_min_cash": 10000.0,
+            "auto_invest_percentage": 10.0, "auto_invest_max_per_year": 3,
             "_id": uuid.uuid4().hex,
         })
 
@@ -565,10 +621,17 @@ def main():
                             f"tax ${item['yearly_tax']:,.0f}/year"
                         )
                     else:
+                        auto_summary = ""
+                        if (item["investment_type"] in Investment.AUTO_INVEST_TYPES
+                                and item["auto_invest_enabled"]):
+                            auto_summary = (
+                                f" · auto {item['auto_invest_percentage']:g}% when cash > "
+                                f"${item['auto_invest_min_cash']:,.0f}"
+                            )
                         st.caption(
                             f"{item['investment_type']} · initial "
                             f"${item['initial_amount']:,.0f} · monthly contribution "
-                            f"${item['monthly_contribution']:,.0f}"
+                            f"${item['monthly_contribution']:,.0f}{auto_summary}"
                         )
                     continue
                 item["name"] = st.text_input(
@@ -605,6 +668,42 @@ def main():
                         value=float(item["monthly_contribution"]), step=50.0,
                         format="%.0f", key=f"investment_contribution_{item_key(item)}",
                     )
+                    if item["investment_type"] in Investment.AUTO_INVEST_TYPES:
+                        item["auto_invest_enabled"] = st.checkbox(
+                            "Enable automatic cash-sweep contributions",
+                            value=bool(item["auto_invest_enabled"]),
+                            key=f"investment_auto_enabled_{item_key(item)}",
+                            help=(
+                                "Legacy-style policy. Disabled by default; explicit monthly "
+                                "contributions are unaffected."
+                            ),
+                        )
+                        item["auto_invest_min_cash"] = st.number_input(
+                            "Automatic contribution cash threshold", min_value=0.0,
+                            value=float(item["auto_invest_min_cash"]), step=500.0,
+                            format="%.0f", key=f"investment_auto_cash_{item_key(item)}",
+                            disabled=not item["auto_invest_enabled"],
+                            help="A sweep is considered only when cash is above this amount.",
+                        )
+                        item["auto_invest_percentage"] = st.number_input(
+                            "Automatic contribution (% of current cash)",
+                            min_value=0.1, max_value=100.0,
+                            value=float(item["auto_invest_percentage"]), step=1.0,
+                            key=f"investment_auto_pct_{item_key(item)}",
+                            disabled=not item["auto_invest_enabled"],
+                        )
+                        item["auto_invest_max_per_year"] = st.number_input(
+                            "Maximum automatic contributions per year",
+                            min_value=1, max_value=12,
+                            value=int(item["auto_invest_max_per_year"]), step=1,
+                            key=f"investment_auto_max_{item_key(item)}",
+                            disabled=not item["auto_invest_enabled"],
+                        )
+                        st.caption(
+                            "A sweep also requires cumulative yearly expenses below 80% "
+                            "of cumulative net income. Each transaction has the modeled "
+                            "$50 investment fee."
+                        )
                 if st.button("Remove investment", key=f"remove_investment_{item_key(item)}"):
                     remove_item(st.session_state.investments, index)
                     st.rerun()
@@ -776,7 +875,11 @@ def main():
                 use_container_width=True,
             ):
                 try:
-                    import_config(read_simulation_export(uploaded_export.getvalue()))
+                    imported, import_warnings = read_simulation_export(
+                        uploaded_export.getvalue(), include_warnings=True,
+                    )
+                    import_config(imported)
+                    st.session_state.import_warnings = import_warnings
                 except ValueError as error:
                     st.error(str(error))
                 else:
@@ -874,6 +977,13 @@ def main():
             item["name"], item["investment_type"], _whole_amount(item["initial_amount"]),
             _whole_amount(item["monthly_contribution"]),
             _whole_amount(item["monthly_expenses"]), _whole_amount(item["yearly_tax"]),
+            auto_invest_enabled=(
+                bool(item["auto_invest_enabled"])
+                if item["investment_type"] in Investment.AUTO_INVEST_TYPES else False
+            ),
+            auto_invest_min_cash=_whole_amount(item["auto_invest_min_cash"]),
+            auto_invest_percentage=float(item["auto_invest_percentage"]),
+            auto_invest_max_per_year=int(item["auto_invest_max_per_year"]),
         ) for item in st.session_state.investments],
         incomes=[IncomeConfig(
             item["name"], item["income_type"], _whole_amount(item["monthly_amount"]),
@@ -905,7 +1015,7 @@ def main():
             st.error(f"This scenario cannot be simulated: {error}")
             return
         st.session_state.simulation_result = {
-            "detail_version": 1,
+            "detail_version": SIMULATION_DETAIL_VERSION,
             "fingerprint": scenario_fingerprint,
             "simulation_count": int(simulation_count),
             "run_id": uuid.uuid4().hex,
@@ -916,8 +1026,11 @@ def main():
     if stored_result is None:
         st.info("Choose the number of simulations and click **Run simulations**.")
         return
-    if stored_result.get("detail_version") != 1:
-        st.warning("The available result predates monthly details. Run the simulations again.")
+    if stored_result.get("detail_version") != SIMULATION_DETAIL_VERSION:
+        st.warning(
+            "The available result predates the current monthly detail format. "
+            "Run the simulations again."
+        )
         return
     if (stored_result["fingerprint"] != scenario_fingerprint
             or stored_result["simulation_count"] != int(simulation_count)):

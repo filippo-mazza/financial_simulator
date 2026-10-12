@@ -64,6 +64,8 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
         "investments": [],
         "bank_account": [],
         "investment_values": {name: [] for name in investment_names},
+        "automatic_contributions": {name: [] for name in investment_names},
+        "automatic_contribution_fees": {name: [] for name in investment_names},
         "income_rates": {name: [] for name in income_names},
         "income_values": {name: [] for name in income_names},
         "expense_values": {name: [] for name in expense_names},
@@ -76,7 +78,7 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
 
     try:
       for year in range(years):
-        additional_contributions = 0
+        automatic_contribution_counts = [0] * len(investments)
         year_income = 0
         year_expense = 0
         
@@ -86,6 +88,8 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             month_income_values = {}
             month_expense_values = {}
             month_loan_payments = {}
+            month_automatic_contributions = {}
+            month_automatic_contribution_fees = {}
             
             # Income
             for source, source_name in zip(income_sources, income_names):
@@ -149,19 +153,38 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             if month == 11:
                 bank_account.apply_yearly_fees()
 
-            # Yearly additional to stocks
-            if bank_account.subaccounts['Main'] > 10000 and additional_contributions < 3:  # todo monthly
-                if year_expense < year_income * 0.8:
-                    stock_investments = [x for x in investments if x.typology == 'stock']
-                    if stock_investments:
-                        stock_inv = stock_investments[0]
-                        x = bank_account.total_balance() * 0.1
-                        _withdraw_for_simulation(
-                            bank_account, x, current_month,
-                            f"additional contribution to '{getattr(stock_inv, 'name', 'unnamed')}'",
-                        )
-                        stock_inv.add_contribution(x)
-                        additional_contributions += 1
+            # Optional legacy-style cash sweep, configured independently for
+            # each eligible investment. Disabled is the default.
+            for index, (investment, investment_name) in enumerate(
+                    zip(investments, investment_names)):
+                enabled = getattr(investment, "auto_invest_enabled", False)
+                min_cash = getattr(investment, "auto_invest_min_cash", 10000)
+                percentage = getattr(investment, "auto_invest_percentage", 10)
+                max_per_year = getattr(investment, "auto_invest_max_per_year", 3)
+                eligible = getattr(investment, "typology", None) in ("stock", "safe")
+                if not (enabled and eligible):
+                    continue
+                if automatic_contribution_counts[index] >= max_per_year:
+                    continue
+                if bank_account.subaccounts["Main"] <= min_cash:
+                    continue
+                if year_expense >= year_income * 0.8:
+                    continue
+
+                gross_contribution = bank_account.total_balance() * percentage / 100
+                _withdraw_for_simulation(
+                    bank_account, gross_contribution, current_month,
+                    f"automatic contribution to '{investment_name}'",
+                )
+                fee = investment.add_contribution(gross_contribution) or 0
+                month_automatic_contributions[investment_name] = (
+                    month_automatic_contributions.get(investment_name, 0)
+                    + gross_contribution
+                )
+                month_automatic_contribution_fees[investment_name] = (
+                    month_automatic_contribution_fees.get(investment_name, 0) + fee
+                )
+                automatic_contribution_counts[index] += 1
 
             # Store ending details after every transaction for the month, so
             # cash and investments reconcile with the net-worth snapshot.
@@ -179,6 +202,10 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 )
             for name, values in monthly_details["investment_values"].items():
                 values.append(investment_values.get(name, 0))
+            for name, values in monthly_details["automatic_contributions"].items():
+                values.append(month_automatic_contributions.get(name, 0))
+            for name, values in monthly_details["automatic_contribution_fees"].items():
+                values.append(month_automatic_contribution_fees.get(name, 0))
             for name, values in monthly_details["income_rates"].items():
                 values.append(month_income_rates.get(name, 0))
             for name, values in monthly_details["income_values"].items():

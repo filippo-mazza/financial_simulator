@@ -62,6 +62,7 @@ def test_run_simulation_is_reproducible_and_isolated():
     assert set(first[2]) == {
         "investments", "bank_account", "investment_values", "income_rates",
         "income_values", "expense_values", "loan_balances", "loan_payments",
+        "automatic_contributions", "automatic_contribution_fees",
     }
 
 
@@ -85,6 +86,7 @@ def test_multiple_simulations_return_monthly_averages():
         averaged[2]["investment_values"]["Stocks"][-1],
         sum(run[2]["investment_values"]["Stocks"][-1] for run in individual_runs) / 3,
     )
+    assert averaged[2]["automatic_contributions"]["Stocks"] == [0] * 12
     assert averaged[1] == individual_runs[0][1]
 
 
@@ -104,6 +106,7 @@ def test_month_details_expose_individual_balances_and_flows():
     assert any(row["Item"] == "Mortgage" for row in balances)
     assert any(row["Item"] == "Salary" for row in flows)
     assert any(row["Item"] == "Groceries" for row in flows)
+    assert any(row["Category"] == "Automatic investment contribution" for row in flows)
 
 
 def test_month_details_show_salary_inflation_from_following_year():
@@ -152,6 +155,8 @@ def test_simulation_export_contains_parameters_and_monthly_results():
     assert first_month["net_worth"] == net_worth[0]
     assert first_month["cash"] == details["bank_account"][0]
     assert first_month["investments"] == details["investments"][0]
+    assert first_month["automatic_contributions"] == {}
+    assert first_month["automatic_contribution_fees"] == {}
     assert first_month["income_rates"] == {
         name: values[0] for name, values in details["income_rates"].items()
     }
@@ -168,7 +173,11 @@ def test_simulation_export_contains_parameters_and_monthly_results():
 def test_simulation_export_round_trip_restores_nested_parameters():
     config = SimulationConfig(
         years=7, seed=99, initial_cash=1234, yearly_fee=25,
-        investments=[InvestmentConfig("Bonds", "bonds", 800, 75)],
+        investments=[InvestmentConfig(
+            "Safe fund", "safe", 800, 75,
+            auto_invest_enabled=True, auto_invest_min_cash=12000,
+            auto_invest_percentage=7.5, auto_invest_max_per_year=2,
+        )],
         incomes=[IncomeConfig("Consulting", "freelance", 2500, 20, 5)],
         expenses=[ExpenseConfig("Rent", "housing", 900)],
         loans=[LoanConfig("Car", 5000, 3.5, 4, True, 500)],
@@ -176,9 +185,12 @@ def test_simulation_export_round_trip_restores_nested_parameters():
     )
     results = run_simulation(config)
 
-    restored = read_simulation_export(create_simulation_export(config, *results))
+    restored, import_warnings = read_simulation_export(
+        create_simulation_export(config, *results), include_warnings=True,
+    )
 
     assert restored == config
+    assert import_warnings == []
 
 
 @pytest.mark.parametrize("document, message", [
@@ -261,6 +273,47 @@ def test_zero_stock_contribution_skips_transaction(monkeypatch):
     assert calls == []
 
 
+def test_explicit_monthly_contribution_still_runs_when_auto_invest_is_disabled(monkeypatch):
+    calls = []
+
+    def record_contribution(self, amount):
+        calls.append(amount)
+        return 0
+
+    monkeypatch.setattr("investment.Investment.add_contribution", record_contribution)
+    config = SimulationConfig(
+        years=1, initial_cash=5000, yearly_fee=0,
+        investments=[InvestmentConfig("Stocks", "stock", 1000, 100)],
+        incomes=[], expenses=[], loans=[],
+    )
+
+    run_simulation(config)
+
+    assert calls == [100] * 12
+
+
+def test_enabled_automatic_contribution_records_gross_transfer_and_fee():
+    config = SimulationConfig(
+        years=1, initial_cash=20000, yearly_fee=0,
+        investments=[InvestmentConfig(
+            "Stocks", "stock", 0, 0,
+            auto_invest_enabled=True, auto_invest_min_cash=10000,
+            auto_invest_percentage=10, auto_invest_max_per_year=1,
+        )],
+        incomes=[IncomeConfig("Salary", "salary", 1000, tax_rate=10)],
+        expenses=[ExpenseConfig("Living", "housing", 100)], loans=[],
+    )
+
+    net_worth, _, details = run_simulation(config)
+
+    assert details["automatic_contributions"]["Stocks"][0] == 2080
+    assert details["automatic_contribution_fees"]["Stocks"][0] == 50
+    assert details["automatic_contributions"]["Stocks"][1:] == [0] * 11
+    assert details["bank_account"][0] == 18720
+    assert details["investment_values"]["Stocks"][0] == 2030
+    assert net_worth[0] == 20750
+
+
 def test_zero_interest_variable_rate_loan_is_interest_free():
     config = SimulationConfig(
         years=1, initial_cash=5000, yearly_fee=0,
@@ -315,11 +368,21 @@ def test_legacy_real_estate_export_maps_contribution_to_property_expenses():
     investment = document["parameters"]["investments"][0]
     investment.pop("monthly_expenses")
     investment.pop("yearly_tax")
+    investment.pop("auto_invest_enabled")
+    investment.pop("auto_invest_min_cash")
+    investment.pop("auto_invest_percentage")
+    investment.pop("auto_invest_max_per_year")
+    document.pop("features")
 
-    restored = read_simulation_export(json.dumps(document))
+    restored, import_warnings = read_simulation_export(
+        json.dumps(document), include_warnings=True,
+    )
 
     assert restored.investments[0].monthly_contribution == 0
     assert restored.investments[0].monthly_expenses == 100
+    assert restored.investments[0].auto_invest_enabled is False
+    assert len(import_warnings) == 1
+    assert "disabled for safety" in import_warnings[0]
 
 
 def test_loan_rejects_overpayment():

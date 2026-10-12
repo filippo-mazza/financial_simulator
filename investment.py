@@ -11,15 +11,34 @@ class Investment:
         # ... add other typologies as needed
     }
     DIVIDEND = 0.0237 # typical, pct
+    CONTRIBUTION_FEE = 50
+    AUTO_INVEST_TYPES = {'stock', 'safe'}
 
-    def __init__(self, name: str, typology: str, initial_cost: float, monthly_contribution: float, current_value: float = None):
+    def __init__(self, name: str, typology: str, initial_cost: float,
+                 monthly_contribution: float, current_value: float = None,
+                 auto_invest_enabled: bool = False,
+                 auto_invest_min_cash: float = 10000,
+                 auto_invest_percentage: float = 10,
+                 auto_invest_max_per_year: int = 3):
         if typology not in self.TOPOLOGY_DETAILS:
             raise ValueError(f"Invalid typology. Must be one of {list(self.TOPOLOGY_DETAILS.keys())}")
+        if auto_invest_enabled and typology not in self.AUTO_INVEST_TYPES:
+            raise ValueError("Automatic contributions are only supported for stock and safe investments")
+        if auto_invest_min_cash < 0:
+            raise ValueError("Automatic contribution minimum cash cannot be negative")
+        if not 0 < auto_invest_percentage <= 100:
+            raise ValueError("Automatic contribution percentage must be between 0 and 100")
+        if auto_invest_max_per_year < 1:
+            raise ValueError("Automatic contribution maximum per year must be positive")
 
         self.name = name
         self.typology = typology
         self.initial_cost = initial_cost
         self.monthly_contribution = monthly_contribution
+        self.auto_invest_enabled = auto_invest_enabled
+        self.auto_invest_min_cash = auto_invest_min_cash
+        self.auto_invest_percentage = auto_invest_percentage
+        self.auto_invest_max_per_year = auto_invest_max_per_year
         self.current_value = current_value or initial_cost
         self.compounded_annual_gain = 1.0 + self._random_annual_gain_percentage() / 100
         self.months_since_last_compound = 0
@@ -55,14 +74,15 @@ class Investment:
 
     def add_contribution(self, amount):
         """
-        Adds a specified amount to the investment.
+        Add a gross contribution and return the fee deducted from that amount.
         """
+        if amount <= 0:
+          return 0
+        fee = 0
         if self.typology in ['stock', 'bonds', 'safe']:
-          amount = amount - 50 # fees
-        # Real-estate contributions are supported without the stock-like
-        # transaction fee so the UI's contribution field is honored for every
-        # offered investment type.
-        self.current_value += amount
+          fee = min(self.CONTRIBUTION_FEE, amount)
+        self.current_value += amount - fee
+        return fee
 
     def reset(self):
         """
