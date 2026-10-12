@@ -24,6 +24,32 @@ def test_build_components_exposes_all_model_options():
     assert expenses[0].expense_type == "unexpected"
 
 
+def test_build_components_supports_pre_feature_investment_class(monkeypatch):
+    class LegacyInvestment:
+        def __init__(self, name, typology, initial_cost, monthly_contribution):
+            self.name = name
+            self.typology = typology
+            self.initial_cost = initial_cost
+            self.monthly_contribution = monthly_contribution
+
+    monkeypatch.setattr("app.Investment", LegacyInvestment)
+    config = SimulationConfig(
+        investments=[InvestmentConfig(
+            "Stocks", "stock", 1000, 0,
+            auto_invest_enabled=True, auto_invest_min_cash=15000,
+            auto_invest_percentage=5, auto_invest_max_per_year=2,
+        )],
+        incomes=[], expenses=[], loans=[],
+    )
+
+    _, investments, _, _, _ = build_components(config)
+
+    assert investments[0].auto_invest_enabled is True
+    assert investments[0].auto_invest_min_cash == 15000
+    assert investments[0].auto_invest_percentage == 5
+    assert investments[0].auto_invest_max_per_year == 2
+
+
 def test_major_ui_amounts_discard_cents():
     assert _whole_amount(5000.15) == 5000
 

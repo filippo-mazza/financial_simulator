@@ -83,6 +83,24 @@ def test_enabled_automatic_contributions_are_limited_and_reconcile():
     )
 
 
+def test_legacy_contribution_method_cannot_make_a_small_sweep_negative():
+    bank = BankAccount(initial_balance=40)
+    inv = DummyInvestment(auto_invest_enabled=True)
+    inv.auto_invest_min_cash = 0
+    inv.auto_invest_max_per_year = 1
+
+    net_worth, _, details = compute_net_worth_over_time(
+        years=1, bank_account=bank, investments=[inv], loans=[],
+        income_sources=[DummyIncome(100)], expenses=[DummyExpense(0)],
+    )
+
+    assert details["automatic_contributions"]["Investment 1"][0] == 14
+    assert details["automatic_contribution_fees"]["Investment 1"][0] == 14
+    assert details["investment_values"]["Investment 1"][0] == 0
+    assert details["bank_account"][0] == 126
+    assert net_worth[0] == 126
+
+
 def test_contributions_reset_each_year():
     bank = BankAccount(initial_balance=20000)
     inv = DummyInvestment(auto_invest_enabled=True)
