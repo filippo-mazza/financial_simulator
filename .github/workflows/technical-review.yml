@@ -1,0 +1,39 @@
+name: Technical review
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: technical-review-${{ github.event.issue.id || 'manual' }}
+  cancel-in-progress: true
+
+jobs:
+  trigger:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'needs-tech-review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_TECH_REVIEW_AGENT_ID: ${{ vars.OPENAI_TECH_REVIEW_AGENT_ID }}
+    steps:
+      - name: Create and start a fresh review session
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${OPENAI_API_KEY}"
+          test -n "${OPENAI_TECH_REVIEW_AGENT_ID}"
+
+          jq -n \
+            --arg agent_id "${OPENAI_TECH_REVIEW_AGENT_ID}" \
+            '{agent_id: $agent_id, environment: {type: "openai_hosted"}, input: "Start."}' \
+          | curl --silent --show-error --fail-with-body \
+              https://api.openai.com/v1/agents/sessions \
+              -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+              -H "OpenAI-Beta: agents=v1" \
+              -H "Content-Type: application/json" \
+              --data-binary @- \
+              --output /dev/null
