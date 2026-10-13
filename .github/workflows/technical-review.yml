@@ -19,6 +19,7 @@ jobs:
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_TECH_REVIEW_AGENT_ID: ${{ vars.OPENAI_TECH_REVIEW_AGENT_ID }}
+      OPENAI_MCP_VAULT_ID: ${{ vars.OPENAI_MCP_VAULT_ID }}
     steps:
       - name: Create and start a fresh review session
         shell: bash
@@ -26,16 +27,20 @@ jobs:
           set -euo pipefail
           test -n "${OPENAI_API_KEY}"
           test -n "${OPENAI_TECH_REVIEW_AGENT_ID}"
+          test -n "${OPENAI_MCP_VAULT_ID}"
           [[ "${OPENAI_TECH_REVIEW_AGENT_ID}" =~ ^agent_[A-Za-z0-9]+$ ]]
+          [[ "${OPENAI_MCP_VAULT_ID}" =~ ^vault_[A-Za-z0-9]+$ ]]
           (( ${#OPENAI_TECH_REVIEW_AGENT_ID} <= 64 ))
 
           response_file="$(mktemp)"
           trap 'rm -f "${response_file}"' EXIT
 
           http_status="$(
+            # Needed because the saved GitHub MCP tool's credential_id is stored in this vault.
             jq -n \
               --arg agent_id "${OPENAI_TECH_REVIEW_AGENT_ID}" \
-              '{agent_id: $agent_id, environment: {type: "none"}, input: "Start."}' \
+              --arg vault_id "${OPENAI_MCP_VAULT_ID}" \
+              '{agent_id: $agent_id, environment: {type: "none"}, input: "Start.", vault_ids: [$vault_id]}' \
             | curl --silent --show-error \
               https://api.openai.com/v1/agents/sessions \
               -H "Authorization: Bearer ${OPENAI_API_KEY}" \
@@ -51,9 +56,11 @@ jobs:
             if jq -e '.error | type == "object"' "${response_file}" >/dev/null 2>&1; then
               jq \
                 --arg agent_id "${OPENAI_TECH_REVIEW_AGENT_ID}" \
+                --arg vault_id "${OPENAI_MCP_VAULT_ID}" \
                 '{error: {type: .error.type, code: .error.code, param: .error.param, message: .error.message}}
                  | walk(if type == "string" then
                      gsub($agent_id; "[redacted agent id]")
+                     | gsub($vault_id; "[redacted vault id]")
                      | gsub("sk-[A-Za-z0-9_-]+"; "[redacted API key]")
                    else . end)' \
                 "${response_file}" >&2
