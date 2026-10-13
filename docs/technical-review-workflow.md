@@ -19,10 +19,10 @@ On an HTTP error, the workflow prints only the API error's type, code, parameter
 The official API exposes vault and credential metadata without returning secret values. Use an application key for the same OpenAI project as the saved agent and grant it `api.vaults.read` for this lookup.
 
 1. Retrieve the saved agent with `GET /v1/agents/{agent_id}` and note the GitHub MCP tool's `credential_id`.
-2. List active vaults with `GET /v1/vaults?status=active`.
-3. For each candidate vault, call `GET /v1/vaults/{vault_id}/credentials`. Select the vault containing the matching `credential_id` and set that vault's ID as the repository variable `OPENAI_MCP_VAULT_ID`.
+2. List active vaults with `GET /v1/vaults?status=active&limit=100`. When a response has `has_more: true`, request the next page with `after={last_id}` while preserving the other query parameters. Repeat until `has_more` is false.
+3. For every vault from every page, call `GET /v1/vaults/{vault_id}/credentials?limit=100`. Paginate each credential list in the same way with its own `last_id` and `after` cursor. Select the vault containing the matching `credential_id` and set that vault's ID as the repository variable `OPENAI_MCP_VAULT_ID`.
 
-Include `Authorization: Bearer $OPENAI_API_KEY` and `OpenAI-Beta: agents=v1` on these read-only requests. The documented APIs return credential metadata, never the secret value. OpenAI's current documentation does not identify a dashboard screen that reliably exposes the vault ID. If the existing UI-created credential does not appear in `GET /v1/vaults` for the agent's project, do not invent an ID or create a replacement credential; confirm the agent, API key, and vault belong to the same OpenAI project, then have the project administrator locate or expose the existing vault.
+Include `Authorization: Bearer $OPENAI_API_KEY` and `OpenAI-Beta: agents=v1` on these read-only requests. The documented APIs return credential metadata, never the secret value. Keep the vault-list cursor separate from each vault's credential-list cursor. OpenAI's current documentation does not identify a dashboard screen that reliably exposes the vault ID. Only after exhausting every page, if the existing UI-created credential does not appear for the agent's project, do not invent an ID or create a replacement credential; confirm the agent, API key, and vault belong to the same OpenAI project, then have the project administrator locate or expose the existing vault.
 
 ## Target discovery limitation
 
