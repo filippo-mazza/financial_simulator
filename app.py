@@ -969,7 +969,7 @@ def main():
 
     with st.sidebar:
         st.header("Scenario")
-        with st.expander("Import saved scenario"):
+        with st.expander("Import saved scenario", key="sidebar_import"):
             uploaded_export = st.file_uploader(
                 "Financial Simulator JSON", type="json",
                 help="Select a JSON file created by the export button.",
@@ -1001,6 +1001,7 @@ def main():
         with st.expander(
             f"Cash · ${cash_value:,.0f} start · ${fee_value:,.0f}/year",
             expanded=True,
+            key="sidebar_cash",
         ):
             initial_cash = st.number_input(
                 "Starting cash", min_value=0.0, step=500.0, format="%.0f",
@@ -1021,14 +1022,16 @@ def main():
         )
         with st.expander(
             f"Investments · {len(investments)} · ${investment_initial:,.0f} start · "
-            f"${investment_monthly:,.0f}/month"
+            f"${investment_monthly:,.0f}/month",
+            key="sidebar_investments",
         ):
             render_investments()
 
         incomes = st.session_state.incomes
         income_monthly = sum(item["monthly_amount"] for item in incomes)
         with st.expander(
-            f"Income · {len(incomes)} source(s) · ${income_monthly:,.0f}/month"
+            f"Income · {len(incomes)} source(s) · ${income_monthly:,.0f}/month",
+            key="sidebar_income",
         ):
             render_incomes()
 
@@ -1041,17 +1044,24 @@ def main():
         expense_monthly = sum(item["monthly_amount"] for item in expenses) + linked_monthly
         with st.expander(
             f"Expenses · {len(expenses)} editable + {len(linked_properties)} linked · "
-            f"${expense_monthly:,.0f}/month · ${linked_yearly_tax:,.0f}/year tax"
+            f"${expense_monthly:,.0f}/month · ${linked_yearly_tax:,.0f}/year tax",
+            key="sidebar_expenses",
         ):
             render_expenses()
 
         loans = st.session_state.loans
         outstanding = sum(item["amount"] - item["already_paid"] for item in loans)
-        with st.expander(f"Loans · {len(loans)} · ${outstanding:,.0f} outstanding"):
+        with st.expander(
+            f"Loans · {len(loans)} · ${outstanding:,.0f} outstanding",
+            key="sidebar_loans",
+        ):
             render_loans()
 
         assumptions = st.session_state.financial_assumptions
-        with st.expander("Financial assumptions · returns, dividends, fees and taxes"):
+        with st.expander(
+            "Financial assumptions · returns, dividends, fees and taxes",
+            key="sidebar_assumptions",
+        ):
             st.caption(
                 "Illustrative annual assumptions. Return values and taxes are percentages; "
                 "the dividend value is shown as a percentage but stored as a decimal rate."
@@ -1092,7 +1102,8 @@ def main():
         dependents = st.session_state.dependents
         dependent_monthly = sum(item["monthly_cost"] for item in dependents)
         with st.expander(
-            f"Family · {len(dependents)} dependent(s) · ${dependent_monthly:,.0f}/month"
+            f"Family · {len(dependents)} dependent(s) · ${dependent_monthly:,.0f}/month",
+            key="sidebar_family",
         ):
             render_dependents()
 

@@ -1,4 +1,4 @@
 altair>=5,<7
 matplotlib>=3.7,<4
 numpy>=1.24,<3
-streamlit>=1.35,<2
+streamlit>=1.55,<2
