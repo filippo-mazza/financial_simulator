@@ -4,6 +4,7 @@ from streamlit.testing.v1 import AppTest
 
 
 APP_PATH = Path(__file__).parents[1] / "app.py"
+REQUIREMENTS_PATH = APP_PATH.parent / "requirements.txt"
 
 
 def _expander(app, key):
@@ -27,3 +28,7 @@ def test_sidebar_expanders_keep_stable_identity_when_summary_changes(monkeypatch
     assert not app.exception
     assert _expander(app, "sidebar_cash").key == "sidebar_cash"
     assert _expander(app, "sidebar_cash").label.startswith("Cash · $7,500")
+
+
+def test_streamlit_minimum_supports_persistent_keyed_expanders():
+    assert "streamlit>=1.56,<2" in REQUIREMENTS_PATH.read_text()
