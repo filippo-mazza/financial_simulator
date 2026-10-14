@@ -6,11 +6,15 @@ The `Technical review` GitHub Actions workflow creates a fresh OpenAI Agents API
 
 Configure these repository settings before enabling the workflow:
 
-- Actions secret `OPENAI_API_KEY`: an OpenAI application API key with `api.agents.read`, `api.agents.write`, and `api.responses.write` permissions.
+- Actions secret `OPENAI_API_KEY`: an OpenAI application API key with `api.agents.read`, `api.agents.write`, `api.responses.write`, and `api.vaults.read` permissions. Vault read access is required only for non-secret credential metadata; secret values are never returned.
 - Actions variable `OPENAI_TECH_REVIEW_AGENT_ID`: `agent_4b255b49a6ff49c5a91c80f522b96b0bdba2f52282444d99b4`.
 - Actions variable `OPENAI_MCP_VAULT_ID`: the ID of the existing vault that contains the saved agent's GitHub MCP credential.
 
-The workflow uses the official [`POST /v1/agents/sessions`](https://developers.openai.com/api/reference/python/resources/beta/subresources/agents/subresources/sessions/methods/create) endpoint. It references the saved agent with the top-level `agent_id`, omits the optional `agent` override, selects no additional execution environment, attaches the existing MCP credential vault through `vault_ids`, and sends the neutral input `Start.`. The vault attachment is needed because the saved GitHub MCP tool references a `credential_id`; the Agents API does not make that credential available to a new session until its vault is attached. The workflow does not override the saved agent configuration, wait for results, or post a GitHub comment. Prior test sessions are not reused.
+The workflow uses the official [`POST /v1/agents/sessions`](https://developers.openai.com/api/reference/python/resources/beta/subresources/agents/subresources/sessions/methods/create) endpoint. It references the saved agent with the top-level `agent_id`, omits the optional `agent` override, attaches the existing MCP credential vault through `vault_ids`, and sends the neutral input `Start.`. The vault attachment is needed because the saved GitHub MCP tool references a `credential_id`; the Agents API does not make that credential available to a new session until its vault is attached. Prior test sessions are not reused.
+
+Saved-agent reuse copies agent settings such as instructions and `agent.tools`, but an execution environment belongs to the session. The workflow therefore requests an `openai_hosted` environment instead of `none`, allowing a saved MCP configured with an environment origin to run. This does not import UI-only session configuration. Before starting the paid turn, the workflow retrieves only saved-agent and vault metadata and verifies that the attached vault contains a credential referenced by a saved MCP tool. If that check fails, the UI connection is not represented in the saved Agents API configuration and the workflow stops before creating a session.
+
+Session creation and execution are separate outcomes. The workflow streams lifecycle events until the root turn is completed, failed, or cancelled. A completed turn is accepted only when an MCP call associated with the attached vault finished successfully. Agent response text and MCP output are neither printed nor processed, and the workflow does not post a GitHub comment itself.
 
 On an HTTP error, the workflow prints only the API error's type, code, parameter, and message. Agent IDs, vault IDs, and strings resembling API keys are redacted. Successful response bodies are not printed.
 

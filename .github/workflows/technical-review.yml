@@ -5,7 +5,8 @@ on:
     types: [labeled]
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  contents: read
 
 concurrency:
   group: technical-review-${{ github.event.issue.id || 'manual' }}
@@ -15,57 +16,15 @@ jobs:
   trigger:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'needs-tech-review'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_TECH_REVIEW_AGENT_ID: ${{ vars.OPENAI_TECH_REVIEW_AGENT_ID }}
       OPENAI_MCP_VAULT_ID: ${{ vars.OPENAI_MCP_VAULT_ID }}
     steps:
+      - uses: actions/checkout@v4
+
       - name: Create and start a fresh review session
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "${OPENAI_API_KEY}"
-          test -n "${OPENAI_TECH_REVIEW_AGENT_ID}"
-          test -n "${OPENAI_MCP_VAULT_ID}"
-          [[ "${OPENAI_TECH_REVIEW_AGENT_ID}" =~ ^agent_[A-Za-z0-9]+$ ]]
-          [[ "${OPENAI_MCP_VAULT_ID}" =~ ^vault_[A-Za-z0-9]+$ ]]
-          (( ${#OPENAI_TECH_REVIEW_AGENT_ID} <= 64 ))
-
-          response_file="$(mktemp)"
-          trap 'rm -f "${response_file}"' EXIT
-
-          http_status="$(
-            # Needed because the saved GitHub MCP tool's credential_id is stored in this vault.
-            jq -n \
-              --arg agent_id "${OPENAI_TECH_REVIEW_AGENT_ID}" \
-              --arg vault_id "${OPENAI_MCP_VAULT_ID}" \
-              '{agent_id: $agent_id, environment: {type: "none"}, input: "Start.", vault_ids: [$vault_id]}' \
-            | curl --silent --show-error \
-              https://api.openai.com/v1/agents/sessions \
-              -H "Authorization: Bearer ${OPENAI_API_KEY}" \
-              -H "OpenAI-Beta: agents=v1" \
-              -H "Content-Type: application/json" \
-              --data-binary @- \
-              --output "${response_file}" \
-              --write-out '%{http_code}'
-          )"
-
-          if [[ "${http_status}" != 2* ]]; then
-            echo "OpenAI Agents API request failed with HTTP ${http_status}." >&2
-            if jq -e '.error | type == "object"' "${response_file}" >/dev/null 2>&1; then
-              jq \
-                --arg agent_id "${OPENAI_TECH_REVIEW_AGENT_ID}" \
-                --arg vault_id "${OPENAI_MCP_VAULT_ID}" \
-                '{error: {type: .error.type, code: .error.code, param: .error.param, message: .error.message}}
-                 | walk(if type == "string" then
-                     gsub($agent_id; "[redacted agent id]")
-                     | gsub($vault_id; "[redacted vault id]")
-                     | gsub("sk-[A-Za-z0-9_-]+"; "[redacted API key]")
-                   else . end)' \
-                "${response_file}" >&2
-            else
-              echo "The API returned no structured validation error." >&2
-            fi
-            exit 1
-          fi
+        # A hosted environment is needed when the saved MCP connects from its session runtime.
+        # The runner also verifies the saved MCP tool uses the attached vault and actually succeeds.
+        run: python scripts/run_technical_review.py
