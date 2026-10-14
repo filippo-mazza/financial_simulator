@@ -1,17 +1,18 @@
 import random
 import matplotlib.pyplot as plt
+from financial_assumptions import (
+    DEFAULT_CONTRIBUTION_FEE, DEFAULT_RETURN_MEANS, DEFAULT_RETURN_STD_DEVS,
+    DEFAULT_STOCK_DIVIDEND_RATE,
+)
 
 class Investment:
     # Define typology details with mean and standard deviation for annual gains
     TOPOLOGY_DETAILS = {
-        'stock': {'mean': 8.0, 'std_dev': 20.0},         # Stock: mean of 8% annual gain, std deviation of 20%
-        'real_estate': {'mean': 4.0, 'std_dev': 8.0},   # Real Estate: mean of 4% annual gain, std deviation of 8%
-        'bonds': {'mean': 2.5, 'std_dev': 5.0},         # Bonds: mean of 2.5% annual gain, std deviation of 5%
-        'safe': {'mean': 2, 'std_dev': 1.0}
-        # ... add other typologies as needed
+        name: {"mean": DEFAULT_RETURN_MEANS[name], "std_dev": DEFAULT_RETURN_STD_DEVS[name]}
+        for name in DEFAULT_RETURN_MEANS
     }
-    DIVIDEND = 0.0237 # typical, pct
-    CONTRIBUTION_FEE = 50
+    DIVIDEND = DEFAULT_STOCK_DIVIDEND_RATE
+    CONTRIBUTION_FEE = DEFAULT_CONTRIBUTION_FEE
     AUTO_INVEST_TYPES = {'stock', 'safe'}
 
     def __init__(self, name: str, typology: str, initial_cost: float,
@@ -19,7 +20,11 @@ class Investment:
                  auto_invest_enabled: bool = False,
                  auto_invest_min_cash: float = 10000,
                  auto_invest_percentage: float = 10,
-                 auto_invest_max_per_year: int = 3):
+                 auto_invest_max_per_year: int = 3,
+                 annual_return_mean: float = None,
+                 annual_return_std_dev: float = None,
+                 dividend_rate: float = None,
+                 contribution_fee: float = None):
         if typology not in self.TOPOLOGY_DETAILS:
             raise ValueError(f"Invalid typology. Must be one of {list(self.TOPOLOGY_DETAILS.keys())}")
         if auto_invest_enabled and typology not in self.AUTO_INVEST_TYPES:
@@ -39,6 +44,17 @@ class Investment:
         self.auto_invest_min_cash = auto_invest_min_cash
         self.auto_invest_percentage = auto_invest_percentage
         self.auto_invest_max_per_year = auto_invest_max_per_year
+        defaults = self.TOPOLOGY_DETAILS[typology]
+        self.annual_return_mean = (
+            defaults['mean'] if annual_return_mean is None else annual_return_mean
+        )
+        self.annual_return_std_dev = (
+            defaults['std_dev'] if annual_return_std_dev is None else annual_return_std_dev
+        )
+        self.dividend_rate = self.DIVIDEND if dividend_rate is None else dividend_rate
+        self.contribution_fee = (
+            self.CONTRIBUTION_FEE if contribution_fee is None else contribution_fee
+        )
         self.current_value = current_value or initial_cost
         self.compounded_annual_gain = 1.0 + self._random_annual_gain_percentage() / 100
         self.months_since_last_compound = 0
@@ -49,8 +65,7 @@ class Investment:
         """
         Return a Gaussian distributed annual gain percentage based on the typology.
         """
-        typology_details = self.TOPOLOGY_DETAILS[self.typology]
-        return random.gauss(typology_details['mean'], typology_details['std_dev'])
+        return random.gauss(self.annual_return_mean, self.annual_return_std_dev)
 
 
     def step(self):
@@ -70,7 +85,7 @@ class Investment:
         self.historical_values.append(self.current_value)
         # dividend
         if self.typology=='stock' and self.months_since_beginning % 3 ==0:
-          return self.current_value*self.DIVIDEND/12*3 # annual->month  ####TODO: taxation
+          return self.current_value*self.dividend_rate/12*3 # annual->month  ####TODO: taxation
 
     def add_contribution(self, amount):
         """
@@ -80,7 +95,7 @@ class Investment:
           return 0
         fee = 0
         if self.typology in ['stock', 'bonds', 'safe']:
-          fee = min(self.CONTRIBUTION_FEE, amount)
+          fee = min(self.contribution_fee, amount)
         self.current_value += amount - fee
         return fee
 

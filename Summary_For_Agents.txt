@@ -27,6 +27,11 @@ app.py
   Streamlit UI; scenario dataclasses; model construction; single/multi-run
   orchestration; chart events; month drill-down; JSON import/export.
 
+financial_assumptions.py
+  Authoritative validated defaults for investment returns/volatility, stock
+  dividends, contribution fees, and income tax rates. The UI and domain models
+  consume this module; do not duplicate these defaults elsewhere.
+
 utils.py
   Core month-by-month simulation loop and net-worth calculation. This is the
   main engine used by both app.py and example.py.
@@ -64,9 +69,9 @@ README.md
 
 CONFIGURATION AND OBJECT CONSTRUCTION
 -------------------------------------
-app.py defines these dataclasses:
+app.py and financial_assumptions.py define these dataclasses:
   SimulationConfig, InvestmentConfig, IncomeConfig, ExpenseConfig, LoanConfig,
-  DependentConfig.
+  DependentConfig, FinancialAssumptions.
 
 build_components(config) converts them into fresh model objects and returns:
   (BankAccount, investments, loans, incomes, expenses)
@@ -192,6 +197,12 @@ monthly_contribution as monthly_expenses. Exports without the automatic-policy
 feature marker import with all automatic policies disabled and surface a safety
 warning. Keep old schema files readable or explicitly version a breaking format
 change.
+
+Financial assumptions are stored under parameters.assumptions and marked by
+features.financial_assumptions version 1. Missing assumptions in older exports
+resolve to the historical defaults; explicit zero values are preserved. The UI
+edits them in a dedicated sidebar expander, and FinancialAssumptions validates
+finite values, exact mapping keys, bounded rates, and nonnegative fees.
 
 
 TESTING AND CHANGE CHECKLIST

@@ -179,7 +179,10 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 value_before_contribution = investment.current_value
                 investment.add_contribution(gross_contribution)
                 fee = min(
-                    getattr(investment, "CONTRIBUTION_FEE", 50),
+                    getattr(
+                        investment, "contribution_fee",
+                        getattr(investment, "CONTRIBUTION_FEE", 50),
+                    ),
                     gross_contribution,
                 )
                 # A cached pre-feature class always subtracts $50, which can

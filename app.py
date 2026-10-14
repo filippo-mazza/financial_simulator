@@ -13,12 +13,14 @@ import uuid
 
 from bank_account import BankAccount, InsufficientFundsException
 from expense import AgeBasedExpense, Expense, YearlyExpense
+from financial_assumptions import FinancialAssumptions, INCOME_TYPES, INVESTMENT_TYPES
 from income_source import IncomeSource
 from investment import Investment
 from loan import Loan
 from utils import compute_net_worth_over_time
 
 AUTO_INVEST_EXPORT_VERSION = 1
+FINANCIAL_ASSUMPTIONS_EXPORT_VERSION = 1
 SIMULATION_DETAIL_VERSION = 2
 AUTO_INVEST_TYPES = frozenset({"stock", "safe"})
 LEGACY_AUTO_INVEST_WARNING = (
@@ -27,7 +29,6 @@ LEGACY_AUTO_INVEST_WARNING = (
     "Automatic contributions were disabled for safety; review each stock or "
     "safe investment before running the imported scenario."
 )
-
 
 @dataclass
 class ExpenseConfig:
@@ -106,6 +107,7 @@ class SimulationConfig:
     incomes: list[IncomeConfig] | None = None
     expenses: list[ExpenseConfig] | None = None
     loans: list[LoanConfig] | None = None
+    assumptions: FinancialAssumptions = field(default_factory=FinancialAssumptions)
 
 
 def build_components(config: SimulationConfig):
@@ -117,7 +119,11 @@ def build_components(config: SimulationConfig):
         income_specs = config.incomes
     incomes = [IncomeSource(
         item.name, item.income_type, item.monthly_amount,
-        specific_taxation=item.tax_rate or None, bonus_pct=item.bonus_pct or None,
+        specific_taxation=(
+            item.tax_rate if item.tax_rate else config.assumptions.income_tax_rates[item.income_type]
+        ),
+        bonus_pct=item.bonus_pct or None,
+        income_taxation=config.assumptions.income_tax_rates,
     ) for item in income_specs]
 
     if config.investments is None:
@@ -172,10 +178,35 @@ def build_components(config: SimulationConfig):
             raise ValueError("Automatic contribution percentage must be between 0 and 100")
         if item.auto_invest_max_per_year < 1:
             raise ValueError("Automatic contribution maximum per year must be positive")
-        investment = Investment(
+        investment_args = (
             item.name, item.investment_type, item.initial_amount,
             0 if item.investment_type == "real_estate" else item.monthly_contribution,
         )
+        try:
+            investment = Investment(
+                *investment_args,
+                annual_return_mean=(
+                    config.assumptions.investment_return_means[item.investment_type]
+                ),
+                annual_return_std_dev=(
+                    config.assumptions.investment_return_std_devs[item.investment_type]
+                ),
+                dividend_rate=config.assumptions.stock_dividend_rate,
+                contribution_fee=config.assumptions.contribution_fee,
+            )
+        except TypeError as error:
+            # Streamlit can retain the pre-feature class through a hot reload.
+            if "unexpected keyword argument" not in str(error):
+                raise
+            investment = Investment(*investment_args)
+            investment.annual_return_mean = (
+                config.assumptions.investment_return_means[item.investment_type]
+            )
+            investment.annual_return_std_dev = (
+                config.assumptions.investment_return_std_devs[item.investment_type]
+            )
+            investment.dividend_rate = config.assumptions.stock_dividend_rate
+            investment.contribution_fee = config.assumptions.contribution_fee
         # Set policy attributes after construction so a Streamlit hot reload
         # remains compatible with an Investment class cached from older code.
         investment.auto_invest_enabled = item.auto_invest_enabled
@@ -360,7 +391,10 @@ def create_simulation_export(config, net_worth, repayment_dates, details,
     export = {
         "format": "financial-simulator-export",
         "schema_version": 1,
-        "features": {"automatic_investment_contributions": AUTO_INVEST_EXPORT_VERSION},
+        "features": {
+            "automatic_investment_contributions": AUTO_INVEST_EXPORT_VERSION,
+            "financial_assumptions": FINANCIAL_ASSUMPTIONS_EXPORT_VERSION,
+        },
         "exported_at_utc": exported_at.astimezone(timezone.utc).isoformat(),
         "parameters": asdict(config),
         "results": {
@@ -447,6 +481,16 @@ def read_simulation_export(data, include_warnings=False):
         rebuild_collection("additional_expenses", ExpenseConfig) or []
     )
     parameters["dependents"] = rebuild_collection("dependents", DependentConfig) or []
+    assumptions = parameters.get("assumptions")
+    if assumptions is None:
+        parameters["assumptions"] = FinancialAssumptions()
+    elif not isinstance(assumptions, dict):
+        raise ValueError("The exported financial assumptions must be an object.")
+    else:
+        try:
+            parameters["assumptions"] = FinancialAssumptions(**assumptions)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"The exported financial assumptions are invalid: {error}") from error
     try:
         config = SimulationConfig(**parameters)
     except TypeError as error:
@@ -490,6 +534,7 @@ def main():
         "name": "Home loan", "amount": 10000.0, "interest_rate": 2.0,
         "duration_years": 25, "fixed_rate": False, "already_paid": 0.0,
     }])
+    st.session_state.setdefault("financial_assumptions", asdict(FinancialAssumptions()))
     for collection_name in ("investments", "incomes", "expenses", "loans", "dependents"):
         for item in st.session_state[collection_name]:
             item.setdefault("_id", uuid.uuid4().hex)
@@ -523,6 +568,10 @@ def main():
         st.session_state.scenario_years = imported.years
         st.session_state.scenario_initial_cash = float(_whole_amount(imported.initial_cash))
         st.session_state.scenario_yearly_fee = float(_whole_amount(imported.yearly_fee))
+        st.session_state.financial_assumptions = asdict(imported.assumptions)
+        for key in list(st.session_state):
+            if key.startswith("assumption_"):
+                del st.session_state[key]
         st.session_state.investments = editable_items(
             imported.investments if imported.investments is not None else [
                 InvestmentConfig("Portfolio", imported.investment_type,
@@ -966,6 +1015,45 @@ def main():
         with st.expander(f"Loans · {len(loans)} · ${outstanding:,.0f} outstanding"):
             render_loans()
 
+        assumptions = st.session_state.financial_assumptions
+        with st.expander("Financial assumptions · returns, dividends, fees and taxes"):
+            st.caption(
+                "Illustrative annual assumptions. Return values and taxes are percentages; "
+                "the dividend value is shown as a percentage but stored as a decimal rate."
+            )
+            st.markdown("**Investment returns**")
+            for investment_type in INVESTMENT_TYPES:
+                left, right = st.columns(2)
+                assumptions["investment_return_means"][investment_type] = left.number_input(
+                    f"{investment_type.replace('_', ' ').title()} mean (%)",
+                    min_value=-100.0, max_value=100.0,
+                    value=float(assumptions["investment_return_means"][investment_type]),
+                    key=f"assumption_return_mean_{investment_type}",
+                )
+                assumptions["investment_return_std_devs"][investment_type] = right.number_input(
+                    f"{investment_type.replace('_', ' ').title()} volatility (%)",
+                    min_value=0.0, max_value=100.0,
+                    value=float(assumptions["investment_return_std_devs"][investment_type]),
+                    key=f"assumption_return_std_{investment_type}",
+                )
+            assumptions["stock_dividend_rate"] = st.number_input(
+                "Stock dividend rate (%)", min_value=0.0, max_value=100.0,
+                value=float(assumptions["stock_dividend_rate"]) * 100,
+                key="assumption_stock_dividend_pct",
+            ) / 100
+            assumptions["contribution_fee"] = st.number_input(
+                "Investment contribution fee", min_value=0.0,
+                value=float(assumptions["contribution_fee"]), step=1.0,
+                key="assumption_contribution_fee",
+            )
+            st.markdown("**Default income tax rates**")
+            for income_type in INCOME_TYPES:
+                assumptions["income_tax_rates"][income_type] = st.number_input(
+                    f"{income_type.title()} tax (%)", min_value=0.0, max_value=100.0,
+                    value=float(assumptions["income_tax_rates"][income_type]),
+                    key=f"assumption_income_tax_{income_type}",
+                )
+
         dependents = st.session_state.dependents
         dependent_monthly = sum(item["monthly_cost"] for item in dependents)
         with st.expander(
@@ -1023,6 +1111,7 @@ def main():
             item["name"], _whole_amount(item["monthly_cost"]), item["age"],
             item["school_start_age"], _whole_amount(item["school_monthly_cost"]),
         ) for item in st.session_state.dependents],
+        assumptions=FinancialAssumptions(**st.session_state.financial_assumptions),
     )
 
     scenario_fingerprint = json.dumps(asdict(config), sort_keys=True)
