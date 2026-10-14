@@ -123,6 +123,44 @@ Exports created before automatic contribution settings were added remain
 importable. The UI warns that their automatic policies were disabled for safety
 and asks the user to review each eligible investment.
 
+### Financial assumptions
+
+The **Financial assumptions** sidebar section centralizes the model's illustrative
+return, dividend, contribution-fee, and default income-tax inputs. These values
+are saved in the JSON parameters under `assumptions`; exports that predate this
+section remain readable and receive the defaults below. Explicit zero values are
+preserved.
+
+| Assumption | Default | Unit / valid range |
+| --- | ---: | --- |
+| Stock annual return | 8 mean, 20 volatility | percent; mean -100–100, volatility 0–100 |
+| Real-estate annual return | 4 mean, 8 volatility | percent; mean -100–100, volatility 0–100 |
+| Bond annual return | 2.5 mean, 5 volatility | percent; mean -100–100, volatility 0–100 |
+| Safe-investment annual return | 2 mean, 1 volatility | percent; mean -100–100, volatility 0–100 |
+| Stock dividend yield | 2.37 | annual percent; 0–100 |
+| Investment contribution fee | $50 | currency per eligible contribution; zero or greater |
+| Salary / freelance income tax | 30 | percent; 0–100 |
+| Rent / royalty / other income tax | 15 | percent; 0–100 |
+| Dividend income tax | 20 | percent; 0–100 |
+| Pension income tax | 10 | percent; 0–100 |
+
+Investment returns are independent annual Gaussian draws that are compounded
+monthly; volatility is a standard deviation, not a guaranteed range. Draws below
+−100% are floored at −100% so an investment cannot lose more than its value. Stock
+dividends are paid quarterly using the configured annual yield. The contribution
+fee is capped at the gross contribution and applies to stock, bond, and safe
+investments. A nonzero custom tax on an individual income source overrides its
+type's default tax; zero continues to mean “use the configured default” in the
+current UI.
+
+These are simplified scenario inputs, not forecasts or recommendations. The
+model does not represent correlated markets, tax brackets, deductions, capital
+gains tax, dividend tax inside an investment, account-specific fees, transaction
+slippage, or jurisdiction-specific rules. Adjacent legacy heuristics—including
+income growth, salary promotion/raise probabilities, expense inflation,
+freelance variability, and the automatic cash-sweep guard—remain fixed and are
+not part of this assumptions section.
+
 The dashboard combines the average summary metrics with an interactive
 Vega-Lite chart. Its explicit color legends distinguish average net worth,
 cash, investments, and event types. Hover for exact monthly values, or pan and

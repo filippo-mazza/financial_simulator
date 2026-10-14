@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import json
 import math
@@ -7,10 +7,11 @@ import pytest
 
 from bank_account import InsufficientFundsException
 from app import (_consume_run_request, _whole_amount, DependentConfig, ExpenseConfig,
-                 IncomeConfig, InvestmentConfig, LoanConfig, SimulationConfig,
+                 FinancialAssumptions, IncomeConfig, InvestmentConfig, LoanConfig, SimulationConfig,
                  build_components, build_simulation_events, create_simulation_export,
                  get_month_details, read_simulation_export, run_simulation,
                  run_simulations)
+from investment import Investment
 
 
 def test_build_components_exposes_all_model_options():
@@ -33,13 +34,20 @@ def test_build_components_supports_pre_feature_investment_class(monkeypatch):
             self.monthly_contribution = monthly_contribution
 
     monkeypatch.setattr("app.Investment", LegacyInvestment)
+    assumptions = _controlled_assumptions(
+        investment_return_means={
+            "stock": 12, "real_estate": 0, "bonds": 0, "safe": 0,
+        },
+        stock_dividend_rate=0.04,
+        contribution_fee=7,
+    )
     config = SimulationConfig(
         investments=[InvestmentConfig(
             "Stocks", "stock", 1000, 0,
             auto_invest_enabled=True, auto_invest_min_cash=15000,
             auto_invest_percentage=5, auto_invest_max_per_year=2,
         )],
-        incomes=[], expenses=[], loans=[],
+        incomes=[], expenses=[], loans=[], assumptions=assumptions,
     )
 
     _, investments, _, _, _ = build_components(config)
@@ -48,6 +56,40 @@ def test_build_components_supports_pre_feature_investment_class(monkeypatch):
     assert investments[0].auto_invest_min_cash == 15000
     assert investments[0].auto_invest_percentage == 5
     assert investments[0].auto_invest_max_per_year == 2
+    assert type(investments[0]).TOPOLOGY_DETAILS["stock"] == {
+        "mean": 12, "std_dev": 0,
+    }
+    assert type(investments[0]).DIVIDEND == 0.04
+    assert type(investments[0]).CONTRIBUTION_FEE == 7
+
+
+def test_build_components_supports_cached_income_source_constructor(monkeypatch):
+    class LegacyIncomeSource:
+        def __init__(self, name, income_type, monthly_income,
+                     specific_taxation=None, bonus_pct=None):
+            self.specific_taxation = specific_taxation
+
+    monkeypatch.setattr("app.IncomeSource", LegacyIncomeSource)
+    assumptions = _controlled_assumptions(income_tax_rates={
+        **FinancialAssumptions().income_tax_rates, "salary": 0,
+    })
+
+    _, _, _, incomes, _ = build_components(SimulationConfig(
+        investments=[], incomes=[IncomeConfig("Salary", "salary", 1000)],
+        expenses=[], loans=[], assumptions=assumptions,
+    ))
+
+    assert incomes[0].specific_taxation == 0
+
+
+def test_extreme_negative_return_is_clamped_to_total_loss(monkeypatch):
+    monkeypatch.setattr("investment.random.gauss", lambda *_args: -150)
+
+    investment = Investment("Volatile", "stock", 1000, 0)
+
+    assert investment.compounded_annual_gain == 0
+    investment.step()
+    assert investment.current_value == 0
 
 
 def test_major_ui_amounts_discard_cents():
@@ -171,6 +213,7 @@ def test_simulation_export_contains_parameters_and_monthly_results():
 
     assert document["format"] == "financial-simulator-export"
     assert document["schema_version"] == 1
+    assert document["features"]["financial_assumptions"] == 1
     assert document["results"]["simulation_count"] == 1
     assert document["exported_at_utc"] == "2026-10-11T12:30:00+00:00"
     assert document["parameters"]["seed"] == 17
@@ -217,6 +260,121 @@ def test_simulation_export_round_trip_restores_nested_parameters():
 
     assert restored == config
     assert import_warnings == []
+
+
+def test_financial_assumptions_round_trip_and_legacy_default():
+    assumptions = FinancialAssumptions(
+        investment_return_means={
+            "stock": 6, "real_estate": 3, "bonds": 2, "safe": 1,
+        },
+        investment_return_std_devs={
+            "stock": 15, "real_estate": 6, "bonds": 4, "safe": 0.5,
+        },
+        stock_dividend_rate=0.03,
+        contribution_fee=12,
+        income_tax_rates={
+            "salary": 25, "rent": 10, "dividend": 15, "royalty": 12,
+            "freelance": 28, "pension": 5, "other": 8,
+        },
+    )
+    config = SimulationConfig(
+        years=1, investments=[], incomes=[], expenses=[], loans=[], assumptions=assumptions,
+    )
+    document = json.loads(create_simulation_export(config, *run_simulation(config)))
+
+    assert read_simulation_export(json.dumps(document)).assumptions == assumptions
+
+    document["parameters"].pop("assumptions")
+    assert read_simulation_export(json.dumps(document)).assumptions == FinancialAssumptions()
+
+
+@pytest.mark.parametrize(
+    "changes, message",
+    [
+        ({"stock_dividend_rate": float("nan")}, "stock dividend rate"),
+        ({"contribution_fee": -1}, "contribution fee"),
+        ({"income_tax_rates": {"salary": 20}}, "income tax rates"),
+    ],
+)
+def test_financial_assumptions_reject_invalid_values(changes, message):
+    with pytest.raises(ValueError, match=message):
+        FinancialAssumptions(**changes)
+
+
+def _controlled_assumptions(**changes):
+    values = asdict(FinancialAssumptions())
+    values["investment_return_means"] = dict.fromkeys(values["investment_return_means"], 0)
+    values["investment_return_std_devs"] = dict.fromkeys(
+        values["investment_return_std_devs"], 0
+    )
+    values.update(changes)
+    return FinancialAssumptions(**values)
+
+
+def test_return_assumption_changes_only_investment_outputs():
+    base = SimulationConfig(
+        years=1, initial_cash=0, yearly_fee=0, incomes=[], expenses=[], loans=[],
+        investments=[InvestmentConfig("Stocks", "stock", 1000, 0)],
+        assumptions=_controlled_assumptions(stock_dividend_rate=0),
+    )
+    changed_values = asdict(base.assumptions)
+    changed_values["investment_return_means"]["stock"] = 12
+    changed = replace(base, assumptions=FinancialAssumptions(**changed_values))
+
+    base_result = run_simulation(base)
+    changed_result = run_simulation(changed)
+
+    assert base_result[2]["bank_account"] == changed_result[2]["bank_account"]
+    assert base_result[2]["investment_values"] != changed_result[2]["investment_values"]
+
+
+def test_dividend_fee_and_tax_assumptions_change_their_expected_flows():
+    dividend_base = SimulationConfig(
+        years=1, initial_cash=0, yearly_fee=0, incomes=[], expenses=[], loans=[],
+        investments=[InvestmentConfig("Stocks", "stock", 1000, 0)],
+        assumptions=_controlled_assumptions(stock_dividend_rate=0),
+    )
+    dividend_changed = replace(
+        dividend_base,
+        assumptions=_controlled_assumptions(stock_dividend_rate=0.12),
+    )
+    assert run_simulation(dividend_base)[2]["investment_values"] == run_simulation(
+        dividend_changed
+    )[2]["investment_values"]
+    assert run_simulation(dividend_base)[2]["bank_account"][-1] == 0
+    assert run_simulation(dividend_changed)[2]["bank_account"][-1] == 120
+
+    fee_base = replace(
+        dividend_base, initial_cash=5000,
+        investments=[InvestmentConfig("Stocks", "stock", 0, 100)],
+        assumptions=_controlled_assumptions(contribution_fee=0, stock_dividend_rate=0),
+    )
+    fee_changed = replace(
+        fee_base,
+        assumptions=_controlled_assumptions(contribution_fee=50, stock_dividend_rate=0),
+    )
+    assert run_simulation(fee_base)[2]["bank_account"] == run_simulation(
+        fee_changed
+    )[2]["bank_account"]
+    assert run_simulation(fee_base)[2]["investment_values"]["Stocks"][-1] == 1200
+    assert run_simulation(fee_changed)[2]["investment_values"]["Stocks"][-1] == 600
+
+    zero_taxes = dict.fromkeys(FinancialAssumptions().income_tax_rates, 0)
+    half_salary_tax = {**zero_taxes, "salary": 50}
+    income_base = SimulationConfig(
+        years=1, initial_cash=0, yearly_fee=0, investments=[], expenses=[], loans=[],
+        incomes=[IncomeConfig("Salary", "salary", 1000)],
+        assumptions=_controlled_assumptions(income_tax_rates=zero_taxes),
+    )
+    income_changed = replace(
+        income_base,
+        assumptions=_controlled_assumptions(income_tax_rates=half_salary_tax),
+    )
+    assert run_simulation(income_base)[2]["income_rates"] == run_simulation(
+        income_changed
+    )[2]["income_rates"]
+    assert run_simulation(income_base)[2]["income_values"]["Salary"][0] == 1000
+    assert run_simulation(income_changed)[2]["income_values"]["Salary"][0] == 500
 
 
 @pytest.mark.parametrize("document, message", [
