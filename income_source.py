@@ -2,7 +2,7 @@ import random
 from financial_assumptions import DEFAULT_INCOME_TAX_RATES
 class IncomeSource:
     def __init__(self, name, income_type, monthly_income,
-                 specific_taxation=None, bonus_pct = None, income_taxation=None):
+                 specific_taxation=None, bonus_pct = None):
         self.name = name
         self.income_type = income_type
         self.monthly_income = monthly_income
@@ -30,8 +30,6 @@ class IncomeSource:
         # Define taxation percentages for different income types
         # Assuming these are average values and can be adjusted
         self.income_taxation = dict(DEFAULT_INCOME_TAX_RATES)
-        if income_taxation is not None:
-            self.income_taxation = dict(income_taxation)
 
         # Add a dictionary to define chances of having no or partial income for freelancers
         # - 'none' indicates no income for the month

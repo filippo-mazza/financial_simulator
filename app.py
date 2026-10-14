@@ -6,6 +6,7 @@ can be exercised in unit tests and reused by another front end later.
 
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
+import inspect
 import json
 import random
 from statistics import fmean
@@ -117,14 +118,22 @@ def build_components(config: SimulationConfig):
                                      config.monthly_income, config.tax_rate, config.bonus_pct)]
     else:
         income_specs = config.incomes
-    incomes = [IncomeSource(
-        item.name, item.income_type, item.monthly_amount,
-        specific_taxation=(
-            item.tax_rate if item.tax_rate else config.assumptions.income_tax_rates[item.income_type]
-        ),
-        bonus_pct=item.bonus_pct or None,
-        income_taxation=config.assumptions.income_tax_rates,
-    ) for item in income_specs]
+    incomes = []
+    for item in income_specs:
+        taxation = (
+            item.tax_rate
+            if item.tax_rate else config.assumptions.income_tax_rates[item.income_type]
+        )
+        if not 0 <= taxation <= 100:
+            raise ValueError("Taxation must be between 0 and 100")
+        # Assign after construction so a cached pre-feature IncomeSource accepts
+        # configured zero rates instead of applying its former 5% lower bound.
+        income = IncomeSource(
+            item.name, item.income_type, item.monthly_amount,
+            specific_taxation=None, bonus_pct=item.bonus_pct or None,
+        )
+        income.specific_taxation = taxation
+        incomes.append(income)
 
     if config.investments is None:
         investment_specs = [InvestmentConfig(
@@ -182,7 +191,7 @@ def build_components(config: SimulationConfig):
             item.name, item.investment_type, item.initial_amount,
             0 if item.investment_type == "real_estate" else item.monthly_contribution,
         )
-        try:
+        if "annual_return_mean" in inspect.signature(Investment).parameters:
             investment = Investment(
                 *investment_args,
                 annual_return_mean=(
@@ -194,19 +203,45 @@ def build_components(config: SimulationConfig):
                 dividend_rate=config.assumptions.stock_dividend_rate,
                 contribution_fee=config.assumptions.contribution_fee,
             )
-        except TypeError as error:
-            # Streamlit can retain the pre-feature class through a hot reload.
-            if "unexpected keyword argument" not in str(error):
-                raise
-            investment = Investment(*investment_args)
-            investment.annual_return_mean = (
-                config.assumptions.investment_return_means[item.investment_type]
+        else:
+            # A Streamlit hot reload can retain the old class. Its methods read
+            # class constants, so configure a per-scenario subclass rather than
+            # assigning ineffective instance attributes.
+            typology_details = {
+                name: dict(details)
+                for name, details in getattr(Investment, "TOPOLOGY_DETAILS", {}).items()
+            }
+            typology_details[item.investment_type] = {
+                "mean": config.assumptions.investment_return_means[item.investment_type],
+                "std_dev": (
+                    config.assumptions.investment_return_std_devs[item.investment_type]
+                ),
+            }
+            configured_type = type(
+                "ConfiguredLegacyInvestment",
+                (Investment,),
+                {
+                    "TOPOLOGY_DETAILS": typology_details,
+                    "DIVIDEND": config.assumptions.stock_dividend_rate,
+                    "CONTRIBUTION_FEE": config.assumptions.contribution_fee,
+                    "_random_annual_gain_percentage": lambda self: max(
+                        -100.0,
+                        random.gauss(
+                            self.TOPOLOGY_DETAILS[self.typology]["mean"],
+                            self.TOPOLOGY_DETAILS[self.typology]["std_dev"],
+                        ),
+                    ),
+                },
             )
-            investment.annual_return_std_dev = (
-                config.assumptions.investment_return_std_devs[item.investment_type]
-            )
-            investment.dividend_rate = config.assumptions.stock_dividend_rate
-            investment.contribution_fee = config.assumptions.contribution_fee
+            investment = configured_type(*investment_args)
+        investment.annual_return_mean = (
+            config.assumptions.investment_return_means[item.investment_type]
+        )
+        investment.annual_return_std_dev = (
+            config.assumptions.investment_return_std_devs[item.investment_type]
+        )
+        investment.dividend_rate = config.assumptions.stock_dividend_rate
+        investment.contribution_fee = config.assumptions.contribution_fee
         # Set policy attributes after construction so a Streamlit hot reload
         # remains compatible with an Investment class cached from older code.
         investment.auto_invest_enabled = item.auto_invest_enabled

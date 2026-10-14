@@ -65,7 +65,12 @@ class Investment:
         """
         Return a Gaussian distributed annual gain percentage based on the typology.
         """
-        return random.gauss(self.annual_return_mean, self.annual_return_std_dev)
+        # A loss below -100% would make the annual factor negative and monthly
+        # fractional compounding complex. Total loss is the lower financial bound.
+        return max(
+            -100.0,
+            random.gauss(self.annual_return_mean, self.annual_return_std_dev),
+        )
 
 
     def step(self):

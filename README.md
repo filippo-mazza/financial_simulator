@@ -145,7 +145,8 @@ preserved.
 | Pension income tax | 10 | percent; 0–100 |
 
 Investment returns are independent annual Gaussian draws that are compounded
-monthly; volatility is a standard deviation, not a guaranteed range. Stock
+monthly; volatility is a standard deviation, not a guaranteed range. Draws below
+−100% are floored at −100% so an investment cannot lose more than its value. Stock
 dividends are paid quarterly using the configured annual yield. The contribution
 fee is capped at the gross contribution and applies to stock, bond, and safe
 investments. A nonzero custom tax on an individual income source overrides its

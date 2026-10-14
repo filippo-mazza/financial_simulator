@@ -11,6 +11,7 @@ from app import (_consume_run_request, _whole_amount, DependentConfig, ExpenseCo
                  build_components, build_simulation_events, create_simulation_export,
                  get_month_details, read_simulation_export, run_simulation,
                  run_simulations)
+from investment import Investment
 
 
 def test_build_components_exposes_all_model_options():
@@ -33,13 +34,20 @@ def test_build_components_supports_pre_feature_investment_class(monkeypatch):
             self.monthly_contribution = monthly_contribution
 
     monkeypatch.setattr("app.Investment", LegacyInvestment)
+    assumptions = _controlled_assumptions(
+        investment_return_means={
+            "stock": 12, "real_estate": 0, "bonds": 0, "safe": 0,
+        },
+        stock_dividend_rate=0.04,
+        contribution_fee=7,
+    )
     config = SimulationConfig(
         investments=[InvestmentConfig(
             "Stocks", "stock", 1000, 0,
             auto_invest_enabled=True, auto_invest_min_cash=15000,
             auto_invest_percentage=5, auto_invest_max_per_year=2,
         )],
-        incomes=[], expenses=[], loans=[],
+        incomes=[], expenses=[], loans=[], assumptions=assumptions,
     )
 
     _, investments, _, _, _ = build_components(config)
@@ -48,6 +56,40 @@ def test_build_components_supports_pre_feature_investment_class(monkeypatch):
     assert investments[0].auto_invest_min_cash == 15000
     assert investments[0].auto_invest_percentage == 5
     assert investments[0].auto_invest_max_per_year == 2
+    assert type(investments[0]).TOPOLOGY_DETAILS["stock"] == {
+        "mean": 12, "std_dev": 0,
+    }
+    assert type(investments[0]).DIVIDEND == 0.04
+    assert type(investments[0]).CONTRIBUTION_FEE == 7
+
+
+def test_build_components_supports_cached_income_source_constructor(monkeypatch):
+    class LegacyIncomeSource:
+        def __init__(self, name, income_type, monthly_income,
+                     specific_taxation=None, bonus_pct=None):
+            self.specific_taxation = specific_taxation
+
+    monkeypatch.setattr("app.IncomeSource", LegacyIncomeSource)
+    assumptions = _controlled_assumptions(income_tax_rates={
+        **FinancialAssumptions().income_tax_rates, "salary": 0,
+    })
+
+    _, _, _, incomes, _ = build_components(SimulationConfig(
+        investments=[], incomes=[IncomeConfig("Salary", "salary", 1000)],
+        expenses=[], loans=[], assumptions=assumptions,
+    ))
+
+    assert incomes[0].specific_taxation == 0
+
+
+def test_extreme_negative_return_is_clamped_to_total_loss(monkeypatch):
+    monkeypatch.setattr("investment.random.gauss", lambda *_args: -150)
+
+    investment = Investment("Volatile", "stock", 1000, 0)
+
+    assert investment.compounded_annual_gain == 0
+    investment.step()
+    assert investment.current_value == 0
 
 
 def test_major_ui_amounts_discard_cents():
