@@ -21,10 +21,11 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_TECH_REVIEW_AGENT_ID: ${{ vars.OPENAI_TECH_REVIEW_AGENT_ID }}
       OPENAI_MCP_VAULT_ID: ${{ vars.OPENAI_MCP_VAULT_ID }}
+      OPENAI_GITHUB_MCP_SERVER_LABEL: ${{ vars.OPENAI_GITHUB_MCP_SERVER_LABEL }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Create and start a fresh review session
-        # A hosted environment is needed when the saved MCP connects from its session runtime.
-        # The runner also verifies the saved MCP tool uses the attached vault and actually succeeds.
+        # Vault authentication requires the saved GitHub MCP to connect from the OpenAI service.
+        # The runner verifies that exact tool uses the attached vault and actually succeeds.
         run: python scripts/run_technical_review.py

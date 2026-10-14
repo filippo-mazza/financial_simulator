@@ -7,6 +7,7 @@ from scripts.run_technical_review import AgentsClient, ReviewError, run
 
 AGENT_ID = "agent_Test123"
 VAULT_ID = "vault_Test456"
+GITHUB_LABEL = "github"
 
 
 class FakeResponse(io.BytesIO):
@@ -43,8 +44,9 @@ def agent(tools=None):
             {"type": "web_search"},
             {
                 "type": "mcp",
-                "server_label": "github",
+                "server_label": GITHUB_LABEL,
                 "credential_id": "cred_GitHub789",
+                "connection_origin": "service",
             },
         ],
     }
@@ -96,7 +98,7 @@ class TechnicalReviewDispatchTest(unittest.TestCase):
                 ),
             ]
         )
-        run(AgentsClient("sk-test", opener), AGENT_ID, VAULT_ID)
+        run(AgentsClient("sk-test", opener), AGENT_ID, VAULT_ID, GITHUB_LABEL)
 
         create_request = opener.requests[2][0]
         payload = json.loads(create_request.data)
@@ -104,7 +106,7 @@ class TechnicalReviewDispatchTest(unittest.TestCase):
             payload,
             {
                 "agent_id": AGENT_ID,
-                "environment": {"type": "openai_hosted"},
+                "environment": {"type": "none"},
                 "input": "Start.",
                 "stream": True,
                 "vault_ids": [VAULT_ID],
@@ -113,8 +115,8 @@ class TechnicalReviewDispatchTest(unittest.TestCase):
 
     def test_stops_before_paid_session_when_saved_agent_does_not_use_vault(self):
         opener = FakeOpener([agent([{"type": "web_search"}]), credentials()])
-        with self.assertRaisesRegex(ReviewError, "no MCP tool backed"):
-            run(AgentsClient("sk-test", opener), AGENT_ID, VAULT_ID)
+        with self.assertRaisesRegex(ReviewError, "exactly one MCP tool matching"):
+            run(AgentsClient("sk-test", opener), AGENT_ID, VAULT_ID, GITHUB_LABEL)
         self.assertEqual(len(opener.requests), 2)
 
     def test_paginates_vault_credentials_before_preflight_decision(self):
@@ -141,13 +143,13 @@ class TechnicalReviewDispatchTest(unittest.TestCase):
                 ),
             ]
         )
-        run(AgentsClient("sk-test", opener), AGENT_ID, VAULT_ID)
+        run(AgentsClient("sk-test", opener), AGENT_ID, VAULT_ID, GITHUB_LABEL)
         self.assertIn("after=cred_Other123", opener.requests[2][0].full_url)
 
     def test_completed_turn_without_matching_mcp_is_failure(self):
         opener = FakeOpener([agent(), credentials(), completed_events()])
         with self.assertRaisesRegex(ReviewError, "without successful GitHub MCP access"):
-            run(AgentsClient("sk-test", opener), AGENT_ID, VAULT_ID)
+            run(AgentsClient("sk-test", opener), AGENT_ID, VAULT_ID, GITHUB_LABEL)
 
     def test_failed_matching_mcp_is_failure(self):
         opener = FakeOpener(
@@ -168,7 +170,46 @@ class TechnicalReviewDispatchTest(unittest.TestCase):
             ]
         )
         with self.assertRaisesRegex(ReviewError, r"\(failed\)"):
-            run(AgentsClient("sk-test", opener), AGENT_ID, VAULT_ID)
+            run(AgentsClient("sk-test", opener), AGENT_ID, VAULT_ID, GITHUB_LABEL)
+
+    def test_stops_before_paid_session_for_environment_origin_mcp(self):
+        tools = agent()["tools"]
+        tools[1]["connection_origin"] = "environment"
+        opener = FakeOpener([agent(tools), credentials()])
+
+        with self.assertRaisesRegex(ReviewError, "cannot use vault credentials"):
+            run(AgentsClient("sk-test", opener), AGENT_ID, VAULT_ID, GITHUB_LABEL)
+        self.assertEqual(len(opener.requests), 2)
+
+    def test_unrelated_mcp_does_not_satisfy_github_check(self):
+        tools = agent()["tools"] + [
+            {
+                "type": "mcp",
+                "server_label": "unrelated",
+                "credential_id": "cred_GitHub789",
+                "connection_origin": "service",
+            }
+        ]
+        opener = FakeOpener(
+            [
+                agent(tools),
+                credentials(),
+                completed_events(
+                    [
+                        {
+                            "id": "item_1",
+                            "type": "mcp_call",
+                            "server_label": "unrelated",
+                            "status": "completed",
+                            "error": None,
+                        }
+                    ]
+                ),
+            ]
+        )
+
+        with self.assertRaisesRegex(ReviewError, "without successful GitHub MCP access"):
+            run(AgentsClient("sk-test", opener), AGENT_ID, VAULT_ID, GITHUB_LABEL)
 
 
 if __name__ == "__main__":

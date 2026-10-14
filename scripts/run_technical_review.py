@@ -129,35 +129,44 @@ def _vault_credential_ids(client: AgentsClient, vault_id: str) -> set[str]:
             raise ReviewError("Vault credential pagination omitted last_id")
 
 
-def _configured_mcp_labels(
-    client: AgentsClient, agent_id: str, vault_id: str
-) -> set[str]:
+def _configured_github_mcp(
+    client: AgentsClient, agent_id: str, vault_id: str, server_label: str
+) -> str:
     agent = client.get(f"/agents/{urllib.parse.quote(agent_id, safe='')}")
     credential_ids = _vault_credential_ids(client, vault_id)
-    labels = {
-        tool["server_label"]
+    tools = [
+        tool
         for tool in agent.get("tools", [])
-        if tool.get("type") == "mcp"
-        and tool.get("credential_id") in credential_ids
-        and isinstance(tool.get("server_label"), str)
-    }
-    if not labels:
+        if tool.get("type") == "mcp" and tool.get("server_label") == server_label
+    ]
+    if len(tools) != 1:
         raise ReviewError(
-            "The saved agent exposes no MCP tool backed by OPENAI_MCP_VAULT_ID; "
-            "the UI-only connection is not part of the saved Agents API configuration"
+            "The saved agent must expose exactly one MCP tool matching "
+            "OPENAI_GITHUB_MCP_SERVER_LABEL"
         )
-    return labels
+    tool = tools[0]
+    if tool.get("connection_origin", "service") != "service":
+        raise ReviewError(
+            "The saved GitHub MCP must use connection_origin 'service'; "
+            "environment-origin HTTP MCPs cannot use vault credentials"
+        )
+    if tool.get("credential_id") not in credential_ids:
+        raise ReviewError(
+            "The saved GitHub MCP is not backed by OPENAI_MCP_VAULT_ID; "
+            "the UI-only connection may not be part of the saved Agents API configuration"
+        )
+    return server_label
 
 
-def run(client: AgentsClient, agent_id: str, vault_id: str) -> None:
-    expected_labels = _configured_mcp_labels(client, agent_id, vault_id)
+def run(client: AgentsClient, agent_id: str, vault_id: str, server_label: str) -> None:
+    expected_label = _configured_github_mcp(client, agent_id, vault_id, server_label)
     calls: dict[str, dict[str, Any]] = {}
     terminal: dict[str, Any] | None = None
 
-    # A saved agent inherits its agent.tools, while the environment is session-specific.
+    # Vault-backed HTTP MCP authentication applies only to service-origin connections.
     payload = {
         "agent_id": agent_id,
-        "environment": {"type": "openai_hosted"},
+        "environment": {"type": "none"},
         "input": "Start.",
         "stream": True,
         "vault_ids": [vault_id],
@@ -179,7 +188,7 @@ def run(client: AgentsClient, agent_id: str, vault_id: str) -> None:
     if terminal.get("type") != "agent.session.turn.completed":
         raise ReviewError(f"Agent root turn ended as {terminal.get('type')}")
 
-    matching = [item for item in calls.values() if item.get("server_label") in expected_labels]
+    matching = [item for item in calls.values() if item.get("server_label") == expected_label]
     successful = [
         item
         for item in matching
@@ -201,7 +210,10 @@ def main() -> int:
             raise ReviewError("OPENAI_API_KEY is missing")
         agent_id = _required_env("OPENAI_TECH_REVIEW_AGENT_ID", "agent_")
         vault_id = _required_env("OPENAI_MCP_VAULT_ID", "vault_")
-        run(AgentsClient(api_key), agent_id, vault_id)
+        server_label = os.environ.get("OPENAI_GITHUB_MCP_SERVER_LABEL", "")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", server_label):
+            raise ReviewError("OPENAI_GITHUB_MCP_SERVER_LABEL is missing or malformed")
+        run(AgentsClient(api_key), agent_id, vault_id, server_label)
     except ReviewError as error:
         # Messages are constructed from fixed text or selected API validation fields only.
         print(f"Technical Review failed: {error}", file=sys.stderr)
