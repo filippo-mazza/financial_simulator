@@ -33,6 +33,6 @@ Include `Authorization: Bearer $OPENAI_API_KEY` and `OpenAI-Beta: agents=v1` on 
 
 No repository or issue context is sent to OpenAI. The saved agent must therefore discover the labeled issue through its existing instructions and GitHub access. A manual run is likewise not associated with a particular issue. If the deployed agent cannot discover the target this way, the workflow cannot reliably select the triggering issue without relaxing that constraint.
 
-Concurrency groups suppress overlapping runs for the same issue, and overlapping manual runs cancel the older run. They cannot prevent a second execution after an earlier run has already completed and the label is applied again.
+All Technical Review runs share one concurrency group and `cancel-in-progress` is disabled. This is necessary because any newly added issue label creates a workflow run before the job-level `needs-tech-review` condition is evaluated. When the agent adds its completion label, that no-op run is queued instead of cancelling the paid review already in progress. Global serialization also avoids concurrent agents competing to discover a target when no issue identifier is supplied to OpenAI. This does not prevent a second execution after an earlier run has completed and `needs-tech-review` is applied again.
 
 The API request follows OpenAI's [Agents API session guidance](https://developers.openai.com/api/docs/guides/agents-api/sessions). Do not test it by dispatching the workflow unless a paid agent execution is intended.

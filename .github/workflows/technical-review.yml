@@ -9,8 +9,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: technical-review-${{ github.event.issue.id || 'manual' }}
-  cancel-in-progress: true
+  # The agent can add labels while it works, which creates another labeled-event
+  # run before the job-level filter is evaluated. Queue it instead of cancelling
+  # the paid review that is already in progress.
+  group: technical-review
+  cancel-in-progress: false
 
 jobs:
   trigger:
