@@ -120,6 +120,11 @@ compute_net_worth_over_time() processes each simulated month in this order:
   7. Store ending detailed balances and flows after all monthly transactions.
   8. Calculate net worth = cash + investments - remaining loan balances.
 
+tests/test_accounting_invariants.py reconciles every monthly cash delta,
+investment transfer/fee movement, and liability balance using deterministic
+fixtures. It also compares complete outputs from equivalent real-model scenarios
+with a fixed seed. Preserve these invariants and the documented transaction order.
+
 Withdrawals for expenses, loans, and automatic stock contributions use the
 cash account. An unaffordable required expense/loan raises
 InsufficientFundsException with the month, obligation, and available cash.

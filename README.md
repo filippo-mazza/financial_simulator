@@ -161,6 +161,28 @@ income growth, salary promotion/raise probabilities, expense inflation,
 freelance variability, and the automatic cash-sweep guard—remain fixed and are
 not part of this assumptions section.
 
+### Accounting and reproducibility conventions
+
+Each monthly snapshot is taken after income, expenses, loan payments, investment
+growth and dividends, regular investment contributions, the year-end bank fee
+(in months 12, 24, …), and automatic cash-sweep contributions. The tested
+balance-sheet invariant is:
+
+`ending net worth = ending cash + ending investments − ending loan balances`
+
+Investment contributions are transfers rather than expenses: cash decreases by
+the gross transfer while the investment increases by the gross amount less its
+fee. Automatic contribution amounts and fees are reported separately. Income and
+expense categories are monthly flows, not additional balance-sheet assets or
+liabilities, so they are not added to net worth after they have affected cash.
+
+A fixed seed and equivalent inputs produce identical complete simulation output,
+including stochastic investment, freelance-income, and unexpected-expense paths.
+Changing the seed, assumptions, transaction order, Python random implementation,
+or model version may change the path. Reproducibility is a software property of
+the configured illustrative model, not evidence that real financial outcomes are
+predictable.
+
 The dashboard combines the average summary metrics with an interactive
 Vega-Lite chart. Its explicit color legends distinguish average net worth,
 cash, investments, and event types. Hover for exact monthly values, or pan and
