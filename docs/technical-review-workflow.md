@@ -46,7 +46,7 @@ Immediately before creating an OpenAI session, the runner atomically reserves an
 The global concurrency group serializes eligible workflows. The state update also uses the GitHub Contents API's current blob SHA as a compare-and-swap token, so a stale concurrent update conflicts instead of exceeding the limit. Branch or state creation races are handled the same way. State is validated before every reservation and all read, parse, authorization, conflict-exhaustion, or write failures stop before the paid session request.
 
 - At most 10 paid invocation attempts are reserved per UTC day.
-- Paid invocation starts must be at least five minutes apart.
+- Paid invocation starts must be at least five minutes apart, including across a UTC-day boundary; only the daily count resets at midnight.
 - Reservations occur after the saved-agent/vault preflight and immediately before `POST /v1/agents/sessions`.
 - A reservation counts even if session creation or execution later fails, preventing retries from bypassing the cap.
 - A cooldown or daily-cap rejection exits successfully without calling the session endpoint. The issue keeps `needs-tech-review`; remove and reapply it later, or use an owner-authorized manual dispatch.

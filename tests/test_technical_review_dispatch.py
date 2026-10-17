@@ -271,6 +271,26 @@ class TechnicalReviewQuotaTest(unittest.TestCase):
         self.assertEqual(store.state["utc_day"], "2026-10-17")
         self.assertEqual(store.state["starts"], ["2026-10-17T00:00:00Z"])
 
+    def test_cooldown_is_preserved_across_utc_midnight(self):
+        store = MemoryStateStore({
+            "version": 1,
+            "utc_day": "2026-10-16",
+            "starts": ["2026-10-16T23:59:00Z"],
+        })
+
+        blocked = InvocationLimiter(
+            store,
+            clock=lambda: datetime(2026, 10, 17, 0, 0, tzinfo=timezone.utc),
+        ).reserve()
+        allowed = InvocationLimiter(
+            store,
+            clock=lambda: datetime(2026, 10, 17, 0, 4, tzinfo=timezone.utc),
+        ).reserve()
+
+        self.assertFalse(blocked.allowed)
+        self.assertTrue(allowed.allowed)
+        self.assertEqual(store.state["starts"], ["2026-10-17T00:04:00Z"])
+
     def test_malformed_state_fails_closed(self):
         store = MemoryStateStore({"version": 1, "utc_day": "2026-10-17", "starts": "bad"})
         now = datetime(2026, 10, 17, tzinfo=timezone.utc)

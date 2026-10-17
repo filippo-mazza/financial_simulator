@@ -71,8 +71,6 @@ def _parse_state(raw: dict[str, Any] | None, now: datetime) -> list[datetime]:
         raise QuotaError("Technical Review quota state is malformed")
     if state_day > now.date():
         raise QuotaError("Technical Review quota state is malformed")
-    if state_day != now.date():
-        return []
     return parsed
 
 
@@ -104,7 +102,8 @@ class InvocationLimiter:
             except Exception as error:
                 raise QuotaError("Technical Review quota state is unavailable") from error
 
-            if len(starts) >= DAILY_LIMIT:
+            daily_starts = [value for value in starts if value.date() == now.date()]
+            if len(daily_starts) >= DAILY_LIMIT:
                 return Reservation(False, "daily limit of 10 paid invocations reached")
             if starts and (now - starts[-1]).total_seconds() < MINIMUM_INTERVAL_SECONDS:
                 return Reservation(False, "five-minute paid-invocation cooldown is active")
@@ -112,7 +111,7 @@ class InvocationLimiter:
             state = {
                 "version": 1,
                 "utc_day": now.date().isoformat(),
-                "starts": [_utc_timestamp(value) for value in starts] + [_utc_timestamp(now)],
+                "starts": [_utc_timestamp(value) for value in daily_starts] + [_utc_timestamp(now)],
             }
             try:
                 if self.store.compare_and_swap(revision, state):
