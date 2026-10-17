@@ -44,6 +44,39 @@ def load_report(path):
     return report
 
 
+def parse_review_comment(body):
+    """Extract the explicit human-readable commit and verdict lines."""
+    verdicts, commits = [], []
+    for line in body.splitlines():
+        # Formatting may wrap headings and values, but prose elsewhere must not
+        # be interpreted as a decision.
+        plain = line.strip()
+        plain = re.sub(r"^(?:>\s*)?(?:(?:[-+]\s+)|(?:#{1,6}\s+))?", "", plain)
+        plain = plain.translate(str.maketrans("", "", "*_`~")).strip()
+        verdict_match = re.fullmatch(r"Verdict\s*:\s*(.*?)\s*", plain, re.IGNORECASE)
+        if verdict_match:
+            verdict = re.sub(r"\s+", " ", verdict_match.group(1)).upper()
+            if verdict not in VERDICTS:
+                raise ReviewError(f"Financial Review posted unsupported verdict: {verdict}")
+            verdicts.append(verdict)
+            continue
+        commit_match = re.fullmatch(
+            r"Reviewed commit\s*:\s*([0-9a-f]{40})\s*", plain, re.IGNORECASE,
+        )
+        if commit_match:
+            commits.append(commit_match.group(1).lower())
+
+    if not verdicts:
+        raise ReviewError("Financial Review comment is missing a Verdict line")
+    if len(set(verdicts)) != 1:
+        raise ReviewError("Financial Review comment has conflicting Verdict lines")
+    if not commits:
+        raise ReviewError("Financial Review comment is missing a valid Reviewed commit line")
+    if len(set(commits)) != 1:
+        raise ReviewError("Financial Review comment has conflicting Reviewed commit lines")
+    return commits[0], verdicts[0]
+
+
 class GitHubPRClient:
     def __init__(self, token, repository, opener=urllib.request.urlopen):
         self.token, self.repository, self.opener = token, repository, opener
@@ -75,8 +108,14 @@ class GitHubPRClient:
         owner = self.repository.split("/", 1)[0]
         for item in self._comments(number):
             body = item.get("body", "")
-            if (item.get("id") not in old_ids and item.get("user", {}).get("login") == owner
-                    and head_sha in body and any(v in body for v in VERDICTS)):
+            if (item.get("id") in old_ids
+                    or item.get("user", {}).get("login") != owner):
+                continue
+            try:
+                reviewed_commit, _verdict = parse_review_comment(body)
+            except ReviewError:
+                continue
+            if reviewed_commit == head_sha.lower():
                 return True
         return False
 
@@ -110,7 +149,13 @@ def run(client, github, limiter, agent_id, vault_id, server_label, number, head_
         old_comments = github.comment_ids(number)
         payload = {"agent_id": agent_id, "environment": {"type": "none"}, "stream": True,
                    "vault_ids": [vault_id], "input": json.dumps({"trigger": "financial_review",
-                   "pull_request_number": number, "head_sha": head_sha, "offline_validation": report},
+                   "pull_request_number": number, "head_sha": head_sha,
+                   "comment_requirements": (
+                       "Post a human-readable review comment with separate lines "
+                       f"'Reviewed commit: {head_sha}' and 'Verdict: <decision>'. "
+                       "The decision must be PASS, PASS WITH WARNINGS, CHANGES REQUESTED, "
+                       "or UNABLE TO REVIEW."
+                   ), "offline_validation": report},
                    sort_keys=True, separators=(",", ":"))}
         calls, terminal = {}, None
         for event in client.stream_session(payload):
@@ -125,7 +170,7 @@ def run(client, github, limiter, agent_id, vault_id, server_label, number, head_
                    and v.get("error") in (None, {}) for v in calls.values()):
             raise ReviewError("Financial Review completed without successful GitHub MCP access")
         if not github.find_verdict(number, old_comments, head_sha):
-            raise ReviewError("Financial Review did not post a PR-specific structured verdict")
+            raise ReviewError("Financial Review did not post a valid PR-specific verdict")
         github.assert_eligible_head(number, head_sha)
         github.finish_labels(number)
         try:
