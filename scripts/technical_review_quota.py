@@ -133,6 +133,9 @@ class GitHubStateStore:
         repository: str,
         initial_sha: str,
         opener: Any = urllib.request.urlopen,
+        state_branch: str = STATE_BRANCH,
+        state_path: str = STATE_PATH,
+        commit_message: str = "Reserve Technical Review invocation",
     ) -> None:
         if not token or repository.count("/") != 1 or not initial_sha:
             raise QuotaError("GitHub quota state configuration is missing or malformed")
@@ -140,6 +143,9 @@ class GitHubStateStore:
         self.repository = repository
         self.initial_sha = initial_sha
         self.opener = opener
+        self.state_branch = state_branch
+        self.state_path = state_path
+        self.commit_message = commit_message
         self._branch_ready = False
 
     def _request(
@@ -169,11 +175,11 @@ class GitHubStateStore:
     def _ensure_branch(self) -> None:
         if self._branch_ready:
             return
-        branch = urllib.parse.quote(STATE_BRANCH, safe="")
+        branch = urllib.parse.quote(self.state_branch, safe="")
         status, _body = self._request("GET", f"/git/ref/heads/{branch}")
         if status == 404:
             status, _body = self._request(
-                "POST", "/git/refs", {"ref": f"refs/heads/{STATE_BRANCH}", "sha": self.initial_sha}
+                "POST", "/git/refs", {"ref": f"refs/heads/{self.state_branch}", "sha": self.initial_sha}
             )
             if status == 422:  # Another serialized/retried job may have created it.
                 status, _body = self._request("GET", f"/git/ref/heads/{branch}")
@@ -183,8 +189,8 @@ class GitHubStateStore:
 
     def read(self) -> tuple[dict[str, Any] | None, str | None]:
         self._ensure_branch()
-        path = urllib.parse.quote(STATE_PATH, safe="/")
-        branch = urllib.parse.quote(STATE_BRANCH, safe="")
+        path = urllib.parse.quote(self.state_path, safe="/")
+        branch = urllib.parse.quote(self.state_branch, safe="")
         status, body = self._request("GET", f"/contents/{path}?ref={branch}")
         if status == 404:
             return None, None
@@ -206,15 +212,15 @@ class GitHubStateStore:
     ) -> bool:
         self._ensure_branch()
         payload: dict[str, Any] = {
-            "message": "Reserve Technical Review invocation",
+            "message": self.commit_message,
             "content": base64.b64encode(
                 (json.dumps(state, sort_keys=True, indent=2) + "\n").encode()
             ).decode(),
-            "branch": STATE_BRANCH,
+            "branch": self.state_branch,
         }
         if expected_revision is not None:
             payload["sha"] = expected_revision
-        path = urllib.parse.quote(STATE_PATH, safe="/")
+        path = urllib.parse.quote(self.state_path, safe="/")
         status, _body = self._request("PUT", f"/contents/{path}", payload)
         if status in (409, 422):
             return False
