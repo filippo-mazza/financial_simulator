@@ -2,6 +2,7 @@
 """Invoke the saved Financial Review Agent for one validated PR head."""
 
 import json
+import math
 import os
 import re
 import sys
@@ -18,6 +19,29 @@ except ModuleNotFoundError:
     from financial_review_state import FinancialReviewLimiter
 
 VERDICTS = ("PASS", "PASS WITH WARNINGS", "CHANGES REQUESTED", "UNABLE TO REVIEW")
+MAX_REPORT_BYTES = 64 * 1024
+
+
+def load_report(path):
+    if os.path.getsize(path) > MAX_REPORT_BYTES:
+        raise ReviewError("Financial validation report exceeds the size limit")
+    report = json.loads(open(path, encoding="utf-8").read())
+    if (not isinstance(report, dict) or set(report) != {"schema_version", "status", "checks", "limitations"}
+            or report["schema_version"] != 1 or report["status"] not in ("PASS", "FAIL")
+            or not isinstance(report["checks"], list) or not 1 <= len(report["checks"]) <= 50
+            or not isinstance(report["limitations"], list) or len(report["limitations"]) > 20):
+        raise ReviewError("Financial validation report is malformed")
+    for item in report["checks"]:
+        if (not isinstance(item, dict) or item.get("status") not in ("PASS", "FAIL")
+                or not isinstance(item.get("name"), str) or len(item["name"]) > 200):
+            raise ReviewError("Financial validation report is malformed")
+        for key in set(item) - {"name", "status"}:
+            value = item[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ReviewError("Financial validation report is malformed")
+    if any(not isinstance(value, str) or len(value) > 500 for value in report["limitations"]):
+        raise ReviewError("Financial validation report is malformed")
+    return report
 
 
 class GitHubPRClient:
@@ -60,6 +84,20 @@ class GitHubPRClient:
         self.request("POST", f"/issues/{number}/labels", {"labels": ["Financial reviewed"]})
         self.request("DELETE", f"/issues/{number}/labels/needs-financial-review")
 
+    def restore_request_labels(self, number):
+        self.request("POST", f"/issues/{number}/labels", {"labels": ["needs-financial-review"]})
+        try: self.request("DELETE", f"/issues/{number}/labels/Financial%20reviewed")
+        except ReviewError: pass
+
+    def assert_eligible_head(self, number, head_sha):
+        pr = self.request("GET", f"/pulls/{number}")
+        labels = {item.get("name") for item in pr.get("labels", [])}
+        if (pr.get("state") != "open" or pr.get("draft") or pr.get("base", {}).get("ref") != "main"
+                or pr.get("head", {}).get("sha") != head_sha
+                or pr.get("head", {}).get("repo", {}).get("full_name") != self.repository
+                or "needs-financial-review" not in labels):
+            raise ReviewError("PR head or financial-review eligibility changed during review")
+
 
 def run(client, github, limiter, agent_id, vault_id, server_label, number, head_sha, report):
     expected_label = _configured_github_mcp(client, agent_id, vault_id, server_label)
@@ -88,12 +126,19 @@ def run(client, github, limiter, agent_id, vault_id, server_label, number, head_
             raise ReviewError("Financial Review completed without successful GitHub MCP access")
         if not github.find_verdict(number, old_comments, head_sha):
             raise ReviewError("Financial Review did not post a PR-specific structured verdict")
-        limiter.complete(number, head_sha); completed = True
+        github.assert_eligible_head(number, head_sha)
         github.finish_labels(number)
+        try:
+            limiter.complete(number, head_sha); completed = True
+        except QuotaError:
+            github.restore_request_labels(number)
+            raise
         print("Financial Review completed and labeled the reviewed PR head.")
         return True
     finally:
         if not completed:
+            try: github.restore_request_labels(number)
+            except ReviewError: pass
             try: limiter.release(number, head_sha)
             except QuotaError: pass
 
@@ -108,7 +153,7 @@ def main():
         if not re.fullmatch(r"[A-Za-z0-9_-]+", label): raise ReviewError("OPENAI_GITHUB_MCP_SERVER_LABEL is missing or malformed")
         number, head_sha = int(os.environ["PR_NUMBER"]), os.environ["PR_HEAD_SHA"]
         if not re.fullmatch(r"[0-9a-f]{40}", head_sha): raise ReviewError("PR_HEAD_SHA is malformed")
-        report = json.loads(open(os.environ["FINANCIAL_REPORT_PATH"], encoding="utf-8").read())
+        report = load_report(os.environ["FINANCIAL_REPORT_PATH"])
         token, repository = os.environ.get("GITHUB_TOKEN", ""), os.environ.get("GITHUB_REPOSITORY", "")
         store = GitHubStateStore(token, repository, os.environ.get("STATE_INITIAL_SHA", ""),
             state_branch="financial-review-state", state_path=".github/financial-review-state.json",

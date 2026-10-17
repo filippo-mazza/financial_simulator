@@ -1,11 +1,13 @@
 import json
+import os
+import tempfile
 import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 
 from scripts.financial_review_state import FinancialReviewLimiter
 from scripts.financial_validation import build_report
-from scripts.run_financial_review import ReviewError, run
+from scripts.run_financial_review import ReviewError, load_report, run
 from scripts.technical_review_quota import MemoryStateStore, QuotaError
 
 
@@ -86,10 +88,14 @@ class FinancialReviewDispatchTest(unittest.TestCase):
         def stream_session(self, payload): self.payload = payload; return iter(self.events)
 
     class GitHub:
-        def __init__(self, verdict=True): self.verdict, self.labeled = verdict, False
+        def __init__(self, verdict=True):
+            self.verdict, self.labeled, self.restored, self.eligible = verdict, False, False, True
         def comment_ids(self, _number): return {1}
         def find_verdict(self, _number, _old_ids, _sha): return self.verdict
         def finish_labels(self, _number): self.labeled = True
+        def restore_request_labels(self, _number): self.restored = True; self.labeled = False
+        def assert_eligible_head(self, _number, _sha):
+            if not self.eligible: raise ReviewError("eligibility changed")
 
     class Limiter:
         def __init__(self): self.completed = self.released = False
@@ -117,6 +123,25 @@ class FinancialReviewDispatchTest(unittest.TestCase):
         with self.assertRaisesRegex(ReviewError, "structured verdict"):
             run(client, github, limiter, "agent_1", "vault_1", "github", 63, SHA, {"status": "PASS"})
         self.assertFalse(limiter.completed); self.assertTrue(limiter.released); self.assertFalse(github.labeled)
+
+    def test_changed_head_is_not_labeled_and_reservation_is_released(self):
+        client, github, limiter = self.Client(self.events()), self.GitHub(), self.Limiter()
+        github.eligible = False
+        with self.assertRaisesRegex(ReviewError, "eligibility changed"):
+            run(client, github, limiter, "agent_1", "vault_1", "github", 63, SHA, {"status": "PASS"})
+        self.assertTrue(github.restored); self.assertTrue(limiter.released)
+
+    def test_report_schema_and_size_are_enforced(self):
+        with tempfile.NamedTemporaryFile("w", delete=False) as stream:
+            json.dump(build_report(), stream); valid_path = stream.name
+        try:
+            self.assertEqual(load_report(valid_path)["status"], "PASS")
+            with open(valid_path, "w", encoding="utf-8") as stream: json.dump({"status": "PASS"}, stream)
+            with self.assertRaisesRegex(ReviewError, "malformed"): load_report(valid_path)
+            with open(valid_path, "w", encoding="utf-8") as stream: stream.write("x" * (64 * 1024 + 1))
+            with self.assertRaisesRegex(ReviewError, "size limit"): load_report(valid_path)
+        finally:
+            os.unlink(valid_path)
 
 
 if __name__ == "__main__": unittest.main()
