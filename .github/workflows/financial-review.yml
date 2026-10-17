@@ -99,4 +99,5 @@ jobs:
           PR_HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
           STATE_INITIAL_SHA: ${{ needs.validate.outputs.base_sha }}
           FINANCIAL_REPORT_PATH: ${{ runner.temp }}/financial-review-input/financial-review-report.json
-        run: python scripts/run_financial_review.py
+        # Run as a package module so repository-root `scripts.*` imports resolve.
+        run: python -m scripts.run_financial_review

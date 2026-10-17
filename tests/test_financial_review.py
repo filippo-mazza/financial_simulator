@@ -1,5 +1,8 @@
 import json
 import os
+from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -12,6 +15,7 @@ from scripts.technical_review_quota import MemoryStateStore, QuotaError
 
 
 SHA = "a" * 40
+REPOSITORY_ROOT = Path(__file__).parents[1]
 
 
 class FinancialReviewStateTest(unittest.TestCase):
@@ -142,6 +146,20 @@ class FinancialReviewDispatchTest(unittest.TestCase):
             with self.assertRaisesRegex(ReviewError, "size limit"): load_report(valid_path)
         finally:
             os.unlink(valid_path)
+
+    def test_workflow_module_invocation_resolves_package_imports(self):
+        workflow = (REPOSITORY_ROOT / ".github/workflows/financial-review.yml").read_text()
+        self.assertIn("python -m scripts.run_financial_review", workflow)
+        environment = dict(os.environ)
+        environment.pop("OPENAI_API_KEY", None)
+        result = subprocess.run(
+            [sys.executable, "-m", "scripts.run_financial_review"],
+            cwd=REPOSITORY_ROOT, env=environment, text=True,
+            capture_output=True, check=False,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("OPENAI_API_KEY is missing", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
 
 
 if __name__ == "__main__": unittest.main()
