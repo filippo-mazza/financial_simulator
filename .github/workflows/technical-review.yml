@@ -9,10 +9,10 @@ permissions:
   contents: read
 
 concurrency:
-  # The agent can add labels while it works, which creates another labeled-event
-  # run before the job-level filter is evaluated. Queue it instead of cancelling
-  # the paid review that is already in progress.
-  group: technical-review
+  # Keep paid/manual reviews in GitHub's bounded one-running/one-pending group.
+  # Other label events get a unique no-op group so an agent's completion label
+  # cannot replace a real review that is waiting to run.
+  group: ${{ (github.event_name == 'workflow_dispatch' || github.event.label.name == 'needs-tech-review') && 'technical-review' || format('technical-review-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
