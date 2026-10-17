@@ -10,7 +10,9 @@ from datetime import datetime, timedelta, timezone
 
 from scripts.financial_review_state import FinancialReviewLimiter
 from scripts.financial_validation import build_report
-from scripts.run_financial_review import ReviewError, load_report, run
+from scripts.run_financial_review import (
+    GitHubPRClient, ReviewError, load_report, parse_review_comment, run,
+)
 from scripts.technical_review_quota import MemoryStateStore, QuotaError
 
 
@@ -121,10 +123,11 @@ class FinancialReviewDispatchTest(unittest.TestCase):
         self.assertTrue(limiter.completed); self.assertFalse(limiter.released); self.assertTrue(github.labeled)
         submitted = json.loads(client.payload["input"])
         self.assertEqual((submitted["pull_request_number"], submitted["head_sha"]), (63, SHA))
+        self.assertIn(f"Reviewed commit: {SHA}", submitted["comment_requirements"])
 
     def test_missing_pr_verdict_fails_and_releases_without_labels(self):
         client, github, limiter = self.Client(self.events()), self.GitHub(False), self.Limiter()
-        with self.assertRaisesRegex(ReviewError, "structured verdict"):
+        with self.assertRaisesRegex(ReviewError, "valid PR-specific verdict"):
             run(client, github, limiter, "agent_1", "vault_1", "github", 63, SHA, {"status": "PASS"})
         self.assertFalse(limiter.completed); self.assertTrue(limiter.released); self.assertFalse(github.labeled)
 
@@ -160,6 +163,55 @@ class FinancialReviewDispatchTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("OPENAI_API_KEY is missing", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
+
+
+class HumanReadableVerdictTest(unittest.TestCase):
+    def test_accepts_markdown_formatted_review(self):
+        body = f"""## Financial Review
+
+**reviewed COMMIT:** `{SHA}`
+**vErDiCt:** **pass with warnings**
+
+Financial impact: Low
+Summary: Financial calculations remain consistent.
+"""
+        self.assertEqual(parse_review_comment(body), (SHA, "PASS WITH WARNINGS"))
+
+    def test_ignores_verdict_like_prose(self):
+        body = f"""Reviewed commit: {SHA}
+The likely verdict: CHANGES REQUESTED
+Summary: PASS is mentioned here, but is not the decision.
+Verdict: PASS WITH WARNINGS
+"""
+        self.assertEqual(parse_review_comment(body), (SHA, "PASS WITH WARNINGS"))
+
+    def test_rejects_missing_unsupported_and_conflicting_verdicts(self):
+        with self.assertRaisesRegex(ReviewError, "missing a Verdict"):
+            parse_review_comment(f"Reviewed commit: {SHA}\nSummary: PASS")
+        with self.assertRaisesRegex(ReviewError, "unsupported verdict"):
+            parse_review_comment(f"Reviewed commit: {SHA}\nVerdict: APPROVED")
+        with self.assertRaisesRegex(ReviewError, "conflicting Verdict"):
+            parse_review_comment(
+                f"Reviewed commit: {SHA}\nVerdict: PASS\nVerdict: CHANGES REQUESTED"
+            )
+
+    def test_rejects_incorrect_sha_and_stale_comments(self):
+        comments = [
+            {"id": 1, "user": {"login": "filippo-mazza"},
+             "body": f"Reviewed commit: {SHA}\nVerdict: PASS"},
+            {"id": 2, "user": {"login": "filippo-mazza"},
+             "body": f"Reviewed commit: {'b' * 40}\nVerdict: PASS"},
+        ]
+        github = GitHubPRClient("token", "filippo-mazza/financial_simulator")
+        github._comments = lambda _number: comments
+
+        self.assertFalse(github.find_verdict(68, {1}, SHA))
+
+        comments.append({
+            "id": 3, "user": {"login": "filippo-mazza"},
+            "body": f"Reviewed commit: {SHA}\nVerdict: PASS",
+        })
+        self.assertTrue(github.find_verdict(68, {1}, SHA))
 
 
 if __name__ == "__main__": unittest.main()
