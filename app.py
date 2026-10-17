@@ -357,6 +357,31 @@ def _whole_amount(value):
     return int(value)
 
 
+def monte_carlo_view_explanation(view_mode, simulation_count):
+    """Return plain-language guidance for interpreting Monte Carlo views."""
+    if view_mode == "Overview":
+        if simulation_count == 1:
+            return (
+                "**Single-run overview:** with one simulation, the arithmetic average "
+                "is the same as Run 1 and does not hide differences between runs. It is "
+                "still a simulated trajectory, not a guaranteed forecast. Run multiple "
+                "simulations to compare varied outcomes."
+            )
+        return (
+            f"**Arithmetic-average overview:** each month is the average across "
+            f"{simulation_count} simulated runs. This is a summary, not a guaranteed "
+            "or individually realizable household path. Average cash and net worth can "
+            "hide liquidity shortfalls in individual runs. Quantitative downside metrics "
+            "and uncertainty shading are tracked in "
+            "[issue #25](https://github.com/filippo-mazza/financial_simulator/issues/25) "
+            "and [issue #67](https://github.com/filippo-mazza/financial_simulator/issues/67)."
+        )
+    return (
+        "**Individual run:** this is one simulated trajectory rather than an average. "
+        "Switch runs to inspect outcomes, including shortfalls the Overview may hide."
+    )
+
+
 def _consume_run_request(session_state, button_clicked):
     """Combine a manual run click with the one-shot post-import run request."""
     run_after_import = bool(session_state.pop("run_after_import", False))
@@ -1297,8 +1322,12 @@ def main():
     view_mode = st.radio(
         "Result view", ("Overview", "Individual run"), horizontal=True,
         key=f"monte_carlo_view_{run_id}",
-        help="Overview shows the average. Individual run shows one actual simulated path.",
+        help=(
+            "Overview is the month-by-month arithmetic average across all runs. "
+            "Individual run shows one simulated path."
+        ),
     )
+    st.info(monte_carlo_view_explanation(view_mode, int(simulation_count)))
     selected_trajectory = None
     if view_mode == "Individual run":
         selected_run = st.selectbox(
@@ -1317,7 +1346,10 @@ def main():
     else:
         net_worth, repayment_dates, details = average_result
         label_prefix = "Average "
-        chart_title = f"Average projected financial position ({simulation_count} simulations)"
+        chart_title = (
+            "Arithmetic-average projected financial position "
+            f"({simulation_count} simulations)"
+        )
         detail_prefix = "Average"
 
     final_net_worth = net_worth[-1]

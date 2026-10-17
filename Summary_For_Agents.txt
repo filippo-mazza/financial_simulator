@@ -106,8 +106,13 @@ SIMULATION FLOW
 ---------------
 run_simulation(config) builds fresh components and runs one seeded scenario.
 run_simulations(config, count) runs seeds config.seed + 0..count-1 and returns
-the month-by-month arithmetic mean. The seed is intentionally not shown in the
-UI, but remains in SimulationConfig and exports for reproducibility.
+the month-by-month arithmetic mean. run_simulation_batch(config, count) also
+retains every SimulationTrajectory with its effective seed and complete monthly
+details. The Streamlit Monte Carlo section defaults to an Overview of arithmetic
+averages, which is not a guaranteed or individually realizable household path;
+averaged cash/net worth can conceal liquidity shortfalls in individual runs. The
+Individual run view shows one retained path and its seed. Quantitative downside
+metrics and uncertainty shading are intentionally deferred to issues #25 and #67.
 
 compute_net_worth_over_time() processes each simulated month in this order:
   1. Receive each income after tax.
@@ -248,8 +253,8 @@ IMPORTANT INVARIANTS / GOTCHAS
     list order matters when multiple policies are enabled.
   - YearlyExpense is paid in month 12, not divided across months.
   - UI major-money inputs display whole dollars by design.
-  - Multi-run results are averages; wording in metrics/chart/detail should say
-    "Average" where relevant.
+  - Multi-run Overview results are arithmetic averages, not realizable paths;
+    keep the interpretation warning and "Average" wording in metrics/details.
   - Do not remove or replace plots.py merely because the Streamlit chart is
     interactive.
   - This is exploratory software; preserve the financial-advice disclaimer.
