@@ -1,8 +1,13 @@
 import io
 import json
+from datetime import datetime, timedelta, timezone
+import threading
 import unittest
 
 from scripts.run_technical_review import AgentsClient, ReviewError, run
+from scripts.technical_review_quota import (
+    InvocationLimiter, MemoryStateStore, QuotaError,
+)
 
 
 AGENT_ID = "agent_Test123"
@@ -210,6 +215,112 @@ class TechnicalReviewDispatchTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ReviewError, "without successful GitHub MCP access"):
             run(AgentsClient("sk-test", opener), AGENT_ID, VAULT_ID, GITHUB_LABEL)
+
+    def test_skipped_reservation_never_creates_paid_session(self):
+        now = datetime(2026, 10, 17, 12, 0, tzinfo=timezone.utc)
+        store = MemoryStateStore({
+            "version": 1,
+            "utc_day": "2026-10-17",
+            "starts": ["2026-10-17T11:59:00Z"],
+        })
+        opener = FakeOpener([agent(), credentials()])
+
+        started = run(
+            AgentsClient("sk-test", opener), AGENT_ID, VAULT_ID, GITHUB_LABEL,
+            limiter=InvocationLimiter(store, clock=lambda: now),
+        )
+
+        self.assertFalse(started)
+        self.assertEqual(len(opener.requests), 2)
+
+
+class TechnicalReviewQuotaTest(unittest.TestCase):
+    def test_ten_reservations_are_allowed_and_eleventh_is_skipped(self):
+        store = MemoryStateStore()
+        start = datetime(2026, 10, 17, tzinfo=timezone.utc)
+        results = [
+            InvocationLimiter(store, clock=lambda now=start + timedelta(minutes=5 * index): now)
+            .reserve()
+            for index in range(11)
+        ]
+
+        self.assertEqual([result.allowed for result in results], [True] * 10 + [False])
+        self.assertIn("daily limit", results[-1].reason)
+
+    def test_reservation_inside_five_minutes_is_skipped(self):
+        now = datetime(2026, 10, 17, 12, 0, tzinfo=timezone.utc)
+        store = MemoryStateStore()
+        self.assertTrue(InvocationLimiter(store, clock=lambda: now).reserve().allowed)
+
+        result = InvocationLimiter(
+            store, clock=lambda: now + timedelta(minutes=4, seconds=59)
+        ).reserve()
+
+        self.assertFalse(result.allowed)
+        self.assertIn("cooldown", result.reason)
+
+    def test_new_utc_day_resets_quota(self):
+        store = MemoryStateStore({
+            "version": 1,
+            "utc_day": "2026-10-16",
+            "starts": [f"2026-10-16T{hour:02d}:00:00Z" for hour in range(10)],
+        })
+        now = datetime(2026, 10, 17, tzinfo=timezone.utc)
+
+        self.assertTrue(InvocationLimiter(store, clock=lambda: now).reserve().allowed)
+        self.assertEqual(store.state["utc_day"], "2026-10-17")
+        self.assertEqual(store.state["starts"], ["2026-10-17T00:00:00Z"])
+
+    def test_malformed_state_fails_closed(self):
+        store = MemoryStateStore({"version": 1, "utc_day": "2026-10-17", "starts": "bad"})
+        now = datetime(2026, 10, 17, tzinfo=timezone.utc)
+
+        with self.assertRaisesRegex(QuotaError, "malformed"):
+            InvocationLimiter(store, clock=lambda: now).reserve()
+
+    def test_malformed_previous_day_state_also_fails_closed(self):
+        store = MemoryStateStore({
+            "version": 1, "utc_day": "2026-10-16", "starts": ["not-a-timestamp"]
+        })
+        now = datetime(2026, 10, 17, tzinfo=timezone.utc)
+
+        with self.assertRaisesRegex(QuotaError, "malformed"):
+            InvocationLimiter(store, clock=lambda: now).reserve()
+
+    def test_unavailable_state_fails_closed(self):
+        class FailingStore:
+            def read(self):
+                raise OSError("offline")
+
+            def compare_and_swap(self, _revision, _state):
+                raise AssertionError("must not update")
+
+        with self.assertRaisesRegex(QuotaError, "unavailable"):
+            InvocationLimiter(FailingStore()).reserve()
+
+    def test_concurrent_reservations_cannot_bypass_cooldown(self):
+        store = MemoryStateStore()
+        now = datetime(2026, 10, 17, 12, 0, tzinfo=timezone.utc)
+        barrier = threading.Barrier(12)
+        allowed = []
+        failures = []
+
+        def reserve():
+            barrier.wait()
+            try:
+                allowed.append(InvocationLimiter(store, clock=lambda: now).reserve().allowed)
+            except QuotaError:
+                failures.append(True)  # A conflict failure is fail-closed.
+
+        threads = [threading.Thread(target=reserve) for _ in range(12)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(allowed.count(True), 1)
+        self.assertEqual(len(store.state["starts"]), 1)
+        self.assertEqual(len(allowed) + len(failures), 12)
 
 
 if __name__ == "__main__":
