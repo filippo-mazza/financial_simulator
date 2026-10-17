@@ -43,7 +43,7 @@ def test_monte_carlo_views_explain_average_and_individual_paths(tmp_path):
     script = f"""
 from streamlit.testing.v1 import AppTest
 app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
-next(item for item in app.number_input if item.label == 'Number of simulations').set_value(1)
+next(item for item in app.number_input if item.label == 'Number of simulations').set_value(2)
 next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=30)
 assert not app.exception
 assert any('not a guaranteed or individually realizable household path' in item.value and 'hide liquidity shortfalls' in item.value for item in app.info)

@@ -360,6 +360,13 @@ def _whole_amount(value):
 def monte_carlo_view_explanation(view_mode, simulation_count):
     """Return plain-language guidance for interpreting Monte Carlo views."""
     if view_mode == "Overview":
+        if simulation_count == 1:
+            return (
+                "**Single-run overview:** with one simulation, the arithmetic average "
+                "is the same as Run 1 and does not hide differences between runs. It is "
+                "still a simulated trajectory, not a guaranteed forecast. Run multiple "
+                "simulations to compare varied outcomes."
+            )
         return (
             f"**Arithmetic-average overview:** each month is the average across "
             f"{simulation_count} simulated runs. This is a summary, not a guaranteed "

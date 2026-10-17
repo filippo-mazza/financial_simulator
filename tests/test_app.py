@@ -161,12 +161,17 @@ def test_multiple_simulations_return_monthly_averages():
 
 def test_monte_carlo_view_explanations_distinguish_average_and_individual_paths():
     overview = monte_carlo_view_explanation("Overview", 25)
+    single_run = monte_carlo_view_explanation("Overview", 1)
     individual = monte_carlo_view_explanation("Individual run", 25)
 
     assert "Arithmetic-average overview" in overview
     assert "not a guaranteed or individually realizable household path" in overview
     assert "hide liquidity shortfalls" in overview
     assert "issue #25" in overview and "issue #67" in overview
+    assert "arithmetic average is the same as Run 1" in single_run
+    assert "does not hide differences between runs" in single_run
+    assert "not a guaranteed forecast" in single_run
+    assert "hide liquidity shortfalls" not in single_run
     assert "one simulated trajectory rather than an average" in individual
     assert "shortfalls the Overview may hide" in individual
 
