@@ -1,4 +1,7 @@
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 from streamlit.testing.v1 import AppTest
 
@@ -32,3 +35,27 @@ def test_sidebar_expanders_keep_stable_identity_when_summary_changes(monkeypatch
 
 def test_streamlit_minimum_supports_persistent_keyed_expanders():
     assert "streamlit>=1.56,<2" in REQUIREMENTS_PATH.read_text()
+
+
+def test_monte_carlo_views_explain_average_and_individual_paths(tmp_path):
+    # Engine-only tests install a process-wide minimal numpy stub at collection
+    # time, so render the completed Altair/pandas UI in a clean Python process.
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+next(item for item in app.number_input if item.label == 'Number of simulations').set_value(1)
+next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=30)
+assert not app.exception
+assert any('not a guaranteed or individually realizable household path' in item.value and 'hide liquidity shortfalls' in item.value for item in app.info)
+next(item for item in app.radio if item.label == 'Result view').set_value('Individual run').run(timeout=30)
+assert not app.exception
+assert any('one simulated trajectory rather than an average' in item.value for item in app.info)
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
