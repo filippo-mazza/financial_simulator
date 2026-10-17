@@ -604,6 +604,8 @@ def read_simulation_export(data, include_warnings=False):
     if trajectory_version is not None:
         if trajectory_version != MONTE_CARLO_TRAJECTORIES_EXPORT_VERSION:
             raise ValueError("This Monte Carlo trajectory version is not supported.")
+        if not isinstance(config.seed, int) or isinstance(config.seed, bool):
+            raise ValueError("The exported simulation seed must be an integer.")
         results = document.get("results")
         trajectories = results.get("trajectories") if isinstance(results, dict) else None
         simulation_count = results.get("simulation_count") if isinstance(results, dict) else None

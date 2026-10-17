@@ -318,6 +318,21 @@ def test_trajectory_import_rejects_inconsistent_seed():
         read_simulation_export(json.dumps(document))
 
 
+@pytest.mark.parametrize("invalid_seed", [None, "7", True])
+def test_trajectory_import_rejects_nonnumeric_seed(invalid_seed):
+    config = SimulationConfig(
+        years=1, seed=7, investments=[], incomes=[], expenses=[], loans=[],
+    )
+    batch = run_simulation_batch(config, 1)
+    document = json.loads(create_simulation_export(
+        config, *batch.average_result, trajectories=batch.trajectories,
+    ))
+    document["parameters"]["seed"] = invalid_seed
+
+    with pytest.raises(ValueError, match="simulation seed must be an integer"):
+        read_simulation_export(json.dumps(document))
+
+
 def test_financial_assumptions_round_trip_and_legacy_default():
     assumptions = FinancialAssumptions(
         investment_return_means={
