@@ -22,7 +22,9 @@ from utils import compute_net_worth_over_time
 
 AUTO_INVEST_EXPORT_VERSION = 1
 FINANCIAL_ASSUMPTIONS_EXPORT_VERSION = 1
-SIMULATION_DETAIL_VERSION = 2
+MONTE_CARLO_TRAJECTORIES_EXPORT_VERSION = 1
+SIMULATION_DETAIL_VERSION = 3
+MAX_SIMULATION_COUNT = 25
 AUTO_INVEST_TYPES = frozenset({"stock", "safe"})
 LEGACY_AUTO_INVEST_WARNING = (
     "This export predates or uses an unsupported version of configurable "
@@ -109,6 +111,27 @@ class SimulationConfig:
     expenses: list[ExpenseConfig] | None = None
     loans: list[LoanConfig] | None = None
     assumptions: FinancialAssumptions = field(default_factory=FinancialAssumptions)
+
+
+@dataclass(frozen=True)
+class SimulationTrajectory:
+    """One reproducible Monte Carlo path and its effective seed."""
+    run_number: int
+    seed: int
+    net_worth: list[float]
+    repayment_dates: dict[str, int]
+    details: dict
+
+    @property
+    def result(self):
+        return self.net_worth, self.repayment_dates, self.details
+
+
+@dataclass(frozen=True)
+class SimulationBatch:
+    """A Monte Carlo average together with the individual paths behind it."""
+    average_result: tuple
+    trajectories: list[SimulationTrajectory]
 
 
 def build_components(config: SimulationConfig):
@@ -272,19 +295,31 @@ def run_simulation(config: SimulationConfig):
         random.setstate(random_state)
 
 
-def run_simulations(config: SimulationConfig, simulation_count: int):
-    """Run distinct reproducible scenarios and average their monthly results."""
+def run_simulation_batch(config: SimulationConfig, simulation_count: int):
+    """Run and retain distinct reproducible scenarios plus their average."""
     if simulation_count < 1:
         raise ValueError("simulation_count must be at least 1")
+    if simulation_count > MAX_SIMULATION_COUNT:
+        raise ValueError(f"simulation_count cannot exceed {MAX_SIMULATION_COUNT}")
 
-    runs = [
-        run_simulation(replace(config, seed=config.seed + run_number))
-        for run_number in range(simulation_count)
-    ]
-    average_net_worth = [fmean(month) for month in zip(*(run[0] for run in runs))]
+    trajectories = []
+    for run_index in range(simulation_count):
+        result = run_simulation(replace(config, seed=config.seed + run_index))
+        trajectories.append(SimulationTrajectory(
+            run_number=run_index + 1,
+            seed=config.seed + run_index,
+            net_worth=result[0],
+            repayment_dates=result[1],
+            details=result[2],
+        ))
+    average_net_worth = [fmean(month) for month in zip(*(
+        trajectory.net_worth for trajectory in trajectories
+    ))]
     average_details = {
         detail_name: [
-            fmean(month) for month in zip(*(run[2][detail_name] for run in runs))
+            fmean(month) for month in zip(*(
+                trajectory.details[detail_name] for trajectory in trajectories
+            ))
         ]
         for detail_name in ("bank_account", "investments")
     }
@@ -296,13 +331,21 @@ def run_simulations(config: SimulationConfig, simulation_count: int):
         average_details[detail_name] = {
             item_name: [
                 fmean(month)
-                for month in zip(*(run[2][detail_name][item_name] for run in runs))
+                for month in zip(*(
+                    trajectory.details[detail_name][item_name]
+                    for trajectory in trajectories
+                ))
             ]
-            for item_name in runs[0][2][detail_name]
+            for item_name in trajectories[0].details[detail_name]
         }
     # Loan schedules do not depend on the stochastic investment/income paths.
-    repayment_dates = runs[0][1]
-    return average_net_worth, repayment_dates, average_details
+    average_result = average_net_worth, trajectories[0].repayment_dates, average_details
+    return SimulationBatch(average_result, trajectories)
+
+
+def run_simulations(config: SimulationConfig, simulation_count: int):
+    """Return monthly averages while preserving the original public contract."""
+    return run_simulation_batch(config, simulation_count).average_result
 
 
 def _money(value):
@@ -383,11 +426,9 @@ def get_month_details(net_worth, details, month):
     return balances, flows
 
 
-def create_simulation_export(config, net_worth, repayment_dates, details,
-                             exported_at=None, simulation_count=1):
-    """Return a JSON export containing reproducible inputs and monthly results."""
-    exported_at = exported_at or datetime.now(timezone.utc)
-    monthly_results = [
+def _monthly_results(net_worth, details):
+    """Serialize the complete month-by-month accounting result."""
+    return [
         {
             "month": index + 1,
             "net_worth": value,
@@ -423,6 +464,27 @@ def create_simulation_export(config, net_worth, repayment_dates, details,
         }
         for index, value in enumerate(net_worth)
     ]
+
+
+def _serialized_trajectory(trajectory):
+    return {
+        "run_number": trajectory.run_number,
+        "seed": trajectory.seed,
+        "monthly": _monthly_results(trajectory.net_worth, trajectory.details),
+        "loan_repayments": [
+            {"name": name, "month": month_index + 1}
+            for name, month_index in trajectory.repayment_dates.items()
+        ],
+    }
+
+
+def create_simulation_export(config, net_worth, repayment_dates, details,
+                             exported_at=None, simulation_count=1,
+                             trajectories=None):
+    """Return a JSON export containing reproducible inputs and monthly results."""
+    exported_at = exported_at or datetime.now(timezone.utc)
+    if trajectories is not None and len(trajectories) != simulation_count:
+        raise ValueError("trajectory count must match simulation_count")
     export = {
         "format": "financial-simulator-export",
         "schema_version": 1,
@@ -441,7 +503,7 @@ def create_simulation_export(config, net_worth, repayment_dates, details,
                 "final_investments": details["investments"][-1],
                 "loans_repaid": len(repayment_dates),
             },
-            "monthly": monthly_results,
+            "monthly": _monthly_results(net_worth, details),
             "loan_repayments": [
                 {"name": name, "month": month_index + 1}
                 for name, month_index in repayment_dates.items()
@@ -449,6 +511,13 @@ def create_simulation_export(config, net_worth, repayment_dates, details,
             "events": build_simulation_events(config, repayment_dates, len(net_worth)),
         },
     }
+    if trajectories is not None:
+        export["features"]["monte_carlo_trajectories"] = (
+            MONTE_CARLO_TRAJECTORIES_EXPORT_VERSION
+        )
+        export["results"]["trajectories"] = [
+            _serialized_trajectory(trajectory) for trajectory in trajectories
+        ]
     return json.dumps(export, indent=2, ensure_ascii=False)
 
 
@@ -530,6 +599,32 @@ def read_simulation_export(data, include_warnings=False):
         config = SimulationConfig(**parameters)
     except TypeError as error:
         raise ValueError(f"The exported parameters are invalid: {error}") from error
+
+    trajectory_version = features.get("monte_carlo_trajectories")
+    if trajectory_version is not None:
+        if trajectory_version != MONTE_CARLO_TRAJECTORIES_EXPORT_VERSION:
+            raise ValueError("This Monte Carlo trajectory version is not supported.")
+        if not isinstance(config.seed, int) or isinstance(config.seed, bool):
+            raise ValueError("The exported simulation seed must be an integer.")
+        results = document.get("results")
+        trajectories = results.get("trajectories") if isinstance(results, dict) else None
+        simulation_count = results.get("simulation_count") if isinstance(results, dict) else None
+        if (not isinstance(simulation_count, int)
+                or not 1 <= simulation_count <= MAX_SIMULATION_COUNT):
+            raise ValueError("The exported simulation count is invalid.")
+        if not isinstance(trajectories, list) or len(trajectories) != simulation_count:
+            raise ValueError("The exported trajectory count is invalid.")
+        expected_months = config.years * 12
+        for index, trajectory in enumerate(trajectories, start=1):
+            if not isinstance(trajectory, dict):
+                raise ValueError("An exported trajectory is invalid.")
+            if trajectory.get("run_number") != index:
+                raise ValueError("Exported trajectory run numbers must be sequential.")
+            if trajectory.get("seed") != config.seed + index - 1:
+                raise ValueError("An exported trajectory seed is invalid.")
+            monthly = trajectory.get("monthly")
+            if not isinstance(monthly, list) or len(monthly) != expected_months:
+                raise ValueError("An exported trajectory has invalid monthly results.")
     return (config, import_warnings) if include_warnings else config
 
 
@@ -1115,7 +1210,8 @@ def main():
         )
     with run_controls:
         simulation_count = st.number_input(
-            "Number of simulations", min_value=1, max_value=500, value=25, step=1,
+            "Number of simulations", min_value=1, max_value=MAX_SIMULATION_COUNT,
+            value=MAX_SIMULATION_COUNT, step=1,
             help="More runs produce a smoother average but take longer.",
         )
         run_requested = _consume_run_request(
@@ -1164,7 +1260,7 @@ def main():
     if run_requested:
         try:
             with st.spinner(f"Running {simulation_count} simulations..."):
-                result = run_simulations(config, int(simulation_count))
+                batch = run_simulation_batch(config, int(simulation_count))
         except (ValueError, TypeError, KeyError, InsufficientFundsException) as error:
             st.session_state.pop("simulation_result", None)
             st.error(f"This scenario cannot be simulated: {error}")
@@ -1174,7 +1270,8 @@ def main():
             "fingerprint": scenario_fingerprint,
             "simulation_count": int(simulation_count),
             "run_id": uuid.uuid4().hex,
-            "result": result,
+            "result": batch.average_result,
+            "trajectories": batch.trajectories,
         }
 
     stored_result = st.session_state.get("simulation_result")
@@ -1192,21 +1289,51 @@ def main():
         st.warning("The scenario or run count changed. Click **Run simulations** to refresh.")
         return
 
-    net_worth, repayment_dates, details = stored_result["result"]
+    average_result = stored_result["result"]
+    trajectories = stored_result["trajectories"]
+    run_id = stored_result.get("run_id", "legacy")
+
+    st.subheader("Monte Carlo analysis")
+    view_mode = st.radio(
+        "Result view", ("Overview", "Individual run"), horizontal=True,
+        key=f"monte_carlo_view_{run_id}",
+        help="Overview shows the average. Individual run shows one actual simulated path.",
+    )
+    selected_trajectory = None
+    if view_mode == "Individual run":
+        selected_run = st.selectbox(
+            "Simulation run", range(1, len(trajectories) + 1),
+            format_func=lambda run: f"Run {run} — seed {trajectories[run - 1].seed}",
+            key=f"monte_carlo_run_{run_id}",
+        )
+        selected_trajectory = trajectories[selected_run - 1]
+        net_worth, repayment_dates, details = selected_trajectory.result
+        label_prefix = ""
+        chart_title = (
+            f"Projected financial position — run {selected_trajectory.run_number} "
+            f"(seed {selected_trajectory.seed})"
+        )
+        detail_prefix = f"Run {selected_trajectory.run_number}"
+    else:
+        net_worth, repayment_dates, details = average_result
+        label_prefix = "Average "
+        chart_title = f"Average projected financial position ({simulation_count} simulations)"
+        detail_prefix = "Average"
 
     final_net_worth = net_worth[-1]
     starting_net_worth = net_worth[0]
     columns = st.columns(4)
-    columns[0].metric("Average final net worth", _money(final_net_worth), f"{final_net_worth - starting_net_worth:+,.0f}")
-    columns[1].metric("Average final cash", _money(details["bank_account"][-1]))
-    columns[2].metric("Average final investments", _money(details["investments"][-1]))
+    columns[0].metric(f"{label_prefix}final net worth", _money(final_net_worth), f"{final_net_worth - starting_net_worth:+,.0f}")
+    columns[1].metric(f"{label_prefix}final cash", _money(details["bank_account"][-1]))
+    columns[2].metric(f"{label_prefix}final investments", _money(details["investments"][-1]))
     columns[3].metric("Loans repaid", len(repayment_dates))
 
     st.download_button(
         "⬇️ Export parameters and results",
         data=create_simulation_export(
-            config, net_worth, repayment_dates, details,
+            config, *average_result,
             simulation_count=int(simulation_count),
+            trajectories=trajectories,
         ),
         file_name=f"financial-simulation-{config.years}y-{simulation_count}-runs.json",
         mime="application/json",
@@ -1217,9 +1344,9 @@ def main():
     for month, (worth, cash, investments) in enumerate(zip(
             net_worth, details["bank_account"], details["investments"]), start=1):
         chart_values.extend([
-            {"month": month, "amount": worth, "series": "Average net worth"},
-            {"month": month, "amount": cash, "series": "Average cash"},
-            {"month": month, "amount": investments, "series": "Average investments"},
+            {"month": month, "amount": worth, "series": f"{label_prefix}net worth"},
+            {"month": month, "amount": cash, "series": f"{label_prefix}cash"},
+            {"month": month, "amount": investments, "series": f"{label_prefix}investments"},
         ])
 
     lines = alt.Chart(alt.Data(values=chart_values)).mark_line(strokeWidth=2.5).encode(
@@ -1228,7 +1355,8 @@ def main():
         color=alt.Color(
             "series:N", title="Financial series",
             scale=alt.Scale(
-                domain=["Average net worth", "Average cash", "Average investments"],
+                domain=[f"{label_prefix}net worth", f"{label_prefix}cash",
+                        f"{label_prefix}investments"],
                 range=["#35c99a", "#5b8def", "#f4b942"],
             ),
             legend=alt.Legend(orient="top", direction="horizontal"),
@@ -1295,7 +1423,7 @@ def main():
 
     chart = chart.properties(
         height=460,
-        title=f"Average projected financial position ({simulation_count} simulations)",
+        title=chart_title,
     ).interactive()
     st.caption(
         "Click any month on the chart to inspect its asset values, balances, "
@@ -1303,7 +1431,7 @@ def main():
     )
     chart_state = st.altair_chart(
         chart, use_container_width=True,
-        key=f"projection_chart_{stored_result.get('run_id', 'legacy')}",
+        key=f"projection_chart_{run_id}_{view_mode}_{getattr(selected_trajectory, 'run_number', 0)}",
         on_select="rerun", selection_mode="selected_month",
     )
     if events:
@@ -1317,7 +1445,7 @@ def main():
         selected_month = int(round(selection["month"]))
     selected_month = min(max(selected_month, 1), len(net_worth))
     balances, flows = get_month_details(net_worth, details, selected_month)
-    st.subheader(f"Average detail for month {selected_month}")
+    st.subheader(f"{detail_prefix} detail for month {selected_month}")
     balance_column, flow_column = st.columns(2, gap="large")
     with balance_column:
         st.markdown("**Ending balances and asset values**")

@@ -10,7 +10,7 @@ from app import (_consume_run_request, _whole_amount, DependentConfig, ExpenseCo
                  FinancialAssumptions, IncomeConfig, InvestmentConfig, LoanConfig, SimulationConfig,
                  build_components, build_simulation_events, create_simulation_export,
                  get_month_details, read_simulation_export, run_simulation,
-                 run_simulations)
+                 run_simulation_batch, run_simulations)
 from investment import Investment
 
 
@@ -158,6 +158,22 @@ def test_multiple_simulations_return_monthly_averages():
     assert averaged[1] == individual_runs[0][1]
 
 
+def test_simulation_batch_retains_reproducible_individual_trajectories():
+    config = SimulationConfig(
+        years=1, seed=20, initial_cash=5000, expenses=[], incomes=[], loans=[],
+        investments=[InvestmentConfig("Stocks", "stock", 1000, 0)],
+    )
+
+    batch = run_simulation_batch(config, 3)
+
+    assert [trajectory.run_number for trajectory in batch.trajectories] == [1, 2, 3]
+    assert [trajectory.seed for trajectory in batch.trajectories] == [20, 21, 22]
+    assert [trajectory.result for trajectory in batch.trajectories] == [
+        run_simulation(replace(config, seed=seed)) for seed in (20, 21, 22)
+    ]
+    assert batch.average_result == run_simulations(config, 3)
+
+
 def test_month_details_expose_individual_balances_and_flows():
     config = SimulationConfig(
         years=2, initial_cash=5000,
@@ -197,6 +213,11 @@ def test_month_details_show_salary_inflation_from_following_year():
 def test_multiple_simulations_require_positive_count():
     with pytest.raises(ValueError, match="at least 1"):
         run_simulations(SimulationConfig(), 0)
+
+
+def test_multiple_simulations_enforce_practical_limit():
+    with pytest.raises(ValueError, match="cannot exceed 25"):
+        run_simulations(SimulationConfig(), 26)
 
 
 def test_simulation_export_contains_parameters_and_monthly_results():
@@ -260,6 +281,56 @@ def test_simulation_export_round_trip_restores_nested_parameters():
 
     assert restored == config
     assert import_warnings == []
+
+
+def test_simulation_export_retains_versioned_trajectories_and_imports_them():
+    config = SimulationConfig(
+        years=1, seed=7, investments=[], incomes=[], expenses=[], loans=[],
+    )
+    batch = run_simulation_batch(config, 2)
+
+    exported = create_simulation_export(
+        config, *batch.average_result, simulation_count=2,
+        trajectories=batch.trajectories,
+    )
+    document = json.loads(exported)
+
+    assert document["schema_version"] == 1
+    assert document["features"]["monte_carlo_trajectories"] == 1
+    assert [run["run_number"] for run in document["results"]["trajectories"]] == [1, 2]
+    assert [run["seed"] for run in document["results"]["trajectories"]] == [7, 8]
+    assert all(len(run["monthly"]) == 12 for run in document["results"]["trajectories"])
+    assert read_simulation_export(exported) == config
+
+
+def test_trajectory_import_rejects_inconsistent_seed():
+    config = SimulationConfig(
+        years=1, seed=7, investments=[], incomes=[], expenses=[], loans=[],
+    )
+    batch = run_simulation_batch(config, 2)
+    document = json.loads(create_simulation_export(
+        config, *batch.average_result, simulation_count=2,
+        trajectories=batch.trajectories,
+    ))
+    document["results"]["trajectories"][1]["seed"] = 99
+
+    with pytest.raises(ValueError, match="trajectory seed"):
+        read_simulation_export(json.dumps(document))
+
+
+@pytest.mark.parametrize("invalid_seed", [None, "7", True])
+def test_trajectory_import_rejects_nonnumeric_seed(invalid_seed):
+    config = SimulationConfig(
+        years=1, seed=7, investments=[], incomes=[], expenses=[], loans=[],
+    )
+    batch = run_simulation_batch(config, 1)
+    document = json.loads(create_simulation_export(
+        config, *batch.average_result, trajectories=batch.trajectories,
+    ))
+    document["parameters"]["seed"] = invalid_seed
+
+    with pytest.raises(ValueError, match="simulation seed must be an integer"):
+        read_simulation_export(json.dumps(document))
 
 
 def test_financial_assumptions_round_trip_and_legacy_default():
