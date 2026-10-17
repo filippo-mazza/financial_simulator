@@ -12,6 +12,11 @@ import urllib.parse
 import urllib.request
 from typing import Any, Iterator
 
+try:
+    from scripts.technical_review_quota import GitHubStateStore, InvocationLimiter, QuotaError
+except ModuleNotFoundError:  # Direct execution: python scripts/run_technical_review.py
+    from technical_review_quota import GitHubStateStore, InvocationLimiter, QuotaError
+
 
 API_BASE = "https://api.openai.com/v1"
 TERMINAL_EVENTS = {
@@ -158,8 +163,19 @@ def _configured_github_mcp(
     return server_label
 
 
-def run(client: AgentsClient, agent_id: str, vault_id: str, server_label: str) -> None:
+def run(
+    client: AgentsClient,
+    agent_id: str,
+    vault_id: str,
+    server_label: str,
+    limiter: InvocationLimiter | None = None,
+) -> bool:
     expected_label = _configured_github_mcp(client, agent_id, vault_id, server_label)
+    if limiter is not None:
+        reservation = limiter.reserve()
+        if not reservation.allowed:
+            print(f"Technical Review skipped: {reservation.reason}.")
+            return False
     calls: dict[str, dict[str, Any]] = {}
     terminal: dict[str, Any] | None = None
 
@@ -201,6 +217,7 @@ def run(client: AgentsClient, agent_id: str, vault_id: str, server_label: str) -
             "Agent turn completed without successful GitHub MCP access " f"({summary})"
         )
     print("Technical Review completed with successful GitHub MCP access.")
+    return True
 
 
 def main() -> int:
@@ -213,8 +230,13 @@ def main() -> int:
         server_label = os.environ.get("OPENAI_GITHUB_MCP_SERVER_LABEL", "")
         if not re.fullmatch(r"[A-Za-z0-9_-]+", server_label):
             raise ReviewError("OPENAI_GITHUB_MCP_SERVER_LABEL is missing or malformed")
-        run(AgentsClient(api_key), agent_id, vault_id, server_label)
-    except ReviewError as error:
+        limiter = InvocationLimiter(GitHubStateStore(
+            os.environ.get("GITHUB_TOKEN", ""),
+            os.environ.get("GITHUB_REPOSITORY", ""),
+            os.environ.get("GITHUB_SHA", ""),
+        ))
+        run(AgentsClient(api_key), agent_id, vault_id, server_label, limiter=limiter)
+    except (ReviewError, QuotaError) as error:
         # Messages are constructed from fixed text or selected API validation fields only.
         print(f"Technical Review failed: {error}", file=sys.stderr)
         return 1

@@ -6,15 +6,18 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: technical-review-${{ github.event.issue.id || 'manual' }}
-  cancel-in-progress: true
+  # Keep paid/manual reviews in GitHub's bounded one-running/one-pending group.
+  # Other label events get a unique no-op group so an agent's completion label
+  # cannot replace a real review that is waiting to run.
+  group: ${{ (github.event_name == 'workflow_dispatch' || github.event.label.name == 'needs-tech-review') && 'technical-review' || format('technical-review-noop-{0}', github.run_id) }}
+  cancel-in-progress: false
 
 jobs:
   trigger:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'needs-tech-review'
+    if: github.actor == github.repository_owner && (github.event_name == 'workflow_dispatch' || github.event.label.name == 'needs-tech-review')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -22,6 +25,7 @@ jobs:
       OPENAI_TECH_REVIEW_AGENT_ID: ${{ vars.OPENAI_TECH_REVIEW_AGENT_ID }}
       OPENAI_MCP_VAULT_ID: ${{ vars.OPENAI_MCP_VAULT_ID }}
       OPENAI_GITHUB_MCP_SERVER_LABEL: ${{ vars.OPENAI_GITHUB_MCP_SERVER_LABEL }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
