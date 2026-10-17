@@ -1,0 +1,102 @@
+name: Financial review
+
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open PR number targeting main and labeled needs-financial-review
+        required: true
+        type: number
+
+permissions: {}
+
+concurrency:
+  group: ${{ (github.event_name == 'workflow_dispatch' || github.event.label.name == 'needs-financial-review') && 'financial-review' || format('financial-review-noop-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.actor == github.repository_owner && (github.event_name == 'workflow_dispatch' || github.event.label.name == 'needs-financial-review')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pr_number: ${{ steps.target.outputs.pr_number }}
+      head_sha: ${{ steps.target.outputs.head_sha }}
+      base_sha: ${{ steps.target.outputs.base_sha }}
+    steps:
+      - name: Check out trusted workflow code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Validate and resolve exact PR head
+        id: target
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/prepare_financial_review.py
+
+      - name: Preserve trusted validation code
+        run: cp scripts/financial_validation.py "$RUNNER_TEMP/financial_validation.py"
+
+      - name: Check out exact same-repository PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.head_sha }}
+          persist-credentials: false
+
+      - name: Install deterministic validation dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run bounded offline financial validation
+        env:
+          FINANCIAL_REPOSITORY_PATH: ${{ github.workspace }}
+          MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
+        run: python "$RUNNER_TEMP/financial_validation.py" > financial-review-report.json
+
+      - name: Transfer sanitized report only
+        uses: actions/upload-artifact@v4
+        with:
+          name: financial-review-report-${{ steps.target.outputs.head_sha }}
+          path: financial-review-report.json
+          if-no-files-found: error
+          retention-days: 1
+
+  review:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Check out trusted automation on a fresh runner
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Download validation report
+        uses: actions/download-artifact@v4
+        with:
+          name: financial-review-report-${{ needs.validate.outputs.head_sha }}
+          path: ${{ runner.temp }}/financial-review-input
+
+      - name: Invoke saved Financial Review Agent
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_FINANCIAL_REVIEW_AGENT_ID: ${{ vars.OPENAI_FINANCIAL_REVIEW_AGENT_ID }}
+          OPENAI_MCP_VAULT_ID: ${{ vars.OPENAI_MCP_VAULT_ID }}
+          OPENAI_GITHUB_MCP_SERVER_LABEL: ${{ vars.OPENAI_GITHUB_MCP_SERVER_LABEL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.validate.outputs.pr_number }}
+          PR_HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
+          STATE_INITIAL_SHA: ${{ needs.validate.outputs.base_sha }}
+          FINANCIAL_REPORT_PATH: ${{ runner.temp }}/financial-review-input/financial-review-report.json
+        run: python scripts/run_financial_review.py
