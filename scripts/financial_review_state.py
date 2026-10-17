@@ -2,7 +2,12 @@
 
 from datetime import datetime, timezone
 import re
-from scripts.technical_review_quota import QuotaError, Reservation, _utc_timestamp
+try:
+    from scripts.technical_review_quota import QuotaError, Reservation, _utc_timestamp
+except ModuleNotFoundError:
+    # Also support direct script execution, where Python adds scripts/ rather
+    # than the repository root to sys.path.
+    from technical_review_quota import QuotaError, Reservation, _utc_timestamp
 
 DAILY_LIMIT = 10
 COOLDOWN = 300
