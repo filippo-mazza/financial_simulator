@@ -167,32 +167,33 @@ def test_overview_purchase_events_aggregate_trajectory_months():
 
     aggregated = aggregate_purchase_events(trajectories)
 
-    assert aggregated == [
-        {
-            "month": 7,
-            "property_name": "Family home",
-            "label": "Family home purchased in 2 of 4 trajectories",
-        },
-        {
-            "month": 9,
-            "property_name": "Family home",
-            "label": "Family home purchased in 1 of 4 trajectories",
-        },
-    ]
+    assert aggregated == [{
+        "month": 8,
+        "property_name": "Family home",
+        "label": (
+            "Family home average purchase period: month 9 "
+            "(range 8–10; 3 of 4 trajectories)"
+        ),
+    }]
     assert build_simulation_events(
         SimulationConfig(dependents=[]), {}, 24, aggregated,
-    ) == [
-        {
-            "month": 8,
-            "label": "Family home purchased in 2 of 4 trajectories",
-            "event_type": "Property purchase",
-        },
-        {
-            "month": 10,
-            "label": "Family home purchased in 1 of 4 trajectories",
-            "event_type": "Property purchase",
-        },
+    ) == [{
+        "month": 9,
+        "label": (
+            "Family home average purchase period: month 9 "
+            "(range 8–10; 3 of 4 trajectories)"
+        ),
+        "event_type": "Property purchase",
+    }]
+
+
+def test_overview_without_completed_purchases_has_no_marker():
+    trajectories = [
+        SimulationTrajectory(1, 1, [], {}, {"purchase_events": []}),
+        SimulationTrajectory(2, 2, [], {}, {"purchase_events": []}),
     ]
+
+    assert aggregate_purchase_events(trajectories) == []
 
 
 def test_run_simulation_is_reproducible_and_isolated():

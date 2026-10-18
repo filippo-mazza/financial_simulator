@@ -160,8 +160,9 @@ and actual post-closing cash. Purchase parameters, events, fees, and outcomes
 are included in simulation details and JSON exports. A completed purchase is
 also marked on the interactive chart with a labeled vertical dashed line; a
 deferred or no-purchase trajectory does not receive a purchase marker. In the
-averaged Overview, markers group actual purchases by month and state the number
-of trajectories represented; Individual run markers show that run's exact event.
+averaged Overview, one marker shows the rounded midpoint of the earliest/latest
+purchase-month range and states the range and trajectory count; Individual run
+markers show that run's exact event.
 
 ### Financial assumptions
 
