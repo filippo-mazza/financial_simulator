@@ -171,3 +171,73 @@ def test_automatic_purchase_is_independent_per_trajectory():
     assert all(outcome["purchased"] for outcome in outcomes)
     assert all(0 <= outcome["purchase_month"] < 12 for outcome in outcomes)
     assert len({outcome["purchase_month"] for outcome in outcomes}) == 1
+
+
+def test_fully_paid_purchase_creates_no_mortgage():
+    account = BankAccount(120_000)
+    investments = []
+    loans = []
+
+    event = execute_property_purchase(
+        PropertyPurchase(100_000, 100, 250), account, investments, loans
+    )
+
+    assert account.subaccounts["Main"] == 19_750
+    assert len(investments) == 1
+    assert loans == []
+    assert event["mortgage_principal"] == 0
+
+
+def test_automatic_no_purchase_preserves_selected_rent():
+    policy = AutomaticPurchasePolicy(PropertyPurchase(100_000, 20), 50_000, 0)
+    rent = Expense("Rent", "housing", 500)
+    result = compute_net_worth_over_time(
+        1, BankAccount(10_000), [], [], [], [rent], property_purchase=policy,
+        selected_rent_expense="Rent",
+    )
+
+    assert result[2]["purchase_outcome"]["purchased"] is False
+    assert result[2]["expense_values"]["Rent"] == [500] * 12
+
+
+def test_purchase_ends_only_selected_rent_and_starts_linked_costs():
+    policy = PropertyPurchase(
+        100_000, 20, purchase_month=1, monthly_expenses=300, property_name="House"
+    )
+    rent = Expense("Rent", "housing", 500)
+    groceries = Expense("Groceries", "groceries", 200)
+    result = compute_net_worth_over_time(
+        1, BankAccount(30_000), [], [], [], [rent, groceries],
+        property_purchase=policy, selected_rent_expense="Rent",
+    )
+    details = result[2]
+
+    assert details["expense_values"]["Rent"] == [500, 0] + [0] * 10
+    assert details["expense_values"]["Groceries"] == [200] * 12
+    assert details["expense_values"]["House — property expenses (linked)"][0] == 0
+    assert details["expense_values"]["House — property expenses (linked)"][1] == 0
+    assert details["expense_values"]["House — property expenses (linked)"][2:] == [300] * 10
+
+
+def test_purchase_records_configured_annual_property_tax():
+    policy = PropertyPurchase(
+        100_000, 20, purchase_month=0, yearly_tax=1_200, property_name="House"
+    )
+    result = compute_net_worth_over_time(
+        2, BankAccount(30_000), [], [], [], [], property_purchase=policy
+    )
+
+    taxes = result[2]["expense_values"]["House — property tax (linked)"]
+    assert taxes[:12] == [0] * 12
+    assert taxes[12] == 1_200
+
+
+def test_mortgage_balance_decreases_after_repayment_begins():
+    result = compute_net_worth_over_time(
+        1, BankAccount(30_000), [], [], [], [],
+        property_purchase=PropertyPurchase(100_000, 20, purchase_month=0),
+    )
+    balances = result[2]["loan_balances"]["Property mortgage"]
+
+    assert balances[0] == 80_000
+    assert balances[1] < balances[0]
