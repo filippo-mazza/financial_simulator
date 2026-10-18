@@ -73,8 +73,9 @@ python -m pytest
 
 The repository's `pytest.ini` uses a project-local `.pytest-tmp` base
 directory so pytest fixtures also work in environments where `/tmp` is
-read-only. A command-line `--basetemp` value can still be supplied when the
-selected directory is writable.
+read-only. If a runner supplies an unusable `--basetemp`, the test
+configuration falls back to this directory; writable command-line values are
+still honored.
 
 For repeatable simulations and tests, pass a seed to
 `compute_net_worth_over_time(..., seed=42)`. The simulator restores the random
