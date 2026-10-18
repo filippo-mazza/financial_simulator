@@ -21,7 +21,7 @@ The content and code provided in this context were produced outside of my profes
 The sidebar's opt-in Purchase Property section configures price, down payment,
 fees, mortgage terms, ownership costs, and an exact recurring expense to stop
 at closing. Automatic mode uses the first eligible month with both a cash
-threshold and emergency reserve; scheduled mode accepts a user-facing 1-based
+threshold and minimum cash retained immediately after closing; scheduled mode accepts a user-facing 1-based
 month. The panel previews upfront cash, mortgage principal, and the existing
 loan model's payment. Results report purchased trajectories and actual months,
 or that no purchase occurred, including scheduled purchases recorded by the
@@ -153,7 +153,10 @@ available-cash threshold and separate reserve, and performs at most one
 purchase per trajectory. Automatic affordability is evaluated after each
 month's modeled commitments and cash sweeps. If the conditions are not met,
 the trajectory continues without buying and the UI reports a warning rather
-than stopping the simulation. Purchase parameters, events, fees, and outcomes
+than stopping the simulation. The configured reserve is a closing-time minimum,
+not a protected subaccount; later expenses, debt payments, fees, contributions,
+or unforeseen costs can reduce it. Results record both the configured minimum
+and actual post-closing cash. Purchase parameters, events, fees, and outcomes
 are included in simulation details and JSON exports.
 
 ### Financial assumptions

@@ -139,6 +139,8 @@ def test_automatic_purchase_ends_selected_rent_in_closing_month():
     assert result[2]["expense_values"]["Rent"] == [0] * 12
     assert result[2]["purchase_outcome"]["purchased"] is True
     assert result[2]["bank_account"][0] == 10_000
+    assert result[2]["purchase_outcome"]["minimum_cash_reserve"] == 10_000
+    assert result[2]["purchase_outcome"]["cash_after_purchase"] == 10_000
 
 
 def test_linked_property_expense_name_collision_does_not_overwrite_history():

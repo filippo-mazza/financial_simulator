@@ -87,6 +87,8 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             "down_payment": None,
             "transaction_fees": None,
             "mortgage_principal": None,
+            "minimum_cash_reserve": property_purchase.minimum_cash_reserve,
+            "cash_after_purchase": None,
         }
     monthly_net_worth = []
     loan_repayment_dates = {}
@@ -301,6 +303,7 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                         down_payment=event["down_payment"],
                         transaction_fees=event["transaction_fees"],
                         mortgage_principal=event["mortgage_principal"],
+                        cash_after_purchase=bank_account.subaccounts["Main"],
                     )
                 investment_names.append(event["property_name"])
                 monthly_details["investment_values"][event["property_name"]] = (
