@@ -162,7 +162,8 @@ also marked on the interactive chart with a labeled vertical dashed line; a
 deferred or no-purchase trajectory does not receive a purchase marker. In the
 averaged Overview, one marker shows the rounded midpoint of the earliest/latest
 purchase-month range and states the range and trajectory count; Individual run
-markers show that run's exact event.
+markers show that run's exact event. The line itself uses a compact label, while
+the full range and trajectory count remain available in its tooltip and summary.
 
 ### Financial assumptions
 

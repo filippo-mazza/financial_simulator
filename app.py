@@ -169,6 +169,7 @@ def aggregate_purchase_events(trajectories):
     return [{
         "month": midpoint_month,
         "property_name": property_name,
+        "chart_label": f"Avg purchase · M{midpoint_month + 1}",
         "label": (
             f"{property_name} average purchase period: month {midpoint_month + 1} "
             f"(range {first_month + 1}–{last_month + 1}; "
@@ -527,13 +528,16 @@ def build_simulation_events(config, repayment_dates, months_simulated,
         }]
     for purchase in purchase_events or []:
         if purchase["month"] < months_simulated:
-            events.append({
+            event = {
                 "month": purchase["month"] + 1,
                 "label": purchase.get(
                     "label", f"{purchase['property_name']} purchased",
                 ),
                 "event_type": "Property purchase",
-            })
+            }
+            if "chart_label" in purchase:
+                event["chart_label"] = purchase["chart_label"]
+            events.append(event)
     return sorted(events, key=lambda event: (event["month"], event["label"]))
 
 
@@ -1693,7 +1697,14 @@ def main():
         label_height = max(
             max(net_worth), max(details["bank_account"]), max(details["investments"])
         )
-        event_values = [{**event, "label_height": label_height} for event in events]
+        event_values = [
+            {
+                **event,
+                "chart_label": event.get("chart_label", event["label"]),
+                "label_height": label_height,
+            }
+            for event in events
+        ]
         event_data = alt.Data(values=event_values)
         event_colors = alt.Scale(
             domain=list(CHART_EVENT_COLORS),
@@ -1717,7 +1728,7 @@ def main():
         ).encode(
             x=alt.X("month:Q"),
             y=alt.Y("label_height:Q"),
-            text=alt.Text("label:N"),
+            text=alt.Text("chart_label:N"),
             color=alt.Color("event_type:N", scale=event_colors, legend=None),
         )
         chart = (chart + rules + labels).resolve_scale(color="independent")
