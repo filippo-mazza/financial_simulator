@@ -337,15 +337,20 @@ def run_simulation_batch(config: SimulationConfig, simulation_count: int):
         "automatic_contribution_fees", "income_rates", "income_values",
         "expense_values", "loan_balances", "loan_payments",
     ):
+        item_names = set().union(*(
+            trajectory.details[detail_name] for trajectory in trajectories
+        ))
         average_details[detail_name] = {
             item_name: [
                 fmean(month)
                 for month in zip(*(
-                    trajectory.details[detail_name][item_name]
+                    trajectory.details[detail_name].get(
+                        item_name, [0] * len(trajectory.net_worth)
+                    )
                     for trajectory in trajectories
                 ))
             ]
-            for item_name in trajectories[0].details[detail_name]
+            for item_name in item_names
         }
     if "purchase_fees" in trajectories[0].details:
         average_details["purchase_fees"] = [
@@ -430,7 +435,8 @@ def _consume_run_request(session_state, button_clicked):
     return bool(button_clicked or run_after_import)
 
 
-def build_simulation_events(config, repayment_dates, months_simulated):
+def build_simulation_events(config, repayment_dates, months_simulated,
+                            purchase_events=None):
     """Return chart events with human-friendly, one-based month numbers."""
     events = [
         {
@@ -454,12 +460,18 @@ def build_simulation_events(config, repayment_dates, months_simulated):
                 "label": f"School starts for {dependent.name}",
                 "event_type": "School starts",
             })
-    if isinstance(config.property_purchase, PropertyPurchase):
-        events.append({
-            "month": config.property_purchase.purchase_month + 1,
-            "label": f"{config.property_purchase.property_name} purchased",
-            "event_type": "Property purchase",
-        })
+    if purchase_events is None and isinstance(config.property_purchase, PropertyPurchase):
+        purchase_events = [{
+            "month": config.property_purchase.purchase_month,
+            "property_name": config.property_purchase.property_name,
+        }]
+    for purchase in purchase_events or []:
+        if purchase["month"] < months_simulated:
+            events.append({
+                "month": purchase["month"] + 1,
+                "label": f"{purchase['property_name']} purchased",
+                "event_type": "Property purchase",
+            })
     return sorted(events, key=lambda event: (event["month"], event["label"]))
 
 
@@ -581,7 +593,9 @@ def create_simulation_export(config, net_worth, repayment_dates, details,
                 {"name": name, "month": month_index + 1}
                 for name, month_index in repayment_dates.items()
             ],
-            "events": build_simulation_events(config, repayment_dates, len(net_worth)),
+            "events": build_simulation_events(
+                config, repayment_dates, len(net_worth), details.get("purchase_events")
+            ),
         },
     }
     if config.property_purchase is not None:
@@ -1496,7 +1510,9 @@ def main():
         x=alt.X("month:Q"),
     ).transform_filter(month_selection)
 
-    events = build_simulation_events(config, repayment_dates, len(net_worth))
+    events = build_simulation_events(
+        config, repayment_dates, len(net_worth), details.get("purchase_events")
+    )
     chart = lines + month_hitboxes + selected_month_rule
     if events:
         label_height = max(
