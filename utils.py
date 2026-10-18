@@ -18,7 +18,7 @@ def get_net_worth(investments,loans,bank_account):
 
 import random
 from bank_account import InsufficientFundsException
-from property_purchase import execute_property_purchase
+from property_purchase import execute_property_purchase, AutomaticPurchasePolicy
 
 
 def _withdraw_for_simulation(bank_account, amount, month, reason):
@@ -77,14 +77,32 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
     if property_purchase is not None:
         monthly_details["purchase_fees"] = []
         monthly_details["purchase_events"] = []
+    automatic_purchase = isinstance(property_purchase, AutomaticPurchasePolicy)
+    if automatic_purchase:
+        monthly_details["purchase_outcome"] = {
+            "purchased": False,
+            "purchase_month": None,
+            "purchase_price": None,
+            "down_payment": None,
+            "transaction_fees": None,
+            "mortgage_principal": None,
+        }
     monthly_net_worth = []
     loan_repayment_dates = {}
+    scheduled_purchase = None
     if property_purchase is not None:
-        if property_purchase.purchase_month >= years * 12:
+        if automatic_purchase:
+            property_purchase.validate()
+            scheduled_purchase = None
+        else:
+            scheduled_purchase = property_purchase
+        if (not automatic_purchase
+                and property_purchase.purchase_month >= years * 12):
             raise ValueError("Purchase month must fall within the simulation")
         # Validate all non-cash constraints before the first scheduled
         # transaction; affordability is checked again at the closing month.
-        property_purchase.validate(None, investments, loans)
+        if not automatic_purchase:
+            property_purchase.validate(None, investments, loans)
      
 
     try:
@@ -215,10 +233,24 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             # A purchase closes after all scheduled activity for the month.
             # Appending its mortgage here means the first repayment is due next
             # month, while the new property is included in this month's snapshot.
-            if (property_purchase is not None
-                    and property_purchase.purchase_month == current_month):
+            purchase_due = (
+                scheduled_purchase is not None
+                and scheduled_purchase.purchase_month == current_month
+            )
+            if automatic_purchase and not monthly_details["purchase_outcome"]["purchased"]:
+                template = property_purchase.purchase
+                required = (
+                    template.down_payment + template.transaction_fees
+                    + property_purchase.minimum_cash_reserve
+                )
+                cash = bank_account.subaccounts["Main"]
+                if cash >= property_purchase.minimum_available_cash and cash >= required:
+                    scheduled_purchase = property_purchase.purchase_for_month(current_month)
+                    scheduled_purchase.validate(None, investments, loans)
+                    purchase_due = True
+            if purchase_due:
                 event = execute_property_purchase(
-                    property_purchase, bank_account, investments, loans,
+                    scheduled_purchase, bank_account, investments, loans,
                     annual_return_mean=(
                         assumptions.investment_return_means["real_estate"]
                         if assumptions is not None else None
@@ -230,6 +262,15 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 )
                 month_purchase_fee = event["transaction_fees"]
                 monthly_details["purchase_events"].append(event)
+                if automatic_purchase:
+                    monthly_details["purchase_outcome"].update(
+                        purchased=True,
+                        purchase_month=current_month,
+                        purchase_price=event["purchase_price"],
+                        down_payment=event["down_payment"],
+                        transaction_fees=event["transaction_fees"],
+                        mortgage_principal=event["mortgage_principal"],
+                    )
                 investment_names.append(event["property_name"])
                 monthly_details["investment_values"][event["property_name"]] = (
                     [0] * current_month

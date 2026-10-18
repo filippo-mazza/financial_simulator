@@ -19,7 +19,7 @@ from income_source import IncomeSource
 from investment import Investment
 from loan import Loan
 from utils import compute_net_worth_over_time
-from property_purchase import PropertyPurchase
+from property_purchase import PropertyPurchase, AutomaticPurchasePolicy
 
 AUTO_INVEST_EXPORT_VERSION = 1
 FINANCIAL_ASSUMPTIONS_EXPORT_VERSION = 1
@@ -115,7 +115,7 @@ class SimulationConfig:
     assumptions: FinancialAssumptions = field(default_factory=FinancialAssumptions)
     # Opt-in; purchase UI and savings-trigger policy are intentionally separate
     # follow-up features.  The asset is recorded at price and is 100% owned.
-    property_purchase: PropertyPurchase | None = None
+    property_purchase: PropertyPurchase | AutomaticPurchasePolicy | None = None
 
 
 @dataclass(frozen=True)
@@ -354,6 +354,16 @@ def run_simulation_batch(config: SimulationConfig, simulation_count: int):
             ))
         ]
         average_details["purchase_events"] = trajectories[0].details["purchase_events"]
+    if "purchase_outcome" in trajectories[0].details:
+        average_details["purchase_outcome"] = {
+            "purchased": any(
+                trajectory.details["purchase_outcome"]["purchased"]
+                for trajectory in trajectories
+            ),
+            "trajectories": [
+                trajectory.details["purchase_outcome"] for trajectory in trajectories
+            ],
+        }
     # Loan schedules do not depend on the stochastic investment/income paths.
     average_result = average_net_worth, trajectories[0].repayment_dates, average_details
     return SimulationBatch(average_result, trajectories)
@@ -444,7 +454,7 @@ def build_simulation_events(config, repayment_dates, months_simulated):
                 "label": f"School starts for {dependent.name}",
                 "event_type": "School starts",
             })
-    if config.property_purchase is not None:
+    if isinstance(config.property_purchase, PropertyPurchase):
         events.append({
             "month": config.property_purchase.purchase_month + 1,
             "label": f"{config.property_purchase.property_name} purchased",
@@ -655,7 +665,17 @@ def read_simulation_export(data, include_warnings=False):
         if not isinstance(purchase, dict):
             raise ValueError("The exported property purchase must be an object.")
         try:
-            parameters["property_purchase"] = PropertyPurchase(**purchase)
+            if "purchase" in purchase:
+                template = purchase["purchase"]
+                if not isinstance(template, dict):
+                    raise ValueError("automatic purchase template must be an object")
+                parameters["property_purchase"] = AutomaticPurchasePolicy(
+                    PropertyPurchase(**template),
+                    purchase["minimum_available_cash"],
+                    purchase["minimum_cash_reserve"],
+                )
+            else:
+                parameters["property_purchase"] = PropertyPurchase(**purchase)
         except (TypeError, ValueError) as error:
             raise ValueError(f"The exported property purchase is invalid: {error}") from error
     assumptions = parameters.get("assumptions")
