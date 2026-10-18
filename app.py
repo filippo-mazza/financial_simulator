@@ -19,6 +19,7 @@ from income_source import IncomeSource
 from investment import Investment
 from loan import Loan
 from utils import compute_net_worth_over_time
+from property_purchase import PropertyPurchase
 
 AUTO_INVEST_EXPORT_VERSION = 1
 FINANCIAL_ASSUMPTIONS_EXPORT_VERSION = 1
@@ -112,6 +113,9 @@ class SimulationConfig:
     expenses: list[ExpenseConfig] | None = None
     loans: list[LoanConfig] | None = None
     assumptions: FinancialAssumptions = field(default_factory=FinancialAssumptions)
+    # Opt-in; purchase UI and savings-trigger policy are intentionally separate
+    # follow-up features.  The asset is recorded at price and is 100% owned.
+    property_purchase: PropertyPurchase | None = None
 
 
 @dataclass(frozen=True)
@@ -291,7 +295,11 @@ def run_simulation(config: SimulationConfig):
     random.seed(config.seed)
     try:
         components = build_components(config)
-        return compute_net_worth_over_time(config.years, *components, seed=config.seed)
+        return compute_net_worth_over_time(
+            config.years, *components, seed=config.seed,
+            property_purchase=config.property_purchase,
+            assumptions=config.assumptions,
+        )
     finally:
         random.setstate(random_state)
 
@@ -339,6 +347,13 @@ def run_simulation_batch(config: SimulationConfig, simulation_count: int):
             ]
             for item_name in trajectories[0].details[detail_name]
         }
+    if "purchase_fees" in trajectories[0].details:
+        average_details["purchase_fees"] = [
+            fmean(month) for month in zip(*(
+                trajectory.details["purchase_fees"] for trajectory in trajectories
+            ))
+        ]
+        average_details["purchase_events"] = trajectories[0].details["purchase_events"]
     # Loan schedules do not depend on the stochastic investment/income paths.
     average_result = average_net_worth, trajectories[0].repayment_dates, average_details
     return SimulationBatch(average_result, trajectories)
@@ -429,6 +444,12 @@ def build_simulation_events(config, repayment_dates, months_simulated):
                 "label": f"School starts for {dependent.name}",
                 "event_type": "School starts",
             })
+    if config.property_purchase is not None:
+        events.append({
+            "month": config.property_purchase.purchase_month + 1,
+            "label": f"{config.property_purchase.property_name} purchased",
+            "event_type": "Property purchase",
+        })
     return sorted(events, key=lambda event: (event["month"], event["label"]))
 
 
@@ -553,6 +574,8 @@ def create_simulation_export(config, net_worth, repayment_dates, details,
             "events": build_simulation_events(config, repayment_dates, len(net_worth)),
         },
     }
+    if config.property_purchase is not None:
+        export["features"]["property_purchase"] = 1
     if trajectories is not None:
         export["features"]["monte_carlo_trajectories"] = (
             MONTE_CARLO_TRAJECTORIES_EXPORT_VERSION
@@ -627,6 +650,14 @@ def read_simulation_export(data, include_warnings=False):
         rebuild_collection("additional_expenses", ExpenseConfig) or []
     )
     parameters["dependents"] = rebuild_collection("dependents", DependentConfig) or []
+    purchase = parameters.get("property_purchase")
+    if purchase is not None:
+        if not isinstance(purchase, dict):
+            raise ValueError("The exported property purchase must be an object.")
+        try:
+            parameters["property_purchase"] = PropertyPurchase(**purchase)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"The exported property purchase is invalid: {error}") from error
     assumptions = parameters.get("assumptions")
     if assumptions is None:
         parameters["assumptions"] = FinancialAssumptions()

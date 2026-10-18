@@ -18,6 +18,7 @@ def get_net_worth(investments,loans,bank_account):
 
 import random
 from bank_account import InsufficientFundsException
+from property_purchase import execute_property_purchase
 
 
 def _withdraw_for_simulation(bank_account, amount, month, reason):
@@ -33,7 +34,8 @@ def _withdraw_for_simulation(bank_account, amount, month, reason):
 
 
 def compute_net_worth_over_time(years, bank_account, investments, loans, income_sources,
-                                expenses, seed=None):
+                                expenses, seed=None, property_purchase=None,
+                                assumptions=None):
     """Simulate net worth month by month.
 
     When ``seed`` is provided, all simulations using the standard-library random
@@ -72,8 +74,17 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
         "loan_balances": {name: [] for name in loan_names},
         "loan_payments": {name: [] for name in loan_names},
     }
+    if property_purchase is not None:
+        monthly_details["purchase_fees"] = []
+        monthly_details["purchase_events"] = []
     monthly_net_worth = []
     loan_repayment_dates = {}
+    if property_purchase is not None:
+        if property_purchase.purchase_month >= years * 12:
+            raise ValueError("Purchase month must fall within the simulation")
+        # Validate all non-cash constraints before the first scheduled
+        # transaction; affordability is checked again at the closing month.
+        property_purchase.validate(None, investments, loans)
      
 
     try:
@@ -90,6 +101,7 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             month_loan_payments = {}
             month_automatic_contributions = {}
             month_automatic_contribution_fees = {}
+            month_purchase_fee = 0
             
             # Income
             for source, source_name in zip(income_sources, income_names):
@@ -200,10 +212,43 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 )
                 automatic_contribution_counts[index] += 1
 
+            # A purchase closes after all scheduled activity for the month.
+            # Appending its mortgage here means the first repayment is due next
+            # month, while the new property is included in this month's snapshot.
+            if (property_purchase is not None
+                    and property_purchase.purchase_month == current_month):
+                event = execute_property_purchase(
+                    property_purchase, bank_account, investments, loans,
+                    annual_return_mean=(
+                        assumptions.investment_return_means["real_estate"]
+                        if assumptions is not None else None
+                    ),
+                    annual_return_std_dev=(
+                        assumptions.investment_return_std_devs["real_estate"]
+                        if assumptions is not None else None
+                    ),
+                )
+                month_purchase_fee = event["transaction_fees"]
+                monthly_details["purchase_events"].append(event)
+                investment_names.append(event["property_name"])
+                monthly_details["investment_values"][event["property_name"]] = (
+                    [0] * current_month
+                )
+                if event["mortgage_name"] is not None:
+                    loan_names.append(event["mortgage_name"])
+                    monthly_details["loan_balances"][event["mortgage_name"]] = (
+                        [0] * current_month
+                    )
+                    monthly_details["loan_payments"][event["mortgage_name"]] = (
+                        [0] * current_month
+                    )
+
             # Store ending details after every transaction for the month, so
             # cash and investments reconcile with the net-worth snapshot.
             monthly_details["investments"].append(total_investment_value(investments))
             monthly_details["bank_account"].append(bank_account.subaccounts["Main"])
+            if property_purchase is not None:
+                monthly_details["purchase_fees"].append(month_purchase_fee)
             investment_values = {}
             for investment, investment_name in zip(investments, investment_names):
                 investment_values[investment_name] = (
