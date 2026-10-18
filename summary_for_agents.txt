@@ -9,6 +9,22 @@ This is a small Python personal-finance simulator with two entry points:
 
 Outputs are illustrative, stochastic projections, not financial advice.
 
+PURCHASE PROPERTY UI (ISSUE #82)
+--------------------------------
+The opt-in bordered panel in app.py builds PropertyPurchase for scheduled mode
+(1-based UI month converted to zero-based engine month), or AutomaticPurchasePolicy
+for first-eligible cash-triggered mode. Automatic eligibility requires Main cash
+to meet both minimum_available_cash and down payment + fees + reserve. The panel
+passes selected_rent_expense by exact name and exposes monthly_expenses/yearly_tax.
+The preview calls Loan.monthly_repayment. Import restoration populates purchase
+fields and selected rent; asdict export preserves optional fields and legacy
+exports omit them. Results report purchased trajectory count/share and actual
+month range, or no purchase. The existing engine records purchase_outcome and
+purchase_events and applies the #81 rent transition. The UI normalizes scheduled
+purchase_events into the same outcome display shape as automatic purchases,
+clears purchase widget keys during import, and clamps scheduled months to the
+current horizon. Regression coverage verifies outcome normalization.
+
 
 FAST START
 ----------

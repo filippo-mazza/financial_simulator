@@ -2,7 +2,8 @@ import math
 
 import pytest
 
-from app import (SimulationConfig, create_simulation_export, read_simulation_export,
+from app import (SimulationConfig, create_simulation_export, purchase_outcome_from_details,
+                 read_simulation_export,
                  run_simulation, run_simulation_batch)
 from bank_account import BankAccount, InsufficientFundsException
 from expense import Expense
@@ -171,6 +172,20 @@ def test_automatic_purchase_is_independent_per_trajectory():
     assert all(outcome["purchased"] for outcome in outcomes)
     assert all(0 <= outcome["purchase_month"] < 12 for outcome in outcomes)
     assert len({outcome["purchase_month"] for outcome in outcomes}) == 1
+
+
+def test_purchase_outcome_normalizes_scheduled_purchase_events():
+    assert purchase_outcome_from_details({"purchase_events": [{"month": 7}]}) == {
+        "purchased": True, "purchase_month": 7,
+    }
+    assert purchase_outcome_from_details({"purchase_events": []}) is None
+
+
+def test_purchase_outcome_prefers_automatic_outcome():
+    outcome = {"purchased": False, "purchase_month": None}
+    assert purchase_outcome_from_details({
+        "purchase_outcome": outcome, "purchase_events": [{"month": 7}],
+    }) == outcome
 
 
 def test_fully_paid_purchase_creates_no_mortgage():
