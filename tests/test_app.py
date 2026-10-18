@@ -170,6 +170,7 @@ def test_overview_purchase_events_aggregate_trajectory_months():
     assert aggregated == [{
         "month": 8,
         "property_name": "Family home",
+        "chart_label": "Avg purchase · M9",
         "label": (
             "Family home average purchase period: month 9 "
             "(range 8–10; 3 of 4 trajectories)"
@@ -179,6 +180,7 @@ def test_overview_purchase_events_aggregate_trajectory_months():
         SimulationConfig(dependents=[]), {}, 24, aggregated,
     ) == [{
         "month": 9,
+        "chart_label": "Avg purchase · M9",
         "label": (
             "Family home average purchase period: month 9 "
             "(range 8–10; 3 of 4 trajectories)"

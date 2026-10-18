@@ -254,7 +254,8 @@ Completed purchase events appear in the interactive chart as a distinct labeled
 vertical dashed line; no-purchase outcomes do not manufacture an event marker.
 The averaged Overview groups per-trajectory purchases by month and labels their
 earliest/latest range with one rounded-midpoint marker rather than copying
-trajectory 1 or drawing every run; Individual run shows the exact event.
+trajectory 1 or drawing every run. Its chart label is deliberately compact;
+tooltip/caption text retains the range and count. Individual run shows the exact event.
 
 
 TESTING AND CHANGE CHECKLIST
