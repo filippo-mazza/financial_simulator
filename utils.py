@@ -138,7 +138,19 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                     month_income_values.get(source_name, 0) + monthly_income
                 )
             
-            if scheduled_purchase is not None and scheduled_purchase.purchase_month == current_month and selected_rent_expense is not None:
+            purchase_due = (
+                scheduled_purchase is not None
+                and scheduled_purchase.purchase_month == current_month
+            )
+            if automatic_purchase and not monthly_details["purchase_outcome"]["purchased"]:
+                template = property_purchase.purchase
+                required = template.down_payment + template.transaction_fees + property_purchase.minimum_cash_reserve
+                cash = bank_account.subaccounts["Main"]
+                if cash >= property_purchase.minimum_available_cash and cash >= required:
+                    scheduled_purchase = property_purchase.purchase_for_month(current_month)
+                    scheduled_purchase.validate(None, investments, loans)
+                    purchase_due = True
+            if purchase_due and selected_rent_expense is not None:
                 matches = [item for item in expenses if item.name == selected_rent_expense]
                 if len(matches) != 1:
                     raise ValueError("selected_rent_expense must identify exactly one existing expense")
@@ -239,21 +251,6 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             # A purchase closes after all scheduled activity for the month.
             # Appending its mortgage here means the first repayment is due next
             # month, while the new property is included in this month's snapshot.
-            purchase_due = (
-                scheduled_purchase is not None
-                and scheduled_purchase.purchase_month == current_month
-            )
-            if automatic_purchase and not monthly_details["purchase_outcome"]["purchased"]:
-                template = property_purchase.purchase
-                required = (
-                    template.down_payment + template.transaction_fees
-                    + property_purchase.minimum_cash_reserve
-                )
-                cash = bank_account.subaccounts["Main"]
-                if cash >= property_purchase.minimum_available_cash and cash >= required:
-                    scheduled_purchase = property_purchase.purchase_for_month(current_month)
-                    scheduled_purchase.validate(None, investments, loans)
-                    purchase_due = True
             if purchase_due:
                 event = execute_property_purchase(
                     scheduled_purchase, bank_account, investments, loans,
@@ -296,6 +293,8 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                     if event["yearly_tax"] > 0 else None,
                 ):
                     if linked is not None:
+                        if linked.name in expense_names:
+                            raise ValueError(f"Linked property expense name '{linked.name}' already exists")
                         expenses.append(linked)
                         expense_names.append(linked.name)
                         monthly_details["expense_values"][linked.name] = [0] * current_month
