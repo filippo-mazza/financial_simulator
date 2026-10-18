@@ -20,7 +20,10 @@ The preview calls Loan.monthly_repayment. Import restoration populates purchase
 fields and selected rent; asdict export preserves optional fields and legacy
 exports omit them. Results report purchased trajectory count/share and actual
 month range, or no purchase. The existing engine records purchase_outcome and
-purchase_events and applies the #81 rent transition.
+purchase_events and applies the #81 rent transition. The UI normalizes scheduled
+purchase_events into the same outcome display shape as automatic purchases,
+clears purchase widget keys during import, and clamps scheduled months to the
+current horizon. Regression coverage verifies outcome normalization.
 
 
 FAST START

@@ -397,6 +397,17 @@ def _whole_amount(value):
     return int(value)
 
 
+def purchase_outcome_from_details(details):
+    """Normalize scheduled and automatic purchase details for the results UI."""
+    outcome = details.get("purchase_outcome")
+    if outcome is not None:
+        return outcome
+    events = details.get("purchase_events", [])
+    if not events:
+        return None
+    return {"purchased": True, "purchase_month": events[0]["month"]}
+
+
 def monte_carlo_view_explanation(view_mode, simulation_count):
     """Return plain-language guidance for interpreting Monte Carlo views."""
     if view_mode == "Overview":
@@ -850,6 +861,13 @@ def main():
             if isinstance(purchase, AutomaticPurchasePolicy):
                 st.session_state.purchase_min_cash = purchase.minimum_available_cash
                 st.session_state.purchase_reserve = purchase.minimum_cash_reserve
+        for key in (
+            "purchase_price", "purchase_down_pct", "purchase_fees", "purchase_rate",
+            "purchase_term", "purchase_fixed", "purchase_monthly_cost",
+            "purchase_yearly_tax", "purchase_threshold", "purchase_reserve_input",
+            "purchase_month",
+        ):
+            st.session_state.pop(key, None)
         st.session_state.selected_rent_expense = imported.selected_rent_expense
         for key in list(st.session_state):
             if key.startswith("assumption_"):
@@ -1327,7 +1345,14 @@ def main():
                     st.session_state.purchase_min_cash = st.number_input("Minimum cash threshold", min_value=0.0, value=float(st.session_state.purchase_min_cash), step=500.0, key="purchase_threshold")
                     st.session_state.purchase_reserve = st.number_input("Minimum emergency reserve", min_value=0.0, value=float(st.session_state.purchase_reserve), step=500.0, key="purchase_reserve_input")
                 else:
-                    purchase["purchase_month"] = st.number_input("Purchase month (1-based)", min_value=1, max_value=years * 12, value=max(1, int(purchase.get("purchase_month", 0)) + 1), key="purchase_month") - 1
+                    max_purchase_month = years * 12
+                    current_purchase_month = min(
+                        max_purchase_month, max(1, int(purchase.get("purchase_month", 0)) + 1)
+                    )
+                    purchase["purchase_month"] = st.number_input(
+                        "Purchase month (1-based)", min_value=1, max_value=max_purchase_month,
+                        value=current_purchase_month, key="purchase_month",
+                    ) - 1
                 rent_options = ["Do not stop any expense"] + [item["name"] for item in st.session_state.expenses]
                 selected = st.selectbox("Rent expense to stop after purchase", rent_options, index=(rent_options.index(st.session_state.selected_rent_expense) if st.session_state.selected_rent_expense in rent_options else 0), key="purchase_rent")
                 st.session_state.selected_rent_expense = None if selected == rent_options[0] else selected
@@ -1490,7 +1515,7 @@ def main():
     run_id = stored_result.get("run_id", "legacy")
 
     if config.property_purchase is not None:
-        outcomes = [t.details.get("purchase_outcome") for t in trajectories]
+        outcomes = [purchase_outcome_from_details(t.details) for t in trajectories]
         purchased = [o for o in outcomes if o and o.get("purchased")]
         if purchased:
             months = [o["purchase_month"] + 1 for o in purchased]

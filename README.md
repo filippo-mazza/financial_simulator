@@ -24,9 +24,11 @@ at closing. Automatic mode uses the first eligible month with both a cash
 threshold and emergency reserve; scheduled mode accepts a user-facing 1-based
 month. The panel previews upfront cash, mortgage principal, and the existing
 loan model's payment. Results report purchased trajectories and actual months,
-or that no purchase occurred. Settings round-trip through JSON; legacy exports
-remain disabled. Comparison dashboards, closing delays, and bank affordability
-approval are not implemented.
+or that no purchase occurred, including scheduled purchases recorded by the
+engine. Imported purchase settings replace stale widget values, and a scheduled
+month is clamped when the simulation horizon is shortened. Settings round-trip
+through JSON; legacy exports remain disabled. Comparison dashboards, closing
+delays, and bank affordability approval are not implemented.
 
 Please be advised that the content presented in the previous article, code snippets, and any related materials do not constitute financial advice. I am not a licensed financial advisor. The information and tools are provided merely as examples and should not be construed as direct, personal, or professional financial guidance.
 
