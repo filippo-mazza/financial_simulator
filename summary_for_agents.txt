@@ -52,6 +52,11 @@ investment.py
   monthly compounding, stock dividends, explicit contributions, per-investment
   automatic contribution settings, and contribution fees.
 
+property_purchase.py
+  Validated atomic property purchases and the optional cash-triggered purchase
+  policy. Purchases create the property investment, pay down payment and fees,
+  derive mortgage principal, and emit accounting events for the simulation.
+
 loan.py
   Fixed-payment amortization and optional fixed-interest behavior.
 
@@ -90,6 +95,14 @@ Real estate is special:
     real-estate investment;
   - annual property tax is charged in months 12, 24, ... and then inflated by
     the housing rate for the next year.
+
+Property purchases are opt-in and validated before mutation. A purchase records
+the property at nominal price, expenses transaction fees, derives mortgage
+principal as price minus down payment, and starts mortgage repayment in the
+following month. A scheduled recurring rent expense can end at the purchase
+month; linked property expenses and annual tax then continue under the property
+investment. Automatic purchases additionally require the configured available
+cash threshold and minimum reserve and can happen at most once per trajectory.
 
 Automatic cash-sweep contributions are configured per investment and supported
 only for stock and safe types. They default to disabled. Each enabled investment
@@ -213,11 +226,14 @@ features.financial_assumptions version 1. Missing assumptions in older exports
 resolve to the historical defaults; explicit zero values are preserved. The UI
 edits them in a dedicated sidebar expander, and FinancialAssumptions validates
 finite values, exact mapping keys, bounded rates, and nonnegative fees.
+Property-purchase exports preserve fixed or automatic purchase configuration,
+purchase events, fees, and purchase outcome details.
 
 
 TESTING AND CHANGE CHECKLIST
 ----------------------------
-Primary command: python3 -m pytest -q
+Primary command: .venv/bin/python -m pytest -q (use a unique writable
+--basetemp when needed; tests run in an isolated Python 3 virtual environment).
 
 Before changing behavior:
   - Add/update tests in tests/test_app.py for app/config/result behavior.
