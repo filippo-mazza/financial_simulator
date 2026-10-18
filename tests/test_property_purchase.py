@@ -70,3 +70,43 @@ def test_purchase_configuration_round_trips_and_legacy_config_stays_disabled():
 
     legacy = read_simulation_export(create_simulation_export(SimulationConfig(), *run_simulation(SimulationConfig())))
     assert legacy.property_purchase is None
+
+
+def test_delayed_purchase_pads_detail_series_and_exports():
+    config = SimulationConfig(
+        years=1, initial_cash=200_000, investments=[], incomes=[], expenses=[], loans=[],
+        property_purchase=PropertyPurchase(100_000, 20, 500, 0, 25, purchase_month=3),
+    )
+
+    result = run_simulation(config)
+    details = result[2]
+
+    assert details["investment_values"]["Purchased property"][:3] == [0, 0, 0]
+    assert details["loan_balances"]["Property mortgage"][:3] == [0, 0, 0]
+    assert details["loan_payments"]["Property mortgage"][:3] == [0, 0, 0]
+    assert len(details["investment_values"]["Purchased property"]) == 12
+    assert len(details["loan_balances"]["Property mortgage"]) == 12
+    create_simulation_export(config, *result)
+
+
+def test_purchase_uses_scenario_real_estate_return_assumptions():
+    means = dict(SimulationConfig().assumptions.investment_return_means)
+    means["real_estate"] = 0
+    std_devs = dict(SimulationConfig().assumptions.investment_return_std_devs)
+    std_devs["real_estate"] = 0
+    config = SimulationConfig(
+        years=1, initial_cash=200_000, investments=[], incomes=[], expenses=[], loans=[],
+        assumptions=replace_assumptions(means, std_devs),
+        property_purchase=PropertyPurchase(100_000, 20, purchase_month=0),
+    )
+
+    result = run_simulation(config)
+    assert result[2]["investment_values"]["Purchased property"][-1] == 100_000
+
+
+def replace_assumptions(means, std_devs):
+    from financial_assumptions import FinancialAssumptions
+    return FinancialAssumptions(
+        investment_return_means=means,
+        investment_return_std_devs=std_devs,
+    )

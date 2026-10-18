@@ -34,7 +34,8 @@ def _withdraw_for_simulation(bank_account, amount, month, reason):
 
 
 def compute_net_worth_over_time(years, bank_account, investments, loans, income_sources,
-                                expenses, seed=None, property_purchase=None):
+                                expenses, seed=None, property_purchase=None,
+                                assumptions=None):
     """Simulate net worth month by month.
 
     When ``seed`` is provided, all simulations using the standard-library random
@@ -218,15 +219,29 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                     and property_purchase.purchase_month == current_month):
                 event = execute_property_purchase(
                     property_purchase, bank_account, investments, loans,
+                    annual_return_mean=(
+                        assumptions.investment_return_means["real_estate"]
+                        if assumptions is not None else None
+                    ),
+                    annual_return_std_dev=(
+                        assumptions.investment_return_std_devs["real_estate"]
+                        if assumptions is not None else None
+                    ),
                 )
                 month_purchase_fee = event["transaction_fees"]
                 monthly_details["purchase_events"].append(event)
                 investment_names.append(event["property_name"])
-                monthly_details["investment_values"][event["property_name"]] = []
+                monthly_details["investment_values"][event["property_name"]] = (
+                    [0] * current_month
+                )
                 if event["mortgage_name"] is not None:
                     loan_names.append(event["mortgage_name"])
-                    monthly_details["loan_balances"][event["mortgage_name"]] = []
-                    monthly_details["loan_payments"][event["mortgage_name"]] = []
+                    monthly_details["loan_balances"][event["mortgage_name"]] = (
+                        [0] * current_month
+                    )
+                    monthly_details["loan_payments"][event["mortgage_name"]] = (
+                        [0] * current_month
+                    )
 
             # Store ending details after every transaction for the month, so
             # cash and investments reconcile with the net-worth snapshot.

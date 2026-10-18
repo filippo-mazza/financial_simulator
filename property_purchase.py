@@ -69,7 +69,9 @@ class PropertyPurchase:
         return self
 
 
-def execute_property_purchase(purchase, bank_account, investments, loans):
+def execute_property_purchase(
+        purchase, bank_account, investments, loans,
+        annual_return_mean=None, annual_return_std_dev=None):
     """Validate and apply one purchase, returning its accounting event.
 
     Objects are constructed before cash is withdrawn, so validation and object
@@ -78,6 +80,8 @@ def execute_property_purchase(purchase, bank_account, investments, loans):
     purchase.validate(bank_account, investments, loans)
     property_asset = Investment(
         purchase.property_name, "real_estate", purchase.purchase_price, 0,
+        annual_return_mean=annual_return_mean,
+        annual_return_std_dev=annual_return_std_dev,
     )
     mortgage = None
     if purchase.mortgage_principal > 0:

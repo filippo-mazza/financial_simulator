@@ -298,6 +298,7 @@ def run_simulation(config: SimulationConfig):
         return compute_net_worth_over_time(
             config.years, *components, seed=config.seed,
             property_purchase=config.property_purchase,
+            assumptions=config.assumptions,
         )
     finally:
         random.setstate(random_state)
