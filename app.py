@@ -1350,10 +1350,11 @@ def main():
         ),
     )
     st.info(monte_carlo_view_explanation(view_mode, int(simulation_count)))
-    if int(simulation_count) < LOW_SAMPLE_THRESHOLD:
-        st.warning(monte_carlo_sample_guidance(int(simulation_count)), icon="⚠️")
-    else:
-        st.caption(monte_carlo_sample_guidance(int(simulation_count)))
+    if view_mode == "Overview":
+        if int(simulation_count) < LOW_SAMPLE_THRESHOLD:
+            st.warning(monte_carlo_sample_guidance(int(simulation_count)), icon="⚠️")
+        else:
+            st.caption(monte_carlo_sample_guidance(int(simulation_count)))
     selected_trajectory = None
     if view_mode == "Individual run":
         selected_run = st.selectbox(

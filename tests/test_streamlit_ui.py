@@ -50,6 +50,7 @@ assert any('not a guaranteed or individually realizable household path' in item.
 next(item for item in app.radio if item.label == 'Result view').set_value('Individual run').run(timeout=30)
 assert not app.exception
 assert any('one simulated trajectory rather than an average' in item.value for item in app.info)
+assert not any('Frequencies and other summary values' in item.value for item in app.warning)
 """
     environment = dict(os.environ)
     environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
