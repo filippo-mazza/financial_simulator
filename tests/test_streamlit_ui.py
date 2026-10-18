@@ -59,3 +59,22 @@ assert any('one simulated trajectory rather than an average' in item.value for i
         text=True, capture_output=True, check=False, timeout=60,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_monte_carlo_low_sample_warning_is_visible(tmp_path):
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+next(item for item in app.number_input if item.label == 'Number of simulations').set_value(2)
+next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=30)
+assert not app.exception
+assert any('especially small' in item.value and 'tail probabilities' in item.value for item in app.warning)
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr

@@ -25,6 +25,7 @@ FINANCIAL_ASSUMPTIONS_EXPORT_VERSION = 1
 MONTE_CARLO_TRAJECTORIES_EXPORT_VERSION = 1
 SIMULATION_DETAIL_VERSION = 3
 MAX_SIMULATION_COUNT = 25
+LOW_SAMPLE_THRESHOLD = 10
 AUTO_INVEST_TYPES = frozenset({"stock", "safe"})
 LEGACY_AUTO_INVEST_WARNING = (
     "This export predates or uses an unsupported version of configurable "
@@ -369,7 +370,8 @@ def monte_carlo_view_explanation(view_mode, simulation_count):
             )
         return (
             f"**Arithmetic-average overview:** each month is the average across "
-            f"{simulation_count} simulated runs. This is a summary, not a guaranteed "
+            f"{simulation_count} simulated runs. These are estimates based on the "
+            f"selected run count, not a guaranteed "
             "or individually realizable household path. Average cash and net worth can "
             "hide liquidity shortfalls in individual runs. Quantitative downside metrics "
             "and uncertainty shading are tracked in "
@@ -380,6 +382,21 @@ def monte_carlo_view_explanation(view_mode, simulation_count):
         "**Individual run:** this is one simulated trajectory rather than an average. "
         "Switch runs to inspect outcomes, including shortfalls the Overview may hide."
     )
+
+
+def monte_carlo_sample_guidance(simulation_count):
+    """Explain the limits of estimates derived from the selected run count."""
+    estimate = (
+        f"Frequencies and other summary values are estimates based on the selected "
+        f"{simulation_count} simulation(s)."
+    )
+    if simulation_count < LOW_SAMPLE_THRESHOLD:
+        return (
+            f"{estimate} With fewer than {LOW_SAMPLE_THRESHOLD} runs, the sample is "
+            "especially small: do not treat it as reliable evidence for tail "
+            "probabilities, percentiles, or confidence claims."
+        )
+    return estimate
 
 
 def _consume_run_request(session_state, button_clicked):
@@ -1231,13 +1248,18 @@ def main():
     with run_copy:
         st.subheader("Run projection")
         st.caption(
-            "Average multiple stochastic simulations for a smoother long-term projection."
+            "Average multiple stochastic simulations for a smoother long-term projection. "
+            f"The current maximum is {MAX_SIMULATION_COUNT} runs for performance and "
+            "export-size reasons, not a guarantee of statistical reliability. A larger "
+            "tail-risk option would require separate runtime and export-capacity design."
         )
     with run_controls:
         simulation_count = st.number_input(
             "Number of simulations", min_value=1, max_value=MAX_SIMULATION_COUNT,
             value=MAX_SIMULATION_COUNT, step=1,
-            help="More runs produce a smoother average but take longer.",
+            help=("More runs produce a smoother average but take longer. Results remain "
+                  "estimates based on the selected run count; the 25-run maximum is a "
+                  "performance/export limit, not a statistical sufficiency guarantee."),
         )
         run_requested = _consume_run_request(
             st.session_state,
@@ -1328,6 +1350,10 @@ def main():
         ),
     )
     st.info(monte_carlo_view_explanation(view_mode, int(simulation_count)))
+    if int(simulation_count) < LOW_SAMPLE_THRESHOLD:
+        st.warning(monte_carlo_sample_guidance(int(simulation_count)), icon="⚠️")
+    else:
+        st.caption(monte_carlo_sample_guidance(int(simulation_count)))
     selected_trajectory = None
     if view_mode == "Individual run":
         selected_run = st.selectbox(
