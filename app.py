@@ -17,9 +17,9 @@ from expense import AgeBasedExpense, Expense, YearlyExpense
 from financial_assumptions import FinancialAssumptions, INCOME_TYPES, INVESTMENT_TYPES
 from income_source import IncomeSource
 from investment import Investment
-from loan import Loan
 from utils import compute_net_worth_over_time
 from property_purchase import PropertyPurchase, AutomaticPurchasePolicy
+from loan import Loan
 
 AUTO_INVEST_EXPORT_VERSION = 1
 FINANCIAL_ASSUMPTIONS_EXPORT_VERSION = 1
@@ -131,6 +131,13 @@ class SimulationTrajectory:
     @property
     def result(self):
         return self.net_worth, self.repayment_dates, self.details
+
+
+def property_purchase_payment(purchase):
+    """Return the preview payment using the authoritative Loan calculation."""
+    return Loan("preview", purchase.mortgage_principal,
+                purchase.mortgage_interest_rate, purchase.mortgage_duration_years,
+                purchase.fixed_rate).monthly_repayment
 
 
 @dataclass(frozen=True)
@@ -785,6 +792,18 @@ def main():
         "duration_years": 25, "fixed_rate": False, "already_paid": 0.0,
     }])
     st.session_state.setdefault("financial_assumptions", asdict(FinancialAssumptions()))
+    st.session_state.setdefault("purchase_enabled", False)
+    st.session_state.setdefault("purchase_mode", "Automatic — when affordable")
+    st.session_state.setdefault("purchase_min_cash", 10000.0)
+    st.session_state.setdefault("purchase_reserve", 0.0)
+    st.session_state.setdefault("selected_rent_expense", None)
+    st.session_state.setdefault("purchase_fields", {
+        "purchase_price": 250000.0, "down_payment_percentage": 20.0,
+        "transaction_fees": 5000.0, "mortgage_interest_rate": 4.0,
+        "mortgage_duration_years": 25, "purchase_month": 0,
+        "property_name": "Purchased property", "mortgage_name": "Property mortgage",
+        "fixed_rate": False, "monthly_expenses": 0.0, "yearly_tax": 0.0,
+    })
     for collection_name in ("investments", "incomes", "expenses", "loans", "dependents"):
         for item in st.session_state[collection_name]:
             item.setdefault("_id", uuid.uuid4().hex)
@@ -819,6 +838,19 @@ def main():
         st.session_state.scenario_initial_cash = float(_whole_amount(imported.initial_cash))
         st.session_state.scenario_yearly_fee = float(_whole_amount(imported.yearly_fee))
         st.session_state.financial_assumptions = asdict(imported.assumptions)
+        purchase = imported.property_purchase
+        st.session_state.purchase_enabled = purchase is not None
+        st.session_state.purchase_mode = (
+            "Automatic — when affordable" if isinstance(purchase, AutomaticPurchasePolicy)
+            else "Scheduled — in a selected month"
+        )
+        template = purchase.purchase if isinstance(purchase, AutomaticPurchasePolicy) else purchase
+        if template is not None:
+            st.session_state.purchase_fields = asdict(template)
+            if isinstance(purchase, AutomaticPurchasePolicy):
+                st.session_state.purchase_min_cash = purchase.minimum_available_cash
+                st.session_state.purchase_reserve = purchase.minimum_cash_reserve
+        st.session_state.selected_rent_expense = imported.selected_rent_expense
         for key in list(st.session_state):
             if key.startswith("assumption_"):
                 del st.session_state[key]
@@ -1272,6 +1304,36 @@ def main():
         ):
             render_loans()
 
+        with st.container(border=True):
+            st.subheader("Purchase Property · optional")
+            st.session_state.purchase_enabled = st.checkbox(
+                "Enable future property purchase", value=st.session_state.purchase_enabled,
+                help="Disabled preserves the existing scenario exactly.")
+            purchase = st.session_state.purchase_fields
+            if st.session_state.purchase_enabled:
+                st.session_state.purchase_mode = st.radio(
+                    "Timing", ("Automatic — when affordable", "Scheduled — in a selected month"),
+                    index=0 if st.session_state.purchase_mode.startswith("Automatic") else 1,
+                    help="Automatic mode purchases once when both cash conditions are met.")
+                purchase["purchase_price"] = st.number_input("Target property price", min_value=1.0, value=float(purchase["purchase_price"]), step=1000.0, key="purchase_price")
+                purchase["down_payment_percentage"] = st.number_input("Down payment (%)", min_value=0.0, max_value=100.0, value=float(purchase["down_payment_percentage"]), key="purchase_down_pct")
+                purchase["transaction_fees"] = st.number_input("One-off transaction fees", min_value=0.0, value=float(purchase["transaction_fees"]), step=500.0, key="purchase_fees")
+                purchase["mortgage_interest_rate"] = st.number_input("Mortgage annual interest (%)", min_value=0.0, value=float(purchase["mortgage_interest_rate"]), step=0.1, key="purchase_rate")
+                purchase["mortgage_duration_years"] = st.number_input("Mortgage term (years)", min_value=1, value=int(purchase["mortgage_duration_years"]), key="purchase_term")
+                purchase["fixed_rate"] = st.checkbox("Fixed-rate mortgage", value=bool(purchase["fixed_rate"]), key="purchase_fixed")
+                purchase["monthly_expenses"] = st.number_input("Monthly ownership costs", min_value=0.0, value=float(purchase["monthly_expenses"]), step=25.0, key="purchase_monthly_cost")
+                purchase["yearly_tax"] = st.number_input("Annual ownership tax", min_value=0.0, value=float(purchase["yearly_tax"]), step=100.0, key="purchase_yearly_tax")
+                if st.session_state.purchase_mode.startswith("Automatic"):
+                    st.session_state.purchase_min_cash = st.number_input("Minimum cash threshold", min_value=0.0, value=float(st.session_state.purchase_min_cash), step=500.0, key="purchase_threshold")
+                    st.session_state.purchase_reserve = st.number_input("Minimum emergency reserve", min_value=0.0, value=float(st.session_state.purchase_reserve), step=500.0, key="purchase_reserve_input")
+                else:
+                    purchase["purchase_month"] = st.number_input("Purchase month (1-based)", min_value=1, max_value=years * 12, value=max(1, int(purchase.get("purchase_month", 0)) + 1), key="purchase_month") - 1
+                rent_options = ["Do not stop any expense"] + [item["name"] for item in st.session_state.expenses]
+                selected = st.selectbox("Rent expense to stop after purchase", rent_options, index=(rent_options.index(st.session_state.selected_rent_expense) if st.session_state.selected_rent_expense in rent_options else 0), key="purchase_rent")
+                st.session_state.selected_rent_expense = None if selected == rent_options[0] else selected
+                preview = PropertyPurchase(**purchase)
+                st.info(f"Configuration estimate: upfront cash **${preview.down_payment + preview.transaction_fees:,.0f}**, mortgage principal **${preview.mortgage_principal:,.0f}**, estimated payment **${property_purchase_payment(preview):,.0f}/month**. Automatic purchase is stochastic and may not occur.")
+
         assumptions = st.session_state.financial_assumptions
         with st.expander(
             "Financial assumptions · returns, dividends, fees and taxes",
@@ -1344,6 +1406,13 @@ def main():
             st.button("▶ Run simulations", type="primary", use_container_width=True),
         )
 
+    purchase_config = None
+    if st.session_state.purchase_enabled:
+        purchase_template = PropertyPurchase(**st.session_state.purchase_fields)
+        purchase_config = (
+            AutomaticPurchasePolicy(purchase_template, float(st.session_state.purchase_min_cash), float(st.session_state.purchase_reserve))
+            if st.session_state.purchase_mode.startswith("Automatic") else purchase_template
+        )
     config = SimulationConfig(
         years=years, seed=42, initial_cash=_whole_amount(initial_cash),
         yearly_fee=_whole_amount(yearly_fee),
@@ -1379,6 +1448,8 @@ def main():
             item["school_start_age"], _whole_amount(item["school_monthly_cost"]),
         ) for item in st.session_state.dependents],
         assumptions=FinancialAssumptions(**st.session_state.financial_assumptions),
+        property_purchase=purchase_config,
+        selected_rent_expense=st.session_state.selected_rent_expense,
     )
 
     scenario_fingerprint = json.dumps(asdict(config), sort_keys=True)
@@ -1417,6 +1488,15 @@ def main():
     average_result = stored_result["result"]
     trajectories = stored_result["trajectories"]
     run_id = stored_result.get("run_id", "legacy")
+
+    if config.property_purchase is not None:
+        outcomes = [t.details.get("purchase_outcome") for t in trajectories]
+        purchased = [o for o in outcomes if o and o.get("purchased")]
+        if purchased:
+            months = [o["purchase_month"] + 1 for o in purchased]
+            st.success(f"Purchased in {len(purchased)} of {len(trajectories)} trajectories ({len(purchased) / len(trajectories):.0%}); purchase months ranged from {min(months)} to {max(months)}.")
+        else:
+            st.info("Not purchased during this simulation.")
 
     st.subheader("Monte Carlo analysis")
     view_mode = st.radio(

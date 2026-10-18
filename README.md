@@ -16,6 +16,18 @@ The content and code provided in this context were produced outside of my profes
 
 * Disclaimer: Not Financial Advice * 
 
+## Optional Purchase Property workflow
+
+The sidebar's opt-in Purchase Property section configures price, down payment,
+fees, mortgage terms, ownership costs, and an exact recurring expense to stop
+at closing. Automatic mode uses the first eligible month with both a cash
+threshold and emergency reserve; scheduled mode accepts a user-facing 1-based
+month. The panel previews upfront cash, mortgage principal, and the existing
+loan model's payment. Results report purchased trajectories and actual months,
+or that no purchase occurred. Settings round-trip through JSON; legacy exports
+remain disabled. Comparison dashboards, closing delays, and bank affordability
+approval are not implemented.
+
 Please be advised that the content presented in the previous article, code snippets, and any related materials do not constitute financial advice. I am not a licensed financial advisor. The information and tools are provided merely as examples and should not be construed as direct, personal, or professional financial guidance.
 
 Use at Your Own Risk:
