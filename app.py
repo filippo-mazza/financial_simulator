@@ -27,6 +27,11 @@ MONTE_CARLO_TRAJECTORIES_EXPORT_VERSION = 1
 SIMULATION_DETAIL_VERSION = 3
 MAX_SIMULATION_COUNT = 25
 LOW_SAMPLE_THRESHOLD = 10
+CHART_EVENT_COLORS = {
+    "Loan repaid": "#e06c75",
+    "School starts": "#b7791f",
+    "Property purchase": "#0e7490",
+}
 AUTO_INVEST_TYPES = frozenset({"stock", "safe"})
 LEGACY_AUTO_INVEST_WARNING = (
     "This export predates or uses an unsupported version of configurable "
@@ -1664,8 +1669,8 @@ def main():
         event_values = [{**event, "label_height": label_height} for event in events]
         event_data = alt.Data(values=event_values)
         event_colors = alt.Scale(
-            domain=["Loan repaid", "School starts"],
-            range=["#e06c75", "#b7791f"],
+            domain=list(CHART_EVENT_COLORS),
+            range=list(CHART_EVENT_COLORS.values()),
         )
         rules = alt.Chart(event_data).mark_rule(
             strokeDash=[7, 5], strokeWidth=2, opacity=0.85,

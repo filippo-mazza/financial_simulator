@@ -250,6 +250,8 @@ edits them in a dedicated sidebar expander, and FinancialAssumptions validates
 finite values, exact mapping keys, bounded rates, and nonnegative fees.
 Property-purchase exports preserve fixed or automatic purchase configuration,
 purchase events, fees, and purchase outcome details.
+Completed purchase events appear in the interactive chart as a distinct labeled
+vertical dashed line; no-purchase outcomes do not manufacture an event marker.
 
 
 TESTING AND CHANGE CHECKLIST

@@ -6,7 +6,8 @@ import math
 import pytest
 
 from bank_account import InsufficientFundsException
-from app import (_consume_run_request, _whole_amount, DependentConfig, ExpenseConfig,
+from app import (CHART_EVENT_COLORS, _consume_run_request, _whole_amount,
+                 DependentConfig, ExpenseConfig,
                  FinancialAssumptions, IncomeConfig, InvestmentConfig, LoanConfig, SimulationConfig,
                  build_components, build_simulation_events, create_simulation_export,
                  get_month_details, monte_carlo_sample_guidance,
@@ -122,6 +123,32 @@ def test_chart_events_include_school_starts_and_loan_repayments():
         {"month": 13, "label": "School starts for Child 1", "event_type": "School starts"},
         {"month": 37, "label": "School starts for Child 2", "event_type": "School starts"},
     ]
+
+
+def test_chart_events_include_only_completed_property_purchases():
+    config = SimulationConfig(
+        dependents=[],
+        property_purchase=AutomaticPurchasePolicy(
+            PropertyPurchase(100_000, 20, property_name="Family home"),
+            20_000, 0,
+        ),
+    )
+
+    completed = build_simulation_events(
+        config, {}, months_simulated=24,
+        purchase_events=[{"month": 7, "property_name": "Family home"}],
+    )
+    not_completed = build_simulation_events(
+        config, {}, months_simulated=24, purchase_events=[],
+    )
+
+    assert completed == [{
+        "month": 8,
+        "label": "Family home purchased",
+        "event_type": "Property purchase",
+    }]
+    assert not_completed == []
+    assert CHART_EVENT_COLORS["Property purchase"] == "#0e7490"
 
 
 def test_run_simulation_is_reproducible_and_isolated():
