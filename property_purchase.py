@@ -4,7 +4,7 @@ This deliberately models only a 100%-owned property purchased at its nominal
 price.  Fees are paid from cash and are not capitalised into the asset.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
 from bank_account import InsufficientFundsException
@@ -14,6 +14,33 @@ from loan import Loan
 
 class PropertyPurchaseError(ValueError):
     """Raised when a purchase cannot be validated or applied."""
+
+
+@dataclass(frozen=True)
+class AutomaticPurchasePolicy:
+    """One purchase that closes when a trajectory has enough Main cash.
+
+    ``minimum_cash_reserve`` is in addition to the purchase's down payment and
+    fees.  The embedded purchase is a template; its month is chosen by the
+    simulation when the first eligible month is reached.
+    """
+
+    purchase: "PropertyPurchase"
+    minimum_available_cash: float
+    minimum_cash_reserve: float
+
+    def validate(self):
+        for value, label in (
+            (self.minimum_available_cash, "minimum available cash"),
+            (self.minimum_cash_reserve, "minimum cash reserve"),
+        ):
+            if not math.isfinite(value) or value < 0:
+                raise PropertyPurchaseError(f"{label} must be a finite nonnegative amount")
+        self.purchase.validate(None)
+        return self
+
+    def purchase_for_month(self, month):
+        return replace(self.purchase, purchase_month=month)
 
 
 @dataclass(frozen=True)

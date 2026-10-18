@@ -2,9 +2,12 @@ import math
 
 import pytest
 
-from app import SimulationConfig, create_simulation_export, read_simulation_export, run_simulation
+from app import (SimulationConfig, create_simulation_export, read_simulation_export,
+                 run_simulation, run_simulation_batch)
 from bank_account import BankAccount, InsufficientFundsException
-from property_purchase import PropertyPurchase, PropertyPurchaseError, execute_property_purchase
+from property_purchase import (AutomaticPurchasePolicy, PropertyPurchase,
+                               PropertyPurchaseError, execute_property_purchase)
+from utils import compute_net_worth_over_time
 
 
 def test_purchase_debits_cash_and_adds_asset_and_mortgage_once():
@@ -110,3 +113,37 @@ def replace_assumptions(means, std_devs):
         investment_return_means=means,
         investment_return_std_devs=std_devs,
     )
+
+
+def test_automatic_purchase_uses_threshold_equality_and_preserves_reserve():
+    policy = AutomaticPurchasePolicy(PropertyPurchase(100_000, 20, 500), 30_500, 10_000)
+    result = compute_net_worth_over_time(
+        1, BankAccount(30_500), [], [], [], [], property_purchase=policy,
+    )
+    details = result[2]
+    assert details["purchase_outcome"]["purchased"] is True
+    assert details["purchase_outcome"]["purchase_month"] == 0
+    assert details["bank_account"][0] == 10_000
+    assert len(details["purchase_events"]) == 1
+
+
+def test_automatic_purchase_waits_when_fees_and_reserve_are_not_covered():
+    policy = AutomaticPurchasePolicy(PropertyPurchase(100_000, 20, 500), 20_000, 10_000)
+    result = compute_net_worth_over_time(
+        1, BankAccount(20_000), [], [], [], [], property_purchase=policy,
+    )
+    assert result[2]["purchase_outcome"]["purchased"] is False
+    assert result[2]["purchase_outcome"]["purchase_month"] is None
+    assert result[2]["purchase_events"] == []
+
+
+def test_automatic_purchase_is_independent_per_trajectory():
+    config = SimulationConfig(
+        years=1, initial_cash=0, monthly_income=1_000, monthly_expense=0,
+        property_purchase=AutomaticPurchasePolicy(PropertyPurchase(5_000, 20), 1_000, 0),
+    )
+    batch = run_simulation_batch(config, 2)
+    outcomes = [trajectory.details["purchase_outcome"] for trajectory in batch.trajectories]
+    assert all(outcome["purchased"] for outcome in outcomes)
+    assert all(0 <= outcome["purchase_month"] < 12 for outcome in outcomes)
+    assert len({outcome["purchase_month"] for outcome in outcomes}) == 1

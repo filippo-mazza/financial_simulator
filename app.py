@@ -19,7 +19,7 @@ from income_source import IncomeSource
 from investment import Investment
 from loan import Loan
 from utils import compute_net_worth_over_time
-from property_purchase import PropertyPurchase
+from property_purchase import PropertyPurchase, AutomaticPurchasePolicy
 
 AUTO_INVEST_EXPORT_VERSION = 1
 FINANCIAL_ASSUMPTIONS_EXPORT_VERSION = 1
@@ -115,7 +115,7 @@ class SimulationConfig:
     assumptions: FinancialAssumptions = field(default_factory=FinancialAssumptions)
     # Opt-in; purchase UI and savings-trigger policy are intentionally separate
     # follow-up features.  The asset is recorded at price and is 100% owned.
-    property_purchase: PropertyPurchase | None = None
+    property_purchase: PropertyPurchase | AutomaticPurchasePolicy | None = None
 
 
 @dataclass(frozen=True)
@@ -337,15 +337,20 @@ def run_simulation_batch(config: SimulationConfig, simulation_count: int):
         "automatic_contribution_fees", "income_rates", "income_values",
         "expense_values", "loan_balances", "loan_payments",
     ):
+        item_names = set().union(*(
+            trajectory.details[detail_name] for trajectory in trajectories
+        ))
         average_details[detail_name] = {
             item_name: [
                 fmean(month)
                 for month in zip(*(
-                    trajectory.details[detail_name][item_name]
+                    trajectory.details[detail_name].get(
+                        item_name, [0] * len(trajectory.net_worth)
+                    )
                     for trajectory in trajectories
                 ))
             ]
-            for item_name in trajectories[0].details[detail_name]
+            for item_name in item_names
         }
     if "purchase_fees" in trajectories[0].details:
         average_details["purchase_fees"] = [
@@ -354,6 +359,16 @@ def run_simulation_batch(config: SimulationConfig, simulation_count: int):
             ))
         ]
         average_details["purchase_events"] = trajectories[0].details["purchase_events"]
+    if "purchase_outcome" in trajectories[0].details:
+        average_details["purchase_outcome"] = {
+            "purchased": any(
+                trajectory.details["purchase_outcome"]["purchased"]
+                for trajectory in trajectories
+            ),
+            "trajectories": [
+                trajectory.details["purchase_outcome"] for trajectory in trajectories
+            ],
+        }
     # Loan schedules do not depend on the stochastic investment/income paths.
     average_result = average_net_worth, trajectories[0].repayment_dates, average_details
     return SimulationBatch(average_result, trajectories)
@@ -420,7 +435,8 @@ def _consume_run_request(session_state, button_clicked):
     return bool(button_clicked or run_after_import)
 
 
-def build_simulation_events(config, repayment_dates, months_simulated):
+def build_simulation_events(config, repayment_dates, months_simulated,
+                            purchase_events=None):
     """Return chart events with human-friendly, one-based month numbers."""
     events = [
         {
@@ -444,12 +460,18 @@ def build_simulation_events(config, repayment_dates, months_simulated):
                 "label": f"School starts for {dependent.name}",
                 "event_type": "School starts",
             })
-    if config.property_purchase is not None:
-        events.append({
-            "month": config.property_purchase.purchase_month + 1,
-            "label": f"{config.property_purchase.property_name} purchased",
-            "event_type": "Property purchase",
-        })
+    if purchase_events is None and isinstance(config.property_purchase, PropertyPurchase):
+        purchase_events = [{
+            "month": config.property_purchase.purchase_month,
+            "property_name": config.property_purchase.property_name,
+        }]
+    for purchase in purchase_events or []:
+        if purchase["month"] < months_simulated:
+            events.append({
+                "month": purchase["month"] + 1,
+                "label": f"{purchase['property_name']} purchased",
+                "event_type": "Property purchase",
+            })
     return sorted(events, key=lambda event: (event["month"], event["label"]))
 
 
@@ -571,7 +593,9 @@ def create_simulation_export(config, net_worth, repayment_dates, details,
                 {"name": name, "month": month_index + 1}
                 for name, month_index in repayment_dates.items()
             ],
-            "events": build_simulation_events(config, repayment_dates, len(net_worth)),
+            "events": build_simulation_events(
+                config, repayment_dates, len(net_worth), details.get("purchase_events")
+            ),
         },
     }
     if config.property_purchase is not None:
@@ -655,7 +679,17 @@ def read_simulation_export(data, include_warnings=False):
         if not isinstance(purchase, dict):
             raise ValueError("The exported property purchase must be an object.")
         try:
-            parameters["property_purchase"] = PropertyPurchase(**purchase)
+            if "purchase" in purchase:
+                template = purchase["purchase"]
+                if not isinstance(template, dict):
+                    raise ValueError("automatic purchase template must be an object")
+                parameters["property_purchase"] = AutomaticPurchasePolicy(
+                    PropertyPurchase(**template),
+                    purchase["minimum_available_cash"],
+                    purchase["minimum_cash_reserve"],
+                )
+            else:
+                parameters["property_purchase"] = PropertyPurchase(**purchase)
         except (TypeError, ValueError) as error:
             raise ValueError(f"The exported property purchase is invalid: {error}") from error
     assumptions = parameters.get("assumptions")
@@ -1476,7 +1510,9 @@ def main():
         x=alt.X("month:Q"),
     ).transform_filter(month_selection)
 
-    events = build_simulation_events(config, repayment_dates, len(net_worth))
+    events = build_simulation_events(
+        config, repayment_dates, len(net_worth), details.get("purchase_events")
+    )
     chart = lines + month_hitboxes + selected_month_rule
     if events:
         label_height = max(
