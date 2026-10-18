@@ -153,23 +153,28 @@ class SimulationBatch:
 
 
 def aggregate_purchase_events(trajectories):
-    """Summarize actual per-run purchase months for the averaged Overview."""
-    counts = {}
+    """Return one midpoint marker for actual purchases in the averaged Overview."""
+    purchases = []
     for trajectory in trajectories:
         for event in trajectory.details.get("purchase_events", []):
-            key = event["month"], event["property_name"]
-            counts[key] = counts.get(key, 0) + 1
-    return [
-        {
-            "month": month,
-            "property_name": property_name,
-            "label": (
-                f"{property_name} purchased in {count} of "
-                f"{len(trajectories)} trajectories"
-            ),
-        }
-        for (month, property_name), count in sorted(counts.items())
-    ]
+            purchases.append(event)
+    if not purchases:
+        return []
+
+    months = [event["month"] for event in purchases]
+    first_month, last_month = min(months), max(months)
+    # Round a half-month upward so the marker remains on an actual chart month.
+    midpoint_month = (first_month + last_month + 1) // 2
+    property_name = purchases[0]["property_name"]
+    return [{
+        "month": midpoint_month,
+        "property_name": property_name,
+        "label": (
+            f"{property_name} average purchase period: month {midpoint_month + 1} "
+            f"(range {first_month + 1}–{last_month + 1}; "
+            f"{len(purchases)} of {len(trajectories)} trajectories)"
+        ),
+    }]
 
 
 def build_components(config: SimulationConfig):
