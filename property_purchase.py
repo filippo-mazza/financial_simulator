@@ -20,14 +20,26 @@ class PropertyPurchaseError(ValueError):
 class AutomaticPurchasePolicy:
     """One purchase that closes when a trajectory has enough Main cash.
 
-    ``minimum_cash_reserve`` is in addition to the purchase's down payment and
-    fees.  The embedded purchase is a template; its month is chosen by the
-    simulation when the first eligible month is reached.
+    ``minimum_cash_reserve`` is the cash that must remain immediately after
+    closing, in addition to the purchase's down payment and fees. It is a
+    point-in-time affordability test, not a protected subaccount; later modeled
+    cash flows may use it. The embedded purchase is a template whose month is
+    chosen when the first eligible month is reached.
     """
 
     purchase: "PropertyPurchase"
     minimum_available_cash: float
     minimum_cash_reserve: float
+
+    @property
+    def minimum_required_cash(self):
+        """Cash needed to satisfy both the threshold and closing reserve."""
+        closing_cash = (
+            self.purchase.down_payment
+            + self.purchase.transaction_fees
+            + self.minimum_cash_reserve
+        )
+        return max(self.minimum_available_cash, closing_cash)
 
     def validate(self):
         for value, label in (

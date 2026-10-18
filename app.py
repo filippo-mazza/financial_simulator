@@ -408,6 +408,16 @@ def purchase_outcome_from_details(details):
     return {"purchased": True, "purchase_month": events[0]["month"]}
 
 
+def automatic_purchase_warning(policy, not_purchased, trajectory_count):
+    """Explain a deferred automatic purchase without treating it as an error."""
+    return (
+        "Automatic purchase was not affordable during the simulation in "
+        f"{not_purchased} of {trajectory_count} trajectories. Modeled cash did not "
+        f"reach the required ${policy.minimum_required_cash:,.0f} after monthly "
+        "commitments; those simulations continued without the purchase."
+    )
+
+
 def monte_carlo_view_explanation(view_mode, simulation_count):
     """Return plain-language guidance for interpreting Monte Carlo views."""
     if view_mode == "Overview":
@@ -1343,7 +1353,16 @@ def main():
                 purchase["yearly_tax"] = st.number_input("Annual ownership tax", min_value=0.0, value=float(purchase["yearly_tax"]), step=100.0, key="purchase_yearly_tax")
                 if st.session_state.purchase_mode.startswith("Automatic"):
                     st.session_state.purchase_min_cash = st.number_input("Minimum cash threshold", min_value=0.0, value=float(st.session_state.purchase_min_cash), step=500.0, key="purchase_threshold")
-                    st.session_state.purchase_reserve = st.number_input("Minimum emergency reserve", min_value=0.0, value=float(st.session_state.purchase_reserve), step=500.0, key="purchase_reserve_input")
+                    st.session_state.purchase_reserve = st.number_input(
+                        "Minimum cash retained at closing", min_value=0.0,
+                        value=float(st.session_state.purchase_reserve), step=500.0,
+                        key="purchase_reserve_input",
+                        help=(
+                            "Cash left immediately after the purchase. This is an "
+                            "affordability check, not a protected account; later expenses, "
+                            "payments, and unforeseen costs can use it."
+                        ),
+                    )
                 else:
                     max_purchase_month = years * 12
                     current_purchase_month = min(
@@ -1357,7 +1376,7 @@ def main():
                 selected = st.selectbox("Rent expense to stop after purchase", rent_options, index=(rent_options.index(st.session_state.selected_rent_expense) if st.session_state.selected_rent_expense in rent_options else 0), key="purchase_rent")
                 st.session_state.selected_rent_expense = None if selected == rent_options[0] else selected
                 preview = PropertyPurchase(**purchase)
-                st.info(f"Configuration estimate: upfront cash **${preview.down_payment + preview.transaction_fees:,.0f}**, mortgage principal **${preview.mortgage_principal:,.0f}**, estimated payment **${property_purchase_payment(preview):,.0f}/month**. Automatic purchase is stochastic and may not occur.")
+                st.info(f"Configuration estimate: upfront cash **${preview.down_payment + preview.transaction_fees:,.0f}**, mortgage principal **${preview.mortgage_principal:,.0f}**, estimated payment **${property_purchase_payment(preview):,.0f}/month**. Automatic purchase is stochastic and may not occur. The configured closing cash is a point-in-time minimum, not a protected account.")
 
         assumptions = st.session_state.financial_assumptions
         with st.expander(
@@ -1520,7 +1539,13 @@ def main():
         if purchased:
             months = [o["purchase_month"] + 1 for o in purchased]
             st.success(f"Purchased in {len(purchased)} of {len(trajectories)} trajectories ({len(purchased) / len(trajectories):.0%}); purchase months ranged from {min(months)} to {max(months)}.")
-        else:
+        if isinstance(config.property_purchase, AutomaticPurchasePolicy):
+            not_purchased = len(trajectories) - len(purchased)
+            if not_purchased:
+                st.warning(automatic_purchase_warning(
+                    config.property_purchase, not_purchased, len(trajectories),
+                ))
+        elif not purchased:
             st.info("Not purchased during this simulation.")
 
     st.subheader("Monte Carlo analysis")

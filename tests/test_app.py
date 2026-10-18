@@ -350,6 +350,12 @@ def test_property_purchase_export_preserves_fees_and_outcomes_per_trajectory():
 
     assert document["results"]["purchase_fees"] == [500] + [0] * 11
     assert document["results"]["purchase_outcome"]["purchased"] is True
+    assert document["results"]["purchase_outcome"]["trajectories"][0][
+        "minimum_cash_reserve"
+    ] == 10_000
+    assert document["results"]["purchase_outcome"]["trajectories"][0][
+        "cash_after_purchase"
+    ] >= 10_000
     assert all(run["purchase_fees"] == [500] + [0] * 11
                for run in document["results"]["trajectories"])
     assert all(run["purchase_outcome"]["purchased"] is True

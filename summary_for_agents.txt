@@ -119,6 +119,12 @@ following month. A scheduled recurring rent expense can end at the purchase
 month; linked property expenses and annual tax then continue under the property
 investment. Automatic purchases additionally require the configured available
 cash threshold and minimum reserve and can happen at most once per trajectory.
+Eligibility is evaluated after monthly obligations and cash sweeps at the
+closing point. Insufficient cash is a normal deferred/no-purchase outcome, not
+a simulation error; fixed-date purchases remain mandatory and may fail. The
+reserve is a point-in-time minimum immediately after closing, not a protected
+subaccount. Purchase outcomes record it alongside actual post-closing cash;
+later modeled cash flows can reduce that balance.
 
 Automatic cash-sweep contributions are configured per investment and supported
 only for stock and safe types. They default to disabled. Each enabled investment

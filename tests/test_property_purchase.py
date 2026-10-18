@@ -2,8 +2,8 @@ import math
 
 import pytest
 
-from app import (SimulationConfig, create_simulation_export, purchase_outcome_from_details,
-                 read_simulation_export,
+from app import (SimulationConfig, automatic_purchase_warning,
+                 create_simulation_export, purchase_outcome_from_details, read_simulation_export,
                  run_simulation, run_simulation_batch)
 from bank_account import BankAccount, InsufficientFundsException
 from expense import Expense
@@ -137,6 +137,10 @@ def test_automatic_purchase_ends_selected_rent_in_closing_month():
         selected_rent_expense="Rent",
     )
     assert result[2]["expense_values"]["Rent"] == [0] * 12
+    assert result[2]["purchase_outcome"]["purchased"] is True
+    assert result[2]["bank_account"][0] == 10_000
+    assert result[2]["purchase_outcome"]["minimum_cash_reserve"] == 10_000
+    assert result[2]["purchase_outcome"]["cash_after_purchase"] == 10_000
 
 
 def test_linked_property_expense_name_collision_does_not_overwrite_history():
@@ -160,6 +164,35 @@ def test_automatic_purchase_waits_when_fees_and_reserve_are_not_covered():
     assert result[2]["purchase_outcome"]["purchased"] is False
     assert result[2]["purchase_outcome"]["purchase_month"] is None
     assert result[2]["purchase_events"] == []
+
+
+def test_automatic_purchase_defers_after_monthly_costs_without_stopping_simulation():
+    policy = AutomaticPurchasePolicy(
+        PropertyPurchase(250_000, 20, 5_000), 50_000, 0,
+    )
+    groceries = Expense("Groceries", "groceries", 1_000)
+
+    net_worth, _, details = compute_net_worth_over_time(
+        1, BankAccount(55_000), [], [], [], [groceries], property_purchase=policy,
+    )
+
+    assert policy.minimum_required_cash == 55_000
+    assert len(net_worth) == 12
+    assert details["purchase_outcome"]["purchased"] is False
+    assert details["purchase_events"] == []
+    assert details["expense_values"]["Groceries"] == [1_000] * 12
+    assert details["bank_account"][0] == 54_000
+    warning = automatic_purchase_warning(policy, 1, 1)
+    assert "$55,000 after monthly commitments" in warning
+    assert "continued without the purchase" in warning
+
+
+def test_fixed_purchase_still_rejects_insufficient_closing_cash():
+    with pytest.raises(InsufficientFundsException, match="property purchase"):
+        compute_net_worth_over_time(
+            1, BankAccount(54_999), [], [], [], [],
+            property_purchase=PropertyPurchase(250_000, 20, 5_000),
+        )
 
 
 def test_automatic_purchase_is_independent_per_trajectory():
