@@ -6,7 +6,8 @@ import math
 import pytest
 
 from bank_account import InsufficientFundsException
-from app import (CHART_EVENT_COLORS, _consume_run_request, _whole_amount,
+from app import (CHART_EVENT_COLORS, SimulationTrajectory, _consume_run_request,
+                 _whole_amount, aggregate_purchase_events,
                  DependentConfig, ExpenseConfig,
                  FinancialAssumptions, IncomeConfig, InvestmentConfig, LoanConfig, SimulationConfig,
                  build_components, build_simulation_events, create_simulation_export,
@@ -149,6 +150,49 @@ def test_chart_events_include_only_completed_property_purchases():
     }]
     assert not_completed == []
     assert CHART_EVENT_COLORS["Property purchase"] == "#0e7490"
+
+
+def test_overview_purchase_events_aggregate_trajectory_months():
+    def trajectory(run_number, events):
+        return SimulationTrajectory(
+            run_number, run_number, [], {}, {"purchase_events": events},
+        )
+
+    trajectories = [
+        trajectory(1, [{"month": 7, "property_name": "Family home"}]),
+        trajectory(2, [{"month": 7, "property_name": "Family home"}]),
+        trajectory(3, [{"month": 9, "property_name": "Family home"}]),
+        trajectory(4, []),
+    ]
+
+    aggregated = aggregate_purchase_events(trajectories)
+
+    assert aggregated == [
+        {
+            "month": 7,
+            "property_name": "Family home",
+            "label": "Family home purchased in 2 of 4 trajectories",
+        },
+        {
+            "month": 9,
+            "property_name": "Family home",
+            "label": "Family home purchased in 1 of 4 trajectories",
+        },
+    ]
+    assert build_simulation_events(
+        SimulationConfig(dependents=[]), {}, 24, aggregated,
+    ) == [
+        {
+            "month": 8,
+            "label": "Family home purchased in 2 of 4 trajectories",
+            "event_type": "Property purchase",
+        },
+        {
+            "month": 10,
+            "label": "Family home purchased in 1 of 4 trajectories",
+            "event_type": "Property purchase",
+        },
+    ]
 
 
 def test_run_simulation_is_reproducible_and_isolated():

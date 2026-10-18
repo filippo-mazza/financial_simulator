@@ -252,6 +252,8 @@ Property-purchase exports preserve fixed or automatic purchase configuration,
 purchase events, fees, and purchase outcome details.
 Completed purchase events appear in the interactive chart as a distinct labeled
 vertical dashed line; no-purchase outcomes do not manufacture an event marker.
+The averaged Overview groups per-trajectory purchases by month and labels their
+counts rather than copying trajectory 1; Individual run shows the exact event.
 
 
 TESTING AND CHANGE CHECKLIST

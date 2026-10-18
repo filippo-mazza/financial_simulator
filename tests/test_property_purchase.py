@@ -205,6 +205,9 @@ def test_automatic_purchase_is_independent_per_trajectory():
     assert all(outcome["purchased"] for outcome in outcomes)
     assert all(0 <= outcome["purchase_month"] < 12 for outcome in outcomes)
     assert len({outcome["purchase_month"] for outcome in outcomes}) == 1
+    assert batch.average_result[2]["purchase_events"][0]["label"].endswith(
+        "purchased in 2 of 2 trajectories"
+    )
 
 
 def test_purchase_outcome_normalizes_scheduled_purchase_events():

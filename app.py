@@ -152,6 +152,26 @@ class SimulationBatch:
     trajectories: list[SimulationTrajectory]
 
 
+def aggregate_purchase_events(trajectories):
+    """Summarize actual per-run purchase months for the averaged Overview."""
+    counts = {}
+    for trajectory in trajectories:
+        for event in trajectory.details.get("purchase_events", []):
+            key = event["month"], event["property_name"]
+            counts[key] = counts.get(key, 0) + 1
+    return [
+        {
+            "month": month,
+            "property_name": property_name,
+            "label": (
+                f"{property_name} purchased in {count} of "
+                f"{len(trajectories)} trajectories"
+            ),
+        }
+        for (month, property_name), count in sorted(counts.items())
+    ]
+
+
 def build_components(config: SimulationConfig):
     """Create fresh model objects from UI/configuration values."""
     if config.incomes is None:
@@ -372,7 +392,7 @@ def run_simulation_batch(config: SimulationConfig, simulation_count: int):
                 trajectory.details["purchase_fees"] for trajectory in trajectories
             ))
         ]
-        average_details["purchase_events"] = trajectories[0].details["purchase_events"]
+        average_details["purchase_events"] = aggregate_purchase_events(trajectories)
     if "purchase_outcome" in trajectories[0].details:
         average_details["purchase_outcome"] = {
             "purchased": any(
@@ -504,7 +524,9 @@ def build_simulation_events(config, repayment_dates, months_simulated,
         if purchase["month"] < months_simulated:
             events.append({
                 "month": purchase["month"] + 1,
-                "label": f"{purchase['property_name']} purchased",
+                "label": purchase.get(
+                    "label", f"{purchase['property_name']} purchased",
+                ),
                 "event_type": "Property purchase",
             })
     return sorted(events, key=lambda event: (event["month"], event["label"]))
