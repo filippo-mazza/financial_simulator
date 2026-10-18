@@ -9,7 +9,8 @@ from bank_account import InsufficientFundsException
 from app import (_consume_run_request, _whole_amount, DependentConfig, ExpenseConfig,
                  FinancialAssumptions, IncomeConfig, InvestmentConfig, LoanConfig, SimulationConfig,
                  build_components, build_simulation_events, create_simulation_export,
-                 get_month_details, monte_carlo_view_explanation,
+                 get_month_details, monte_carlo_sample_guidance,
+                 monte_carlo_view_explanation,
                  read_simulation_export, run_simulation,
                  run_simulation_batch, run_simulations)
 from investment import Investment
@@ -174,6 +175,17 @@ def test_monte_carlo_view_explanations_distinguish_average_and_individual_paths(
     assert "hide liquidity shortfalls" not in single_run
     assert "one simulated trajectory rather than an average" in individual
     assert "shortfalls the Overview may hide" in individual
+
+
+def test_monte_carlo_sample_guidance_warns_for_small_samples_only():
+    warning = monte_carlo_sample_guidance(2)
+    assert "estimates based on the selected 2 simulation(s)" in warning
+    assert "especially small" in warning
+    assert "tail probabilities" in warning
+
+    guidance = monte_carlo_sample_guidance(25)
+    assert "estimates based on the selected 25 simulation(s)" in guidance
+    assert "especially small" not in guidance
 
 
 def test_simulation_batch_retains_reproducible_individual_trajectories():
