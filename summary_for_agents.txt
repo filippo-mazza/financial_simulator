@@ -219,6 +219,12 @@ TESTING AND CHANGE CHECKLIST
 ----------------------------
 Primary command: python3 -m pytest -q
 
+Pytest is configured in pytest.ini to use the repository-local .pytest-tmp
+directory for its base temporary directory. The root conftest also falls back
+to that directory when a runner supplies an unusable --basetemp, such as a
+read-only /tmp path. A supplied --basetemp remains in effect when its parent
+is writable.
+
 Before changing behavior:
   - Add/update tests in tests/test_app.py for app/config/result behavior.
   - Use tests/test_family_scenarios.py for dependent-age scenarios.

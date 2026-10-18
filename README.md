@@ -71,6 +71,12 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
+The repository's `pytest.ini` uses a project-local `.pytest-tmp` base
+directory so pytest fixtures also work in environments where `/tmp` is
+read-only. If a runner supplies an unusable `--basetemp`, the test
+configuration falls back to this directory; writable command-line values are
+still honored.
+
 For repeatable simulations and tests, pass a seed to
 `compute_net_worth_over_time(..., seed=42)`. The simulator restores the random
 state after a seeded run, so it does not affect unrelated random operations.
