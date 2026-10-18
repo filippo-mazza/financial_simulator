@@ -6,7 +6,9 @@ import math
 import pytest
 
 from bank_account import InsufficientFundsException
-from app import (_consume_run_request, _whole_amount, DependentConfig, ExpenseConfig,
+from app import (CHART_EVENT_COLORS, SimulationTrajectory, _consume_run_request,
+                 _whole_amount, aggregate_purchase_events,
+                 DependentConfig, ExpenseConfig,
                  FinancialAssumptions, IncomeConfig, InvestmentConfig, LoanConfig, SimulationConfig,
                  build_components, build_simulation_events, create_simulation_export,
                  get_month_details, monte_carlo_sample_guidance,
@@ -121,6 +123,75 @@ def test_chart_events_include_school_starts_and_loan_repayments():
         {"month": 12, "label": "Home loan repaid", "event_type": "Loan repaid"},
         {"month": 13, "label": "School starts for Child 1", "event_type": "School starts"},
         {"month": 37, "label": "School starts for Child 2", "event_type": "School starts"},
+    ]
+
+
+def test_chart_events_include_only_completed_property_purchases():
+    config = SimulationConfig(
+        dependents=[],
+        property_purchase=AutomaticPurchasePolicy(
+            PropertyPurchase(100_000, 20, property_name="Family home"),
+            20_000, 0,
+        ),
+    )
+
+    completed = build_simulation_events(
+        config, {}, months_simulated=24,
+        purchase_events=[{"month": 7, "property_name": "Family home"}],
+    )
+    not_completed = build_simulation_events(
+        config, {}, months_simulated=24, purchase_events=[],
+    )
+
+    assert completed == [{
+        "month": 8,
+        "label": "Family home purchased",
+        "event_type": "Property purchase",
+    }]
+    assert not_completed == []
+    assert CHART_EVENT_COLORS["Property purchase"] == "#0e7490"
+
+
+def test_overview_purchase_events_aggregate_trajectory_months():
+    def trajectory(run_number, events):
+        return SimulationTrajectory(
+            run_number, run_number, [], {}, {"purchase_events": events},
+        )
+
+    trajectories = [
+        trajectory(1, [{"month": 7, "property_name": "Family home"}]),
+        trajectory(2, [{"month": 7, "property_name": "Family home"}]),
+        trajectory(3, [{"month": 9, "property_name": "Family home"}]),
+        trajectory(4, []),
+    ]
+
+    aggregated = aggregate_purchase_events(trajectories)
+
+    assert aggregated == [
+        {
+            "month": 7,
+            "property_name": "Family home",
+            "label": "Family home purchased in 2 of 4 trajectories",
+        },
+        {
+            "month": 9,
+            "property_name": "Family home",
+            "label": "Family home purchased in 1 of 4 trajectories",
+        },
+    ]
+    assert build_simulation_events(
+        SimulationConfig(dependents=[]), {}, 24, aggregated,
+    ) == [
+        {
+            "month": 8,
+            "label": "Family home purchased in 2 of 4 trajectories",
+            "event_type": "Property purchase",
+        },
+        {
+            "month": 10,
+            "label": "Family home purchased in 1 of 4 trajectories",
+            "event_type": "Property purchase",
+        },
     ]
 
 

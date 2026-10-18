@@ -27,6 +27,11 @@ MONTE_CARLO_TRAJECTORIES_EXPORT_VERSION = 1
 SIMULATION_DETAIL_VERSION = 3
 MAX_SIMULATION_COUNT = 25
 LOW_SAMPLE_THRESHOLD = 10
+CHART_EVENT_COLORS = {
+    "Loan repaid": "#e06c75",
+    "School starts": "#b7791f",
+    "Property purchase": "#0e7490",
+}
 AUTO_INVEST_TYPES = frozenset({"stock", "safe"})
 LEGACY_AUTO_INVEST_WARNING = (
     "This export predates or uses an unsupported version of configurable "
@@ -145,6 +150,26 @@ class SimulationBatch:
     """A Monte Carlo average together with the individual paths behind it."""
     average_result: tuple
     trajectories: list[SimulationTrajectory]
+
+
+def aggregate_purchase_events(trajectories):
+    """Summarize actual per-run purchase months for the averaged Overview."""
+    counts = {}
+    for trajectory in trajectories:
+        for event in trajectory.details.get("purchase_events", []):
+            key = event["month"], event["property_name"]
+            counts[key] = counts.get(key, 0) + 1
+    return [
+        {
+            "month": month,
+            "property_name": property_name,
+            "label": (
+                f"{property_name} purchased in {count} of "
+                f"{len(trajectories)} trajectories"
+            ),
+        }
+        for (month, property_name), count in sorted(counts.items())
+    ]
 
 
 def build_components(config: SimulationConfig):
@@ -367,7 +392,7 @@ def run_simulation_batch(config: SimulationConfig, simulation_count: int):
                 trajectory.details["purchase_fees"] for trajectory in trajectories
             ))
         ]
-        average_details["purchase_events"] = trajectories[0].details["purchase_events"]
+        average_details["purchase_events"] = aggregate_purchase_events(trajectories)
     if "purchase_outcome" in trajectories[0].details:
         average_details["purchase_outcome"] = {
             "purchased": any(
@@ -499,7 +524,9 @@ def build_simulation_events(config, repayment_dates, months_simulated,
         if purchase["month"] < months_simulated:
             events.append({
                 "month": purchase["month"] + 1,
-                "label": f"{purchase['property_name']} purchased",
+                "label": purchase.get(
+                    "label", f"{purchase['property_name']} purchased",
+                ),
                 "event_type": "Property purchase",
             })
     return sorted(events, key=lambda event: (event["month"], event["label"]))
@@ -1664,8 +1691,8 @@ def main():
         event_values = [{**event, "label_height": label_height} for event in events]
         event_data = alt.Data(values=event_values)
         event_colors = alt.Scale(
-            domain=["Loan repaid", "School starts"],
-            range=["#e06c75", "#b7791f"],
+            domain=list(CHART_EVENT_COLORS),
+            range=list(CHART_EVENT_COLORS.values()),
         )
         rules = alt.Chart(event_data).mark_rule(
             strokeDash=[7, 5], strokeWidth=2, opacity=0.85,

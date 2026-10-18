@@ -157,7 +157,11 @@ than stopping the simulation. The configured reserve is a closing-time minimum,
 not a protected subaccount; later expenses, debt payments, fees, contributions,
 or unforeseen costs can reduce it. Results record both the configured minimum
 and actual post-closing cash. Purchase parameters, events, fees, and outcomes
-are included in simulation details and JSON exports.
+are included in simulation details and JSON exports. A completed purchase is
+also marked on the interactive chart with a labeled vertical dashed line; a
+deferred or no-purchase trajectory does not receive a purchase marker. In the
+averaged Overview, markers group actual purchases by month and state the number
+of trajectories represented; Individual run markers show that run's exact event.
 
 ### Financial assumptions
 
