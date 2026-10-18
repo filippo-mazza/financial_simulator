@@ -54,6 +54,8 @@ class PropertyPurchase:
     property_name: str = "Purchased property"
     mortgage_name: str = "Property mortgage"
     fixed_rate: bool = False
+    monthly_expenses: float = 0.0
+    yearly_tax: float = 0.0
 
     @property
     def down_payment(self):
@@ -67,6 +69,7 @@ class PropertyPurchase:
         numeric = (
             self.purchase_price, self.down_payment_percentage,
             self.transaction_fees, self.mortgage_interest_rate,
+            self.monthly_expenses, self.yearly_tax,
         )
         if not all(math.isfinite(value) for value in numeric):
             raise PropertyPurchaseError("Purchase amounts and rates must be finite")
@@ -76,6 +79,8 @@ class PropertyPurchase:
             raise PropertyPurchaseError("Down payment percentage must be between 0 and 100")
         if self.transaction_fees < 0:
             raise PropertyPurchaseError("Transaction fees cannot be negative")
+        if self.monthly_expenses < 0 or self.yearly_tax < 0:
+            raise PropertyPurchaseError("Property operating costs cannot be negative")
         if self.mortgage_interest_rate < 0:
             raise PropertyPurchaseError("Mortgage interest rate cannot be negative")
         if self.mortgage_duration_years <= 0:
@@ -129,4 +134,6 @@ def execute_property_purchase(
         "down_payment": purchase.down_payment,
         "transaction_fees": purchase.transaction_fees,
         "mortgage_principal": purchase.mortgage_principal,
+        "monthly_expenses": purchase.monthly_expenses,
+        "yearly_tax": purchase.yearly_tax,
     }

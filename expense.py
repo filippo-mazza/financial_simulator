@@ -44,6 +44,8 @@ class Expense:
         Returns the monthly expense.
         At the end of each year (every 12 steps), it adjusts the monthly expense based on its type.
         """
+        if not self.active:
+            return 0
         self.months_passed += 1
         current_expense = 0
 
@@ -84,6 +86,10 @@ class Expense:
         #self.original_unexpected_expenses = self.unexpected_expenses
         self.months_passed = 0  # Counter to track months
         self.unexpected_expenses = self.original_unexpected_expenses
+        self.active = True
+
+    def end(self):
+        self.active = False
 
 
 
@@ -128,6 +134,8 @@ class YearlyExpense(Expense):
         super().__init__(name, expense_type, yearly_expense)
 
     def step(self):
+        if not self.active:
+            return 0
         self.months_passed += 1
         if self.months_passed % 12 != 0:
             return 0

@@ -5,6 +5,7 @@ import pytest
 from app import (SimulationConfig, create_simulation_export, read_simulation_export,
                  run_simulation, run_simulation_batch)
 from bank_account import BankAccount, InsufficientFundsException
+from expense import Expense
 from property_purchase import (AutomaticPurchasePolicy, PropertyPurchase,
                                PropertyPurchaseError, execute_property_purchase)
 from utils import compute_net_worth_over_time
@@ -125,6 +126,29 @@ def test_automatic_purchase_uses_threshold_equality_and_preserves_reserve():
     assert details["purchase_outcome"]["purchase_month"] == 0
     assert details["bank_account"][0] == 10_000
     assert len(details["purchase_events"]) == 1
+
+
+def test_automatic_purchase_ends_selected_rent_in_closing_month():
+    policy = AutomaticPurchasePolicy(PropertyPurchase(100_000, 20, 500), 30_500, 10_000)
+    rent = Expense("Rent", "housing", 1_000)
+    result = compute_net_worth_over_time(
+        1, BankAccount(30_500), [], [], [], [rent], property_purchase=policy,
+        selected_rent_expense="Rent",
+    )
+    assert result[2]["expense_values"]["Rent"] == [0] * 12
+
+
+def test_linked_property_expense_name_collision_does_not_overwrite_history():
+    policy = PropertyPurchase(
+        100_000, 20, 500, purchase_month=1,
+        monthly_expenses=100, property_name="House",
+    )
+    conflicting = Expense("House — property expenses (linked)", "housing", 25)
+    with pytest.raises(ValueError, match="already exists"):
+        compute_net_worth_over_time(
+            1, BankAccount(30_500), [], [], [], [conflicting],
+            property_purchase=policy,
+        )
 
 
 def test_automatic_purchase_waits_when_fees_and_reserve_are_not_covered():

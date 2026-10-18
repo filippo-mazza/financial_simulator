@@ -17,6 +17,7 @@ def get_net_worth(investments,loans,bank_account):
     return bank_account.total_balance() + total_investments - total_loans
 
 import random
+from expense import Expense, YearlyExpense
 from bank_account import InsufficientFundsException
 from property_purchase import execute_property_purchase, AutomaticPurchasePolicy
 
@@ -35,7 +36,7 @@ def _withdraw_for_simulation(bank_account, amount, month, reason):
 
 def compute_net_worth_over_time(years, bank_account, investments, loans, income_sources,
                                 expenses, seed=None, property_purchase=None,
-                                assumptions=None):
+                                assumptions=None, selected_rent_expense=None):
     """Simulate net worth month by month.
 
     When ``seed`` is provided, all simulations using the standard-library random
@@ -137,6 +138,23 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                     month_income_values.get(source_name, 0) + monthly_income
                 )
             
+            purchase_due = (
+                scheduled_purchase is not None
+                and scheduled_purchase.purchase_month == current_month
+            )
+            if automatic_purchase and not monthly_details["purchase_outcome"]["purchased"]:
+                template = property_purchase.purchase
+                required = template.down_payment + template.transaction_fees + property_purchase.minimum_cash_reserve
+                cash = bank_account.subaccounts["Main"]
+                if cash >= property_purchase.minimum_available_cash and cash >= required:
+                    scheduled_purchase = property_purchase.purchase_for_month(current_month)
+                    scheduled_purchase.validate(None, investments, loans)
+                    purchase_due = True
+            if purchase_due and selected_rent_expense is not None:
+                matches = [item for item in expenses if item.name == selected_rent_expense]
+                if len(matches) != 1:
+                    raise ValueError("selected_rent_expense must identify exactly one existing expense")
+                matches[0].end()
             # Expenses
             for expense, expense_name in zip(expenses, expense_names):
                 monthly_expense = expense.step()
@@ -233,21 +251,6 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             # A purchase closes after all scheduled activity for the month.
             # Appending its mortgage here means the first repayment is due next
             # month, while the new property is included in this month's snapshot.
-            purchase_due = (
-                scheduled_purchase is not None
-                and scheduled_purchase.purchase_month == current_month
-            )
-            if automatic_purchase and not monthly_details["purchase_outcome"]["purchased"]:
-                template = property_purchase.purchase
-                required = (
-                    template.down_payment + template.transaction_fees
-                    + property_purchase.minimum_cash_reserve
-                )
-                cash = bank_account.subaccounts["Main"]
-                if cash >= property_purchase.minimum_available_cash and cash >= required:
-                    scheduled_purchase = property_purchase.purchase_for_month(current_month)
-                    scheduled_purchase.validate(None, investments, loans)
-                    purchase_due = True
             if purchase_due:
                 event = execute_property_purchase(
                     scheduled_purchase, bank_account, investments, loans,
@@ -283,6 +286,18 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                     monthly_details["loan_payments"][event["mortgage_name"]] = (
                         [0] * current_month
                     )
+                for linked in (
+                    Expense(f"{event['property_name']} — property expenses (linked)", "housing", event["monthly_expenses"])
+                    if event["monthly_expenses"] > 0 else None,
+                    YearlyExpense(f"{event['property_name']} — property tax (linked)", event["yearly_tax"])
+                    if event["yearly_tax"] > 0 else None,
+                ):
+                    if linked is not None:
+                        if linked.name in expense_names:
+                            raise ValueError(f"Linked property expense name '{linked.name}' already exists")
+                        expenses.append(linked)
+                        expense_names.append(linked.name)
+                        monthly_details["expense_values"][linked.name] = [0] * current_month
 
             # Store ending details after every transaction for the month, so
             # cash and investments reconcile with the net-worth snapshot.
