@@ -129,6 +129,16 @@ Exports created before automatic contribution settings were added remain
 importable. The UI warns that their automatic policies were disabled for safety
 and asks the user to review each eligible investment.
 
+Property purchases are opt-in scenario events. A purchase validates its price,
+down payment, fees, mortgage terms, names, and available cash before applying
+the transaction atomically. The property is added at nominal purchase price,
+fees are paid as transaction costs, and any mortgage starts repayment in the
+following month. Purchases can end scheduled rent and carry linked monthly
+property expenses and annual tax. The automatic policy additionally requires an
+available-cash threshold and separate reserve, and performs at most one
+purchase per trajectory. Purchase parameters, events, fees, and outcomes are
+included in simulation details and JSON exports.
+
 ### Financial assumptions
 
 The **Financial assumptions** sidebar section centralizes the model's illustrative
@@ -220,5 +230,5 @@ subprocess smoke test that runs the documented five-year example with the real
 financial model components.
 
 ```text
-50 passed
+117 passed
 ```

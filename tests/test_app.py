@@ -14,6 +14,7 @@ from app import (_consume_run_request, _whole_amount, DependentConfig, ExpenseCo
                  read_simulation_export, run_simulation,
                  run_simulation_batch, run_simulations)
 from investment import Investment
+from property_purchase import AutomaticPurchasePolicy, PropertyPurchase
 
 
 def test_build_components_exposes_all_model_options():
@@ -331,6 +332,28 @@ def test_simulation_export_retains_versioned_trajectories_and_imports_them():
     assert [run["seed"] for run in document["results"]["trajectories"]] == [7, 8]
     assert all(len(run["monthly"]) == 12 for run in document["results"]["trajectories"])
     assert read_simulation_export(exported) == config
+
+
+def test_property_purchase_export_preserves_fees_and_outcomes_per_trajectory():
+    config = SimulationConfig(
+        years=1, initial_cash=200_000, investments=[], incomes=[], expenses=[], loans=[],
+        property_purchase=AutomaticPurchasePolicy(
+            PropertyPurchase(100_000, 20, 500, 0, 25), 30_000, 10_000,
+        ),
+    )
+    batch = run_simulation_batch(config, 2)
+
+    document = json.loads(create_simulation_export(
+        config, *batch.average_result, simulation_count=2,
+        trajectories=batch.trajectories,
+    ))
+
+    assert document["results"]["purchase_fees"] == [500] + [0] * 11
+    assert document["results"]["purchase_outcome"]["purchased"] is True
+    assert all(run["purchase_fees"] == [500] + [0] * 11
+               for run in document["results"]["trajectories"])
+    assert all(run["purchase_outcome"]["purchased"] is True
+               for run in document["results"]["trajectories"])
 
 
 def test_trajectory_import_rejects_inconsistent_seed():
