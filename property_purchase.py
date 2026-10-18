@@ -29,6 +29,16 @@ class AutomaticPurchasePolicy:
     minimum_available_cash: float
     minimum_cash_reserve: float
 
+    @property
+    def minimum_required_cash(self):
+        """Cash needed to satisfy both the threshold and closing reserve."""
+        closing_cash = (
+            self.purchase.down_payment
+            + self.purchase.transaction_fees
+            + self.minimum_cash_reserve
+        )
+        return max(self.minimum_available_cash, closing_cash)
+
     def validate(self):
         for value, label in (
             (self.minimum_available_cash, "minimum available cash"),

@@ -150,8 +150,11 @@ fees are paid as transaction costs, and any mortgage starts repayment in the
 following month. Purchases can end scheduled rent and carry linked monthly
 property expenses and annual tax. The automatic policy additionally requires an
 available-cash threshold and separate reserve, and performs at most one
-purchase per trajectory. Purchase parameters, events, fees, and outcomes are
-included in simulation details and JSON exports.
+purchase per trajectory. Automatic affordability is evaluated after each
+month's modeled commitments and cash sweeps. If the conditions are not met,
+the trajectory continues without buying and the UI reports a warning rather
+than stopping the simulation. Purchase parameters, events, fees, and outcomes
+are included in simulation details and JSON exports.
 
 ### Financial assumptions
 

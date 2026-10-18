@@ -408,6 +408,16 @@ def purchase_outcome_from_details(details):
     return {"purchased": True, "purchase_month": events[0]["month"]}
 
 
+def automatic_purchase_warning(policy, not_purchased, trajectory_count):
+    """Explain a deferred automatic purchase without treating it as an error."""
+    return (
+        "Automatic purchase was not affordable during the simulation in "
+        f"{not_purchased} of {trajectory_count} trajectories. Modeled cash did not "
+        f"reach the required ${policy.minimum_required_cash:,.0f} after monthly "
+        "commitments; those simulations continued without the purchase."
+    )
+
+
 def monte_carlo_view_explanation(view_mode, simulation_count):
     """Return plain-language guidance for interpreting Monte Carlo views."""
     if view_mode == "Overview":
@@ -1520,7 +1530,13 @@ def main():
         if purchased:
             months = [o["purchase_month"] + 1 for o in purchased]
             st.success(f"Purchased in {len(purchased)} of {len(trajectories)} trajectories ({len(purchased) / len(trajectories):.0%}); purchase months ranged from {min(months)} to {max(months)}.")
-        else:
+        if isinstance(config.property_purchase, AutomaticPurchasePolicy):
+            not_purchased = len(trajectories) - len(purchased)
+            if not_purchased:
+                st.warning(automatic_purchase_warning(
+                    config.property_purchase, not_purchased, len(trajectories),
+                ))
+        elif not purchased:
             st.info("Not purchased during this simulation.")
 
     st.subheader("Monte Carlo analysis")

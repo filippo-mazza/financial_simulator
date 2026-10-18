@@ -142,14 +142,6 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 scheduled_purchase is not None
                 and scheduled_purchase.purchase_month == current_month
             )
-            if automatic_purchase and not monthly_details["purchase_outcome"]["purchased"]:
-                template = property_purchase.purchase
-                required = template.down_payment + template.transaction_fees + property_purchase.minimum_cash_reserve
-                cash = bank_account.subaccounts["Main"]
-                if cash >= property_purchase.minimum_available_cash and cash >= required:
-                    scheduled_purchase = property_purchase.purchase_for_month(current_month)
-                    scheduled_purchase.validate(None, investments, loans)
-                    purchase_due = True
             if purchase_due and selected_rent_expense is not None:
                 matches = [item for item in expenses if item.name == selected_rent_expense]
                 if len(matches) != 1:
@@ -247,6 +239,35 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                     month_automatic_contribution_fees.get(investment_name, 0) + fee
                 )
                 automatic_contribution_counts[index] += 1
+
+            # Evaluate automatic affordability at the actual closing point,
+            # after this month's obligations and cash sweeps. Waiting is a
+            # normal outcome when the conditions are not met.
+            if automatic_purchase and not monthly_details["purchase_outcome"]["purchased"]:
+                cash = bank_account.subaccounts["Main"]
+                if cash >= property_purchase.minimum_required_cash:
+                    scheduled_purchase = property_purchase.purchase_for_month(current_month)
+                    scheduled_purchase.validate(None, investments, loans)
+                    purchase_due = True
+
+            if automatic_purchase and purchase_due and selected_rent_expense is not None:
+                matches = [
+                    item for item in expenses if item.name == selected_rent_expense
+                ]
+                if len(matches) != 1:
+                    raise ValueError(
+                        "selected_rent_expense must identify exactly one existing expense"
+                    )
+                selected_rent = matches[0]
+                rent_paid = month_expense_values.get(selected_rent_expense, 0)
+                if rent_paid:
+                    # Closing makes the selected rent inactive for this month,
+                    # so reverse the payment processed before the end-of-month
+                    # automatic eligibility decision.
+                    bank_account.deposit(rent_paid, account_name="Main")
+                    year_expense -= rent_paid
+                    month_expense_values[selected_rent_expense] = 0
+                selected_rent.end()
 
             # A purchase closes after all scheduled activity for the month.
             # Appending its mortgage here means the first repayment is due next
