@@ -116,6 +116,7 @@ class SimulationConfig:
     # Opt-in; purchase UI and savings-trigger policy are intentionally separate
     # follow-up features.  The asset is recorded at price and is 100% owned.
     property_purchase: PropertyPurchase | AutomaticPurchasePolicy | None = None
+    selected_rent_expense: str | None = None
 
 
 @dataclass(frozen=True)
@@ -298,6 +299,7 @@ def run_simulation(config: SimulationConfig):
         return compute_net_worth_over_time(
             config.years, *components, seed=config.seed,
             property_purchase=config.property_purchase,
+            selected_rent_expense=config.selected_rent_expense,
             assumptions=config.assumptions,
         )
     finally:
