@@ -133,10 +133,12 @@ def test_automatic_purchase_ends_selected_rent_in_closing_month():
     policy = AutomaticPurchasePolicy(PropertyPurchase(100_000, 20, 500), 30_500, 10_000)
     rent = Expense("Rent", "housing", 1_000)
     result = compute_net_worth_over_time(
-        1, BankAccount(31_500), [], [], [], [rent], property_purchase=policy,
+        1, BankAccount(30_500), [], [], [], [rent], property_purchase=policy,
         selected_rent_expense="Rent",
     )
     assert result[2]["expense_values"]["Rent"] == [0] * 12
+    assert result[2]["purchase_outcome"]["purchased"] is True
+    assert result[2]["bank_account"][0] == 10_000
 
 
 def test_linked_property_expense_name_collision_does_not_overwrite_history():
@@ -166,18 +168,17 @@ def test_automatic_purchase_defers_after_monthly_costs_without_stopping_simulati
     policy = AutomaticPurchasePolicy(
         PropertyPurchase(250_000, 20, 5_000), 50_000, 0,
     )
-    rent = Expense("Rent", "housing", 1_000)
+    groceries = Expense("Groceries", "groceries", 1_000)
 
     net_worth, _, details = compute_net_worth_over_time(
-        1, BankAccount(55_000), [], [], [], [rent], property_purchase=policy,
-        selected_rent_expense="Rent",
+        1, BankAccount(55_000), [], [], [], [groceries], property_purchase=policy,
     )
 
     assert policy.minimum_required_cash == 55_000
     assert len(net_worth) == 12
     assert details["purchase_outcome"]["purchased"] is False
     assert details["purchase_events"] == []
-    assert details["expense_values"]["Rent"] == [1_000] * 12
+    assert details["expense_values"]["Groceries"] == [1_000] * 12
     assert details["bank_account"][0] == 54_000
     warning = automatic_purchase_warning(policy, 1, 1)
     assert "$55,000 after monthly commitments" in warning

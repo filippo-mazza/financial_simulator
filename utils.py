@@ -245,7 +245,14 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             # normal outcome when the conditions are not met.
             if automatic_purchase and not monthly_details["purchase_outcome"]["purchased"]:
                 cash = bank_account.subaccounts["Main"]
-                if cash >= property_purchase.minimum_required_cash:
+                refundable_rent = (
+                    month_expense_values.get(selected_rent_expense, 0)
+                    if selected_rent_expense is not None else 0
+                )
+                # Selected rent is reversed if closing occurs this month, so
+                # include it when deciding whether the closing is affordable.
+                closing_cash = cash + refundable_rent
+                if closing_cash >= property_purchase.minimum_required_cash:
                     scheduled_purchase = property_purchase.purchase_for_month(current_month)
                     scheduled_purchase.validate(None, investments, loans)
                     purchase_due = True
