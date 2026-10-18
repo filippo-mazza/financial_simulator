@@ -12,8 +12,8 @@ Outputs are illustrative, stochastic projections, not financial advice.
 
 FAST START
 ----------
-Install:  python3 -m pip install -r requirements-dev.txt
-Test:     python3 -m pytest -q        (or: make test)
+Install:  python3 -m venv .venv && .venv/bin/python -m pip install -r requirements-dev.txt
+Test:     .venv/bin/python -m pytest -q        (or: make test)
 Run UI:   python3 -m streamlit run app.py  (or: make run)
 
 Runtime dependencies are in requirements.txt; pytest is added by
@@ -232,7 +232,7 @@ purchase events, fees, and purchase outcome details.
 
 TESTING AND CHANGE CHECKLIST
 ----------------------------
-Primary command: .venv/bin/python -m pytest -q (use a unique writable
+Primary command: .venv/bin/python -m pytest -q (after the Fast Start setup; use a unique writable
 --basetemp when needed; tests run in an isolated Python 3 virtual environment).
 
 Before changing behavior:

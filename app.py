@@ -554,7 +554,7 @@ def _monthly_results(net_worth, details):
 
 
 def _serialized_trajectory(trajectory):
-    return {
+    serialized = {
         "run_number": trajectory.run_number,
         "seed": trajectory.seed,
         "monthly": _monthly_results(trajectory.net_worth, trajectory.details),
@@ -563,6 +563,12 @@ def _serialized_trajectory(trajectory):
             for name, month_index in trajectory.repayment_dates.items()
         ],
     }
+    if "purchase_fees" in trajectory.details:
+        serialized["purchase_fees"] = trajectory.details["purchase_fees"]
+        serialized["purchase_events"] = trajectory.details.get("purchase_events", [])
+    if "purchase_outcome" in trajectory.details:
+        serialized["purchase_outcome"] = trajectory.details["purchase_outcome"]
+    return serialized
 
 
 def create_simulation_export(config, net_worth, repayment_dates, details,
@@ -600,6 +606,11 @@ def create_simulation_export(config, net_worth, repayment_dates, details,
             ),
         },
     }
+    if "purchase_fees" in details:
+        export["results"]["purchase_fees"] = details["purchase_fees"]
+        export["results"]["purchase_events"] = details.get("purchase_events", [])
+    if "purchase_outcome" in details:
+        export["results"]["purchase_outcome"] = details["purchase_outcome"]
     if config.property_purchase is not None:
         export["features"]["property_purchase"] = 1
     if trajectories is not None:
