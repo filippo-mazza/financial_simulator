@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from scripts.financial_review_state import FinancialReviewLimiter
 from scripts.financial_validation import build_report
 from scripts.run_financial_review import (
-    GitHubPRClient, ReviewError, load_report, parse_review_comment, run,
+    GitHubPRClient, ReviewError, load_report, parse_review_comment, run, wait_for_verdict,
 )
 from scripts.technical_review_quota import MemoryStateStore, QuotaError
 
@@ -96,8 +96,11 @@ class FinancialReviewDispatchTest(unittest.TestCase):
     class GitHub:
         def __init__(self, verdict=True):
             self.verdict, self.labeled, self.restored, self.eligible = verdict, False, False, True
+            self.verdict_calls = 0
         def comment_ids(self, _number): return {1}
-        def find_verdict(self, _number, _old_ids, _sha): return self.verdict
+        def find_verdict(self, _number, _old_ids, _sha):
+            self.verdict_calls += 1
+            return self.verdict
         def finish_labels(self, _number): self.labeled = True
         def restore_request_labels(self, _number): self.restored = True; self.labeled = False
         def assert_eligible_head(self, _number, _sha):
@@ -137,6 +140,37 @@ class FinancialReviewDispatchTest(unittest.TestCase):
         with self.assertRaisesRegex(ReviewError, "eligibility changed"):
             run(client, github, limiter, "agent_1", "vault_1", "github", 63, SHA, {"status": "PASS"})
         self.assertTrue(github.restored); self.assertTrue(limiter.released)
+
+
+    def test_existing_valid_review_is_reconciled_without_paid_agent(self):
+        client, github, limiter = self.Client(self.events()), self.GitHub(True), self.Limiter()
+        self.assertTrue(run(client, github, limiter, "agent_1", "vault_1", "github", 63, SHA, {"status": "PASS"}))
+        self.assertIsNone(client.payload)
+        self.assertTrue(github.labeled)
+        self.assertTrue(limiter.completed)
+
+    def test_wait_for_verdict_retries_until_comment_visible(self):
+        class Delayed:
+            def __init__(self): self.calls = 0
+            def find_verdict(self, *_args):
+                self.calls += 1
+                return self.calls == 3
+        github, waits = Delayed(), []
+        wait_for_verdict(github, 63, {1}, SHA, attempts=4, delay_seconds=2, sleeper=waits.append)
+        self.assertEqual(github.calls, 3)
+        self.assertEqual(waits, [2, 2])
+
+    def test_wait_for_verdict_reports_invalid_sha_after_bounded_retries(self):
+        class Invalid:
+            last_verdict_issue = "review comment contains a 39-character commit SHA"
+            def __init__(self): self.calls = 0
+            def find_verdict(self, *_args):
+                self.calls += 1
+                return False
+        github = Invalid()
+        with self.assertRaisesRegex(ReviewError, "39-character commit SHA"):
+            wait_for_verdict(github, 63, set(), SHA, attempts=3, delay_seconds=0, sleeper=lambda _: None)
+        self.assertEqual(github.calls, 3)
 
     def test_report_schema_and_size_are_enforced(self):
         with tempfile.NamedTemporaryFile("w", delete=False) as stream:
@@ -212,6 +246,16 @@ Verdict: PASS WITH WARNINGS
             "body": f"Reviewed commit: {SHA}\nVerdict: PASS",
         })
         self.assertTrue(github.find_verdict(68, {1}, SHA))
+
+
+    def test_truncated_sha_is_rejected_with_actionable_diagnostic(self):
+        github = GitHubPRClient("token", "filippo-mazza/financial_simulator")
+        github._comments = lambda _number: [{
+            "id": 2, "user": {"login": "filippo-mazza"},
+            "body": f"Financial Review\\nReviewed commit: {SHA[:-1]}\\nVerdict: PASS WITH WARNINGS",
+        }]
+        self.assertFalse(github.find_verdict(111, set(), SHA))
+        self.assertIn("39-character", github.last_verdict_issue)
 
 
 if __name__ == "__main__": unittest.main()
