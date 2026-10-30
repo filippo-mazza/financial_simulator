@@ -7,6 +7,7 @@ import tempfile
 import threading
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from scripts.financial_review_state import FinancialReviewLimiter
 from scripts.financial_validation import build_report
@@ -131,8 +132,9 @@ class FinancialReviewDispatchTest(unittest.TestCase):
 
     def test_missing_pr_verdict_fails_and_releases_without_labels(self):
         client, github, limiter = self.Client(self.events()), self.GitHub(False), self.Limiter()
-        with self.assertRaisesRegex(ReviewError, "valid PR-specific verdict"):
-            run(client, github, limiter, "agent_1", "vault_1", "github", 63, SHA, {"status": "PASS"})
+        with patch("scripts.run_financial_review.time.sleep", return_value=None):
+            with self.assertRaisesRegex(ReviewError, "valid PR-specific verdict"):
+                run(client, github, limiter, "agent_1", "vault_1", "github", 63, SHA, {"status": "PASS"})
         self.assertFalse(limiter.completed); self.assertTrue(limiter.released); self.assertFalse(github.labeled)
 
     def test_changed_head_is_not_labeled_and_reservation_is_released(self):
@@ -253,7 +255,7 @@ Verdict: PASS WITH WARNINGS
         github = GitHubPRClient("token", "filippo-mazza/financial_simulator")
         github._comments = lambda _number: [{
             "id": 2, "user": {"login": "filippo-mazza"},
-            "body": f"Financial Review\\nReviewed commit: {SHA[:-1]}\\nVerdict: PASS WITH WARNINGS",
+            "body": f"Financial Review\nReviewed commit: {SHA[:-1]}\nVerdict: PASS WITH WARNINGS",
         }]
         self.assertFalse(github.find_verdict(111, set(), SHA))
         self.assertIn("39-character", github.last_verdict_issue)
