@@ -1640,41 +1640,60 @@ def main():
                             min_value=0.0, max_value=100.0,
                             value=float(st.session_state.purchase_affordability_ratio),
                             step=1.0, key="purchase_affordability_ratio_input",
+                            help=(
+                                "The maximum share of qualifying monthly income available "
+                                "for existing debt payments and the proposed mortgage."
+                            ),
                         )
                         st.session_state.purchase_variable_income_pct = st.number_input(
                             "Count freelance / royalty / other income (%)",
                             min_value=0.0, max_value=100.0,
                             value=float(st.session_state.purchase_variable_income_pct),
                             step=5.0, key="purchase_variable_income_input",
+                            help=(
+                                "Choose how much of selected freelance, royalty, and other "
+                                "non-salary income to count toward affordability."
+                            ),
                         )
                         st.session_state.purchase_base_living_buffer = st.number_input(
                             "Base monthly living buffer",
                             min_value=0.0,
                             value=float(st.session_state.purchase_base_living_buffer),
                             step=100.0, format="%.0f", key="purchase_base_buffer_input",
+                            help=(
+                                "A monthly amount reserved for household living costs "
+                                "before assessing income available for debt payments."
+                            ),
                         )
                         buffer_left, buffer_right = st.columns(2)
                         st.session_state.purchase_adult_count = buffer_left.number_input(
                             "Adults", min_value=0,
                             value=int(st.session_state.purchase_adult_count),
                             step=1, key="purchase_adult_count_input",
+                            help="Number of adults included in the household buffer estimate.",
                         )
                         st.session_state.purchase_buffer_per_adult = buffer_right.number_input(
                             "Buffer per adult", min_value=0.0,
                             value=float(st.session_state.purchase_buffer_per_adult),
                             step=100.0, format="%.0f", key="purchase_adult_buffer_input",
+                            help="Monthly living-cost buffer added for each adult.",
                         )
                         dependent_left, dependent_right = st.columns(2)
                         st.session_state.purchase_dependent_count = dependent_left.number_input(
                             "Dependents", min_value=0,
                             value=int(st.session_state.purchase_dependent_count),
                             step=1, key="purchase_dependent_count_input",
+                            help=(
+                                "Number of dependents included in the household buffer "
+                                "estimate."
+                            ),
                         )
                         st.session_state.purchase_buffer_per_dependent = dependent_right.number_input(
                             "Buffer per dependent", min_value=0.0,
                             value=float(st.session_state.purchase_buffer_per_dependent),
                             step=100.0, format="%.0f",
                             key="purchase_dependent_buffer_input",
+                            help="Monthly living-cost buffer added for each dependent.",
                         )
                     st.session_state.purchase_delay_enabled = st.checkbox(
                         "Add a delay between eligibility and closing",
