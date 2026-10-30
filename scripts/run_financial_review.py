@@ -134,21 +134,6 @@ class GitHubPRClient:
         return False
 
 
-def wait_for_verdict(github, number, old_ids, head_sha, *,
-                     attempts=VERDICT_CHECK_ATTEMPTS,
-                     delay_seconds=VERDICT_CHECK_DELAY_SECONDS, sleeper=time.sleep):
-    """Wait briefly for GitHub to expose the posted comment; never weaken SHA validation."""
-    for attempt in range(attempts):
-        if github.find_verdict(number, old_ids, head_sha):
-            return
-        if attempt + 1 < attempts:
-            sleeper(delay_seconds)
-    detail = getattr(github, "last_verdict_issue", None)
-    message = "Financial Review did not post a valid PR-specific verdict"
-    if detail:
-        message += f": {detail}"
-    raise ReviewError(message)
-
     def finish_labels(self, number):
         self.request("POST", f"/issues/{number}/labels", {"labels": ["Financial reviewed"]})
         self.request("DELETE", f"/issues/{number}/labels/needs-financial-review")
@@ -166,6 +151,22 @@ def wait_for_verdict(github, number, old_ids, head_sha, *,
                 or pr.get("head", {}).get("repo", {}).get("full_name") != self.repository
                 or "needs-financial-review" not in labels):
             raise ReviewError("PR head or financial-review eligibility changed during review")
+
+
+def wait_for_verdict(github, number, old_ids, head_sha, *,
+                     attempts=VERDICT_CHECK_ATTEMPTS,
+                     delay_seconds=VERDICT_CHECK_DELAY_SECONDS, sleeper=time.sleep):
+    """Wait briefly for GitHub to expose the posted comment; never weaken SHA validation."""
+    for attempt in range(attempts):
+        if github.find_verdict(number, old_ids, head_sha):
+            return
+        if attempt + 1 < attempts:
+            sleeper(delay_seconds)
+    detail = getattr(github, "last_verdict_issue", None)
+    message = "Financial Review did not post a valid PR-specific verdict"
+    if detail:
+        message += f": {detail}"
+    raise ReviewError(message)
 
 
 def run(client, github, limiter, agent_id, vault_id, server_label, number, head_sha, report):
