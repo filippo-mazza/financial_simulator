@@ -16,6 +16,15 @@ The opt-in bordered panel in app.py builds PropertyPurchase for scheduled mode
 for first-eligible cash-triggered mode. Automatic eligibility requires Main cash
 to meet both minimum_available_cash and down payment + fees + reserve. The panel
 passes selected_rent_expense by exact name and exposes monthly_expenses/yearly_tax.
+Automatic mode can also carry an optional MortgageAffordabilityPolicy. It selects
+income sources by name; applies explicit bonus and variable-income inclusion
+percentages to net regular income; combines active existing loan payments with
+the proposed mortgage payment; enforces a debt-service ratio and optional base,
+adult, and dependent buffers; and stores the latest assessment/reason in
+purchase_outcome. The proposed payment always comes from Loan and is added once.
+This is an editable planning heuristic, not lender approval. None preserves the
+legacy cash-only behavior. JSON import converts qualifying income names back to a
+tuple and older automatic policies remain valid.
 The preview calls Loan.monthly_repayment. Import restoration populates purchase
 fields and selected rent; asdict export preserves optional fields and legacy
 exports omit them. Results report purchased trajectory count/share and actual
@@ -70,8 +79,9 @@ investment.py
 
 property_purchase.py
   Validated atomic property purchases and the optional cash-triggered purchase
-  policy. Purchases create the property investment, pay down payment and fees,
-  derive mortgage principal, and emit accounting events for the simulation.
+  policy plus its optional mortgage-affordability assessment. Purchases create
+  the property investment, pay down payment and fees, derive mortgage principal,
+  and emit accounting events for the simulation.
 
 loan.py
   Fixed-payment amortization and optional fixed-interest behavior.
@@ -125,6 +135,14 @@ a simulation error; fixed-date purchases remain mandatory and may fail. The
 reserve is a point-in-time minimum immediately after closing, not a protected
 subaccount. Purchase outcomes record it alongside actual post-closing cash;
 later modeled cash flows can reduce that balance.
+
+AutomaticPurchasePolicy.mortgage_affordability is optional. When present,
+utils.py evaluates it every month using that month's pre-step regular income
+rates and the current active-loan schedules. The result contains qualifying
+income, existing and proposed payments, total debt service, ratio/limit, living
+buffer, residual income, eligibility, and a readable reason. Missing or zero
+qualifying income uses a null ratio (never Infinity) so JSON remains portable.
+Both cash and mortgage tests must pass before closing.
 
 Automatic cash-sweep contributions are configured per investment and supported
 only for stock and safe types. They default to disabled. Each enabled investment

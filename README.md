@@ -27,8 +27,12 @@ loan model's payment. Results report purchased trajectories and actual months,
 or that no purchase occurred, including scheduled purchases recorded by the
 engine. Imported purchase settings replace stale widget values, and a scheduled
 month is clamped when the simulation horizon is shortened. Settings round-trip
-through JSON; legacy exports remain disabled. Comparison dashboards, closing
-delays, and bank affordability approval are not implemented.
+through JSON; legacy exports remain disabled. Automatic mode can optionally add
+an editable mortgage-affordability planning rule: selected qualifying incomes,
+bonus and variable-income inclusion, total existing-plus-proposed debt service,
+a maximum debt-service ratio, and adult/dependent living buffers. This heuristic
+is not a lender decision or guarantee of approval. Comparison dashboards and
+closing delays are not implemented.
 
 Please be advised that the content presented in the previous article, code snippets, and any related materials do not constitute financial advice. I am not a licensed financial advisor. The information and tools are provided merely as examples and should not be construed as direct, personal, or professional financial guidance.
 
@@ -156,8 +160,15 @@ the trajectory continues without buying and the UI reports a warning rather
 than stopping the simulation. The configured reserve is a closing-time minimum,
 not a protected subaccount; later expenses, debt payments, fees, contributions,
 or unforeseen costs can reduce it. Results record both the configured minimum
-and actual post-closing cash. Purchase parameters, events, fees, and outcomes
-are included in simulation details and JSON exports. A completed purchase is
+and actual post-closing cash. When enabled, the separate mortgage-affordability
+gate uses the authoritative loan payment calculation and counts the proposed
+mortgage exactly once alongside active existing loan payments. It compares that
+total with selected net regular incomes using editable bonus/variable-income
+inclusion percentages, a debt-service limit, and optional household buffers.
+The assessment, assumptions, ratio, amounts, and reason are shown in results and
+exported; disabling it preserves the previous cash-only rule. These are planning
+assumptions, not universal lender criteria. Purchase parameters, events, fees,
+and outcomes are included in simulation details and JSON exports. A completed purchase is
 also marked on the interactive chart with a labeled vertical dashed line; a
 deferred or no-purchase trajectory does not receive a purchase marker. In the
 averaged Overview, one marker shows the rounded midpoint of the earliest/latest

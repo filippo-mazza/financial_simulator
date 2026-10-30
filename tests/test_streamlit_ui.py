@@ -37,6 +37,33 @@ def test_streamlit_minimum_supports_persistent_keyed_expanders():
     assert "streamlit>=1.56,<2" in REQUIREMENTS_PATH.read_text()
 
 
+def test_purchase_panel_exposes_optional_mortgage_affordability(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+    next(
+        item for item in app.checkbox
+        if item.label == "Enable future property purchase"
+    ).set_value(True).run(timeout=30)
+    next(
+        item for item in app.checkbox
+        if item.label == "Also require mortgage affordability"
+    ).set_value(True).run(timeout=30)
+
+    assert not app.exception
+    labels = {item.label for item in app.number_input}
+    assert "Maximum total debt service (% of qualifying income)" in labels
+    assert "Count configured bonus income (%)" in labels
+    assert "Count freelance / royalty / other income (%)" in labels
+    assert "Buffer per adult" in labels
+    assert "Buffer per dependent" in labels
+    assert any(
+        "Current estimate" in item.value and "debt-service ratio" in item.value
+        for item in app.caption
+    )
+
+
 def test_monte_carlo_views_explain_average_and_individual_paths(tmp_path):
     # Engine-only tests install a process-wide minimal numpy stub at collection
     # time, so render the completed Altair/pandas UI in a clean Python process.
