@@ -592,6 +592,47 @@ def monte_carlo_sample_guidance(simulation_count):
     return estimate
 
 
+def select_representative_trajectories(trajectories):
+    """Pick the lowest, median-ranked and highest actual runs by terminal net worth.
+
+    Runs are ranked ascending by final net worth, ties broken by run number, so
+    selection is deterministic.  For an even run count the median is the
+    lower-middle ranked run.  Returns one entry per distinct run (in rank order)
+    with the roles it fills; one or two runs therefore yield fewer entries.
+    """
+    if not trajectories:
+        raise ValueError("at least one trajectory is required")
+    ranked = sorted(trajectories, key=lambda t: (t.net_worth[-1], t.run_number))
+    picks = (
+        ("Lowest", 0),
+        ("Median-ranked", (len(ranked) - 1) // 2),
+        ("Highest", len(ranked) - 1),
+    )
+    entries = []
+    for role, index in picks:
+        trajectory = ranked[index]
+        for entry in entries:
+            if entry["trajectory"] is trajectory:
+                entry["roles"].append(role)
+                break
+        else:
+            entries.append({
+                "trajectory": trajectory, "rank": index + 1, "roles": [role],
+            })
+    return entries
+
+
+def monte_carlo_compare_explanation(simulation_count):
+    """Explain that Compare shows actual runs rather than percentile curves."""
+    return (
+        f"**Compare runs:** these are actual simulated trajectories chosen from "
+        f"{simulation_count} run(s) by final net worth (ties broken by run number; "
+        "for an even count the median-ranked run is the lower-middle one). They are "
+        "sample paths, not percentile curves: each line is one real run, and the "
+        "month-by-month ranking of runs can differ from this final ranking."
+    )
+
+
 def _consume_run_request(session_state, button_clicked):
     """Combine a manual run click with the one-shot post-import run request."""
     run_after_import = bool(session_state.pop("run_after_import", False))
@@ -2058,13 +2099,62 @@ def main():
 
     st.subheader("Monte Carlo analysis")
     view_mode = st.radio(
-        "Result view", ("Overview", "Individual run"), horizontal=True,
+        "Result view", ("Overview", "Individual run", "Compare"), horizontal=True,
         key=f"monte_carlo_view_{run_id}",
         help=(
             "Overview is the month-by-month arithmetic average across all runs. "
-            "Individual run shows one simulated path."
+            "Individual run shows one simulated path. Compare shows the lowest, "
+            "median-ranked and highest runs by final net worth."
         ),
     )
+    if view_mode == "Compare":
+        st.info(monte_carlo_compare_explanation(int(simulation_count)))
+        entries = select_representative_trajectories(trajectories)
+        rows, chart_rows = [], []
+        for entry in entries:
+            trajectory = entry["trajectory"]
+            series = f"Run {trajectory.run_number} (seed {trajectory.seed})"
+            rows.append({
+                "Role": " / ".join(entry["roles"]),
+                "Run": trajectory.run_number,
+                "Seed": trajectory.seed,
+                "Final net worth": trajectory.net_worth[-1],
+                "Rank by final net worth": f"{entry['rank']} of {len(trajectories)}",
+            })
+            chart_rows.extend(
+                {"month": month, "amount": worth, "series": series,
+                 "role": " / ".join(entry["roles"])}
+                for month, worth in enumerate(trajectory.net_worth, start=1)
+            )
+        if len({t.net_worth[-1] for t in trajectories}) == 1 and len(trajectories) > 1:
+            st.caption("All runs ended with the same final net worth; "
+                       "run number was used to break ties.")
+        elif len(entries) < 3:
+            st.caption("With so few distinct outcomes, one run fills several roles.")
+        st.dataframe(
+            rows, hide_index=True, use_container_width=True,
+            column_config={
+                "Final net worth": st.column_config.NumberColumn(format="$%.0f"),
+            },
+        )
+        compare_chart = alt.Chart(alt.Data(values=chart_rows)).mark_line(
+            strokeWidth=2.5,
+        ).encode(
+            x=alt.X("month:Q", title="Month"),
+            y=alt.Y("amount:Q", title="Net worth", axis=alt.Axis(format="$,.0f")),
+            color=alt.Color("series:N", title="Actual run",
+                            legend=alt.Legend(orient="top", direction="horizontal")),
+            tooltip=[
+                alt.Tooltip("role:N", title="Role"),
+                alt.Tooltip("series:N", title="Run"),
+                alt.Tooltip("month:Q", title="Month", format=".0f"),
+                alt.Tooltip("amount:Q", title="Net worth", format="$,.0f"),
+            ],
+        ).properties(height=420, title="Net worth of representative actual runs")
+        st.altair_chart(compare_chart, use_container_width=True,
+                        key=f"compare_chart_{run_id}")
+        st.caption("Illustrative projection only — this is not financial advice.")
+        return
     st.info(monte_carlo_view_explanation(view_mode, int(simulation_count)))
     if view_mode == "Overview":
         if int(simulation_count) < LOW_SAMPLE_THRESHOLD:

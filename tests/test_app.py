@@ -12,7 +12,7 @@ from app import (CHART_EVENT_COLORS, SimulationTrajectory, _consume_run_request,
                  FinancialAssumptions, IncomeConfig, InvestmentConfig, LoanConfig, SimulationConfig,
                  build_components, build_simulation_events, create_simulation_export,
                  get_month_details, monte_carlo_sample_guidance,
-                 monte_carlo_view_explanation,
+                 monte_carlo_view_explanation, select_representative_trajectories,
                  read_simulation_export, run_simulation,
                  run_simulation_batch, run_simulations)
 from investment import Investment
@@ -841,3 +841,52 @@ def test_child_school_cost_starts_at_configured_age():
     assert child.current_age == 6
     assert child.monthly_expense == 502
     assert child.step() == 502
+
+
+def _trajectories(*finals):
+    return [
+        SimulationTrajectory(i, 10 + i - 1, [0, final], {}, {})
+        for i, final in enumerate(finals, start=1)
+    ]
+
+
+def _picked(entries):
+    return [(e["trajectory"].run_number, e["roles"]) for e in entries]
+
+
+def test_representative_selection_odd_count_uses_middle_rank():
+    entries = select_representative_trajectories(_trajectories(50, 10, 30, 40, 20))
+    assert _picked(entries) == [
+        (2, ["Lowest"]), (3, ["Median-ranked"]), (1, ["Highest"]),
+    ]
+    assert [e["rank"] for e in entries] == [1, 3, 5]
+
+
+def test_representative_selection_even_count_uses_lower_middle():
+    entries = select_representative_trajectories(_trajectories(40, 10, 30, 20))
+    assert _picked(entries) == [
+        (2, ["Lowest"]), (4, ["Median-ranked"]), (1, ["Highest"]),
+    ]
+
+
+def test_representative_selection_one_and_two_runs():
+    assert _picked(select_representative_trajectories(_trajectories(5))) == [
+        (1, ["Lowest", "Median-ranked", "Highest"]),
+    ]
+    assert _picked(select_representative_trajectories(_trajectories(9, 3))) == [
+        (2, ["Lowest", "Median-ranked"]), (1, ["Highest"]),
+    ]
+
+
+def test_representative_selection_breaks_ties_by_run_number():
+    entries = select_representative_trajectories(_trajectories(7, 7, 7))
+    assert _picked(entries) == [
+        (1, ["Lowest"]), (2, ["Median-ranked"]), (3, ["Highest"]),
+    ]
+    reordered = select_representative_trajectories(list(reversed(_trajectories(7, 7, 7))))
+    assert _picked(reordered) == _picked(entries)
+
+
+def test_representative_selection_requires_trajectories():
+    with pytest.raises(ValueError):
+        select_representative_trajectories([])

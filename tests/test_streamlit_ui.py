@@ -147,3 +147,27 @@ assert any('especially small' in item.value and 'tail probabilities' in item.val
         text=True, capture_output=True, check=False, timeout=60,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_monte_carlo_compare_view_shows_run_identifiers_and_seeds(tmp_path):
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+next(item for item in app.number_input if item.label == 'Number of simulations').set_value(4)
+next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=30)
+next(item for item in app.radio if item.label == 'Result view').set_value('Compare').run(timeout=30)
+assert not app.exception
+assert any('not percentile curves' in item.value for item in app.info)
+frame = app.dataframe[0].value
+assert list(frame['Role']).count('Lowest') == 1
+assert {{'Run', 'Seed', 'Final net worth'}} <= set(frame.columns)
+assert len(frame) <= 3
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
