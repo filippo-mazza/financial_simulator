@@ -155,8 +155,10 @@ class GitHubPRClient:
 
 def wait_for_verdict(github, number, old_ids, head_sha, *,
                      attempts=VERDICT_CHECK_ATTEMPTS,
-                     delay_seconds=VERDICT_CHECK_DELAY_SECONDS, sleeper=time.sleep):
+                     delay_seconds=VERDICT_CHECK_DELAY_SECONDS, sleeper=None):
     """Wait briefly for GitHub to expose the posted comment; never weaken SHA validation."""
+    if sleeper is None:
+        sleeper = time.sleep
     for attempt in range(attempts):
         if github.find_verdict(number, old_ids, head_sha):
             return
