@@ -59,6 +59,22 @@ def test_purchase_panel_exposes_optional_mortgage_affordability(monkeypatch, tmp
     labels = {item.label for item in app.number_input}
     assert "Maximum total debt service (% of qualifying income)" in labels
     assert "Count freelance / royalty / other income (%)" in labels
+    affordability_help = {
+        item.label: item.proto.help
+        for item in app.number_input
+        if item.key in {
+            "purchase_affordability_ratio_input",
+            "purchase_variable_income_input",
+            "purchase_base_buffer_input",
+            "purchase_adult_count_input",
+            "purchase_adult_buffer_input",
+            "purchase_dependent_count_input",
+            "purchase_dependent_buffer_input",
+        }
+    }
+    assert len(affordability_help) == 7
+    assert all(affordability_help.values())
+    assert "living costs" in affordability_help["Base monthly living buffer"]
     assert "Buffer per adult" in labels
     assert "Buffer per dependent" in labels
     assert "Months from eligibility to closing" in labels
