@@ -208,6 +208,9 @@ def test_run_simulation_is_reproducible_and_isolated():
         "investments", "bank_account", "investment_values", "income_rates",
         "income_values", "expense_values", "loan_balances", "loan_payments",
         "automatic_contributions", "automatic_contribution_fees",
+        "property_market_values", "property_owned_values",
+        "property_debt_balances", "property_equity",
+        "property_rental_income", "property_operating_costs",
     }
 
 

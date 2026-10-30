@@ -1,6 +1,19 @@
+def owned_investment_value(investment):
+    """Return the value attributable to this scenario, including cached classes."""
+    if getattr(investment, "typology", None) == "real_estate":
+        return (
+            investment.current_value
+            * getattr(investment, "ownership_percentage", 100.0) / 100
+        )
+    return investment.current_value
+
+
 def total_investment_value(investments):
     """Returns the total current value of a list of investments."""
-    return sum(investment.current_value for investment in investments)
+    return sum(
+        owned_investment_value(investment)
+        for investment in investments
+    )
 
 # Example:
 # investments_list = [Investment(name="Stocks", initial_cost=1000, monthly_contribution=50, typology="stock"),
@@ -12,7 +25,7 @@ import numpy as np
 
 def get_net_worth(investments,loans,bank_account):
     # Compute the current net worth
-    total_investments = sum(invest.current_value for invest in investments)
+    total_investments = total_investment_value(investments)
     total_loans = sum(loan.remaining_amount for loan in loans)
     return bank_account.total_balance() + total_investments - total_loans
 
@@ -67,6 +80,21 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
         getattr(item, "name", f"Loan {index + 1}")
         for index, item in enumerate(loans)
     ]
+    property_investments = {
+        item.name: item
+        for item in investments
+        if getattr(item, "typology", None) == "real_estate"
+    }
+    property_expense_names = {
+        name: tuple(
+            expense_name for expense_name in (
+                f"{name} — property expenses (linked)",
+                f"{name} — property tax (linked)",
+            )
+            if expense_name in expense_names
+        )
+        for name in property_investments
+    }
     monthly_details = {
         "investments": [],
         "bank_account": [],
@@ -78,6 +106,12 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
         "expense_values": {name: [] for name in expense_names},
         "loan_balances": {name: [] for name in loan_names},
         "loan_payments": {name: [] for name in loan_names},
+        "property_market_values": {name: [] for name in property_investments},
+        "property_owned_values": {name: [] for name in property_investments},
+        "property_debt_balances": {name: [] for name in property_investments},
+        "property_equity": {name: [] for name in property_investments},
+        "property_rental_income": {name: [] for name in property_investments},
+        "property_operating_costs": {name: [] for name in property_investments},
     }
     if property_purchase is not None:
         monthly_details["purchase_fees"] = []
@@ -421,6 +455,15 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 monthly_details["investment_values"][event["property_name"]] = (
                     [0] * current_month
                 )
+                property_investments[event["property_name"]] = investments[-1]
+                for detail_name in (
+                    "property_market_values", "property_owned_values",
+                    "property_debt_balances", "property_equity",
+                    "property_rental_income", "property_operating_costs",
+                ):
+                    monthly_details[detail_name][event["property_name"]] = (
+                        [0] * current_month
+                    )
                 if event["mortgage_name"] is not None:
                     loan_names.append(event["mortgage_name"])
                     monthly_details["loan_balances"][event["mortgage_name"]] = (
@@ -441,6 +484,13 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                         expenses.append(linked)
                         expense_names.append(linked.name)
                         monthly_details["expense_values"][linked.name] = [0] * current_month
+                property_expense_names[event["property_name"]] = tuple(
+                    expense_name for expense_name in (
+                        f"{event['property_name']} — property expenses (linked)",
+                        f"{event['property_name']} — property tax (linked)",
+                    )
+                    if expense_name in expense_names
+                )
 
             # Store ending details after every transaction for the month, so
             # cash and investments reconcile with the net-worth snapshot.
@@ -451,7 +501,8 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             investment_values = {}
             for investment, investment_name in zip(investments, investment_names):
                 investment_values[investment_name] = (
-                    investment_values.get(investment_name, 0) + investment.current_value
+                    investment_values.get(investment_name, 0)
+                    + owned_investment_value(investment)
                 )
             loan_balances = {}
             for loan, loan_name in zip(loans, loan_names):
@@ -474,6 +525,43 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 values.append(loan_balances.get(name, 0))
             for name, values in monthly_details["loan_payments"].items():
                 values.append(month_loan_payments.get(name, 0))
+            for name, investment in property_investments.items():
+                market_value = investment.current_value
+                owned_value = owned_investment_value(investment)
+                linked_loan_name = getattr(investment, "linked_loan_name", None)
+                debt_balance = (
+                    loan_balances.get(linked_loan_name, 0)
+                    if linked_loan_name is not None else 0
+                )
+                rental_income_name = getattr(
+                    investment, "rental_income_name", None
+                )
+                rental_income = (
+                    month_income_values.get(rental_income_name, 0)
+                    if rental_income_name is not None else 0
+                )
+                operating_costs = sum(
+                    month_expense_values.get(expense_name, 0)
+                    for expense_name in property_expense_names.get(name, ())
+                )
+                monthly_details["property_market_values"][name].append(
+                    market_value
+                )
+                monthly_details["property_owned_values"][name].append(
+                    owned_value
+                )
+                monthly_details["property_debt_balances"][name].append(
+                    debt_balance
+                )
+                monthly_details["property_equity"][name].append(
+                    owned_value - debt_balance
+                )
+                monthly_details["property_rental_income"][name].append(
+                    rental_income
+                )
+                monthly_details["property_operating_costs"][name].append(
+                    operating_costs
+                )
 
             # Compute net worth for the month
             net_worth = get_net_worth(investments, loans, bank_account)

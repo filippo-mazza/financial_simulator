@@ -24,7 +24,10 @@ class Investment:
                  annual_return_mean: float = None,
                  annual_return_std_dev: float = None,
                  dividend_rate: float = None,
-                 contribution_fee: float = None):
+                 contribution_fee: float = None,
+                 ownership_percentage: float = 100.0,
+                 linked_loan_name: str = None,
+                 rental_income_name: str = None):
         if typology not in self.TOPOLOGY_DETAILS:
             raise ValueError(f"Invalid typology. Must be one of {list(self.TOPOLOGY_DETAILS.keys())}")
         if auto_invest_enabled and typology not in self.AUTO_INVEST_TYPES:
@@ -35,6 +38,13 @@ class Investment:
             raise ValueError("Automatic contribution percentage must be between 0 and 100")
         if auto_invest_max_per_year < 1:
             raise ValueError("Automatic contribution maximum per year must be positive")
+        if not 0 < ownership_percentage <= 100:
+            raise ValueError("Ownership percentage must be greater than 0 and at most 100")
+        if typology != "real_estate" and (
+                ownership_percentage != 100
+                or linked_loan_name is not None
+                or rental_income_name is not None):
+            raise ValueError("Property ownership and links require a real-estate investment")
 
         self.name = name
         self.typology = typology
@@ -44,6 +54,9 @@ class Investment:
         self.auto_invest_min_cash = auto_invest_min_cash
         self.auto_invest_percentage = auto_invest_percentage
         self.auto_invest_max_per_year = auto_invest_max_per_year
+        self.ownership_percentage = ownership_percentage
+        self.linked_loan_name = linked_loan_name
+        self.rental_income_name = rental_income_name
         defaults = self.TOPOLOGY_DETAILS[typology]
         self.annual_return_mean = (
             defaults['mean'] if annual_return_mean is None else annual_return_mean
@@ -60,6 +73,13 @@ class Investment:
         self.months_since_last_compound = 0
         self.months_since_beginning = 0
         self.historical_values = []
+
+    @property
+    def owned_value(self):
+        """Current value attributable to the configured ownership share."""
+        if self.typology != "real_estate":
+            return self.current_value
+        return self.current_value * self.ownership_percentage / 100
 
     def _random_annual_gain_percentage(self) -> float:
         """

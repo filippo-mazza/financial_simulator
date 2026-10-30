@@ -30,7 +30,7 @@ from loan import Loan
 AUTO_INVEST_EXPORT_VERSION = 1
 FINANCIAL_ASSUMPTIONS_EXPORT_VERSION = 1
 MONTE_CARLO_TRAJECTORIES_EXPORT_VERSION = 1
-SIMULATION_DETAIL_VERSION = 3
+SIMULATION_DETAIL_VERSION = 4
 MAX_SIMULATION_COUNT = 25
 LOW_SAMPLE_THRESHOLD = 10
 CHART_EVENT_COLORS = {
@@ -74,6 +74,9 @@ class InvestmentConfig:
     auto_invest_min_cash: float = 10000.0
     auto_invest_percentage: float = 10.0
     auto_invest_max_per_year: int = 3
+    ownership_percentage: float = 100.0
+    linked_loan_name: str | None = None
+    rental_income_name: str | None = None
 
 
 @dataclass
@@ -243,6 +246,52 @@ def build_components(config: SimulationConfig):
     else:
         investment_specs = config.investments
 
+    if config.loans is None:
+        loan_specs = [LoanConfig("Loan", config.loan_amount, config.loan_rate,
+                                 config.loan_duration, config.fixed_rate,
+                                 config.loan_already_paid)]
+    else:
+        loan_specs = config.loans
+
+    investment_names = [item.name for item in investment_specs]
+    if len(investment_names) != len(set(investment_names)):
+        raise ValueError("Investment names must be unique")
+    linked_loan_names = []
+    linked_rental_names = []
+    for item in investment_specs:
+        if not 0 < item.ownership_percentage <= 100:
+            raise ValueError("Property ownership percentage must be above 0 and at most 100")
+        if item.investment_type != "real_estate":
+            if (item.ownership_percentage != 100
+                    or item.linked_loan_name is not None
+                    or item.rental_income_name is not None):
+                raise ValueError(
+                    "Property ownership and links require a real-estate investment"
+                )
+            continue
+        if item.linked_loan_name is not None:
+            if sum(loan.name == item.linked_loan_name for loan in loan_specs) != 1:
+                raise ValueError(
+                    f"Linked property loan '{item.linked_loan_name}' must identify "
+                    "exactly one configured loan"
+                )
+            linked_loan_names.append(item.linked_loan_name)
+        if item.rental_income_name is not None:
+            matches = [
+                income for income in income_specs
+                if income.name == item.rental_income_name
+            ]
+            if len(matches) != 1 or matches[0].income_type != "rent":
+                raise ValueError(
+                    f"Linked rental income '{item.rental_income_name}' must identify "
+                    "exactly one rent income source"
+                )
+            linked_rental_names.append(item.rental_income_name)
+    if len(linked_loan_names) != len(set(linked_loan_names)):
+        raise ValueError("A loan can be linked to only one property")
+    if len(linked_rental_names) != len(set(linked_rental_names)):
+        raise ValueError("A rental income source can be linked to only one property")
+
     if config.expenses is None:
         expense_specs = [ExpenseConfig("Living expenses", config.expense_type,
                                        config.monthly_expense)]
@@ -251,19 +300,28 @@ def build_components(config: SimulationConfig):
     expense_specs = [*expense_specs, *config.additional_expenses]
     expenses = [Expense(item.name, item.expense_type, item.monthly_amount)
                 for item in expense_specs]
+    used_expense_names = {item.name for item in expense_specs}
     for investment in investment_specs:
         if investment.investment_type != "real_estate":
             continue
         if investment.monthly_expenses > 0:
+            linked_name = f"{investment.name} — property expenses (linked)"
+            if linked_name in used_expense_names:
+                raise ValueError(f"Linked property expense name '{linked_name}' already exists")
             expenses.append(Expense(
-                f"{investment.name} — property expenses (linked)",
+                linked_name,
                 "housing", investment.monthly_expenses,
             ))
+            used_expense_names.add(linked_name)
         if investment.yearly_tax > 0:
+            linked_name = f"{investment.name} — property tax (linked)"
+            if linked_name in used_expense_names:
+                raise ValueError(f"Linked property expense name '{linked_name}' already exists")
             expenses.append(YearlyExpense(
-                f"{investment.name} — property tax (linked)",
+                linked_name,
                 investment.yearly_tax,
             ))
+            used_expense_names.add(linked_name)
     # A dependent is a recurring cost in the model. Keeping this explicit makes
     # it easy to evolve into age-based childcare/education rules later.
     expenses.extend(
@@ -347,13 +405,10 @@ def build_components(config: SimulationConfig):
         investment.auto_invest_min_cash = item.auto_invest_min_cash
         investment.auto_invest_percentage = item.auto_invest_percentage
         investment.auto_invest_max_per_year = item.auto_invest_max_per_year
+        investment.ownership_percentage = item.ownership_percentage
+        investment.linked_loan_name = item.linked_loan_name
+        investment.rental_income_name = item.rental_income_name
         investments.append(investment)
-    if config.loans is None:
-        loan_specs = [LoanConfig("Loan", config.loan_amount, config.loan_rate,
-                                 config.loan_duration, config.fixed_rate,
-                                 config.loan_already_paid)]
-    else:
-        loan_specs = config.loans
     loans = [Loan(item.name, item.amount, item.interest_rate, item.duration_years,
                   item.fixed_rate, item.already_paid) for item in loan_specs]
     account = BankAccount(config.initial_cash, config.yearly_fee)
@@ -408,6 +463,9 @@ def run_simulation_batch(config: SimulationConfig, simulation_count: int):
         "investment_values", "automatic_contributions",
         "automatic_contribution_fees", "income_rates", "income_values",
         "expense_values", "loan_balances", "loan_payments",
+        "property_market_values", "property_owned_values",
+        "property_debt_balances", "property_equity",
+        "property_rental_income", "property_operating_costs",
     ):
         item_names = set().union(*(
             trajectory.details[detail_name] for trajectory in trajectories
@@ -662,6 +720,16 @@ def get_month_details(net_worth, details, month):
         {"Category": "Loan balance", "Item": name, "Amount": values[index]}
         for name, values in details["loan_balances"].items()
     )
+    for category, detail_name in (
+        ("Property market value", "property_market_values"),
+        ("Owned property value", "property_owned_values"),
+        ("Property attributable debt", "property_debt_balances"),
+        ("Property equity", "property_equity"),
+    ):
+        balances.extend(
+            {"Category": category, "Item": name, "Amount": values[index]}
+            for name, values in details.get(detail_name, {}).items()
+        )
 
     flows = []
     for category, detail_name in (
@@ -671,10 +739,12 @@ def get_month_details(net_worth, details, month):
         ("Automatic contribution fee", "automatic_contribution_fees"),
         ("Expense paid", "expense_values"),
         ("Loan payment", "loan_payments"),
+        ("Property rental income (linked)", "property_rental_income"),
+        ("Property operating costs (linked)", "property_operating_costs"),
     ):
         flows.extend(
             {"Category": category, "Item": name, "Amount": values[index]}
-            for name, values in details[detail_name].items()
+            for name, values in details.get(detail_name, {}).items()
         )
     return balances, flows
 
@@ -713,6 +783,17 @@ def _monthly_results(net_worth, details):
             },
             "loan_payments": {
                 name: values[index] for name, values in details["loan_payments"].items()
+            },
+            "property_positions": {
+                name: {
+                    "market_value": details["property_market_values"][name][index],
+                    "owned_value": details["property_owned_values"][name][index],
+                    "attributable_debt": details["property_debt_balances"][name][index],
+                    "equity": details["property_equity"][name][index],
+                    "rental_income": details["property_rental_income"][name][index],
+                    "operating_costs": details["property_operating_costs"][name][index],
+                }
+                for name in details.get("property_market_values", {})
             },
         }
         for index, value in enumerate(net_worth)
@@ -838,6 +919,9 @@ def read_simulation_export(data, include_warnings=False):
                     values.setdefault("auto_invest_min_cash", 10000.0)
                     values.setdefault("auto_invest_percentage", 10.0)
                     values.setdefault("auto_invest_max_per_year", 3)
+                    values.setdefault("ownership_percentage", 100.0)
+                    values.setdefault("linked_loan_name", None)
+                    values.setdefault("rental_income_name", None)
                     if not auto_invest_feature_supported:
                         values["auto_invest_enabled"] = False
                 rebuilt.append(config_type(**values))
@@ -968,6 +1052,8 @@ def main():
         "monthly_expenses": 0.0, "yearly_tax": 0.0,
         "auto_invest_enabled": False, "auto_invest_min_cash": 10000.0,
         "auto_invest_percentage": 10.0, "auto_invest_max_per_year": 3,
+        "ownership_percentage": 100.0, "linked_loan_name": None,
+        "rental_income_name": None,
     }])
     st.session_state.setdefault("incomes", [{
         "name": "Salary", "income_type": "salary", "monthly_amount": 3000.0,
@@ -1024,6 +1110,9 @@ def main():
                 item.setdefault("auto_invest_min_cash", 10000.0)
                 item.setdefault("auto_invest_percentage", 10.0)
                 item.setdefault("auto_invest_max_per_year", 3)
+                item.setdefault("ownership_percentage", 100.0)
+                item.setdefault("linked_loan_name", None)
+                item.setdefault("rental_income_name", None)
 
     def item_key(item):
         return item["_id"]
@@ -1200,6 +1289,8 @@ def main():
             "yearly_tax": 1000.0 if investment_type == "real_estate" else 0.0,
             "auto_invest_enabled": False, "auto_invest_min_cash": 10000.0,
             "auto_invest_percentage": 10.0, "auto_invest_max_per_year": 3,
+            "ownership_percentage": 100.0, "linked_loan_name": None,
+            "rental_income_name": None,
             "_id": uuid.uuid4().hex,
         })
 
@@ -1234,8 +1325,14 @@ def main():
             with st.container(border=True):
                 if not card_is_open("investment", item):
                     if item["investment_type"] == "real_estate":
+                        owned_amount = (
+                            item["initial_amount"]
+                            * item.get("ownership_percentage", 100) / 100
+                        )
                         st.caption(
                             f"real estate · value ${item['initial_amount']:,.0f} · "
+                            f"owned {item.get('ownership_percentage', 100):g}% "
+                            f"(${owned_amount:,.0f}) · "
                             f"expenses ${item['monthly_expenses']:,.0f}/month · "
                             f"tax ${item['yearly_tax']:,.0f}/year"
                         )
@@ -1262,26 +1359,84 @@ def main():
                     key=f"investment_type_{item_key(item)}",
                 )
                 item["initial_amount"] = st.number_input(
-                    "Initial amount", min_value=0.0, value=float(item["initial_amount"]),
+                    (
+                        "Current full property value"
+                        if item["investment_type"] == "real_estate"
+                        else "Initial amount"
+                    ),
+                    min_value=0.0, value=float(item["initial_amount"]),
                     step=100.0, format="%.0f", key=f"investment_initial_{item_key(item)}",
                 )
                 if item["investment_type"] == "real_estate":
+                    item["ownership_percentage"] = st.number_input(
+                        "Ownership share (%)", min_value=0.01, max_value=100.0,
+                        value=float(item.get("ownership_percentage", 100.0)),
+                        step=1.0, key=f"investment_ownership_{item_key(item)}",
+                        help=(
+                            "Net worth includes only this share of the full property "
+                            "market value."
+                        ),
+                    )
+                    loan_options = [None] + [
+                        loan["name"] for loan in st.session_state.loans
+                    ]
+                    current_loan = (
+                        item.get("linked_loan_name")
+                        if item.get("linked_loan_name") in loan_options else None
+                    )
+                    item["linked_loan_name"] = st.selectbox(
+                        "Mortgage / loan linked to this property",
+                        loan_options,
+                        index=loan_options.index(current_loan),
+                        format_func=lambda value: "No linked loan" if value is None else value,
+                        key=f"investment_linked_loan_{item_key(item)}",
+                        help=(
+                            "The linked outstanding balance is shown as attributable debt "
+                            "and subtracted once globally from net worth."
+                        ),
+                    )
+                    rent_options = [None] + [
+                        income["name"] for income in st.session_state.incomes
+                        if income["income_type"] == "rent"
+                    ]
+                    current_rent = (
+                        item.get("rental_income_name")
+                        if item.get("rental_income_name") in rent_options else None
+                    )
+                    item["rental_income_name"] = st.selectbox(
+                        "Rental income linked to this property",
+                        rent_options,
+                        index=rent_options.index(current_rent),
+                        format_func=lambda value: (
+                            "No linked rental income" if value is None else value
+                        ),
+                        key=f"investment_rental_income_{item_key(item)}",
+                        help=(
+                            "Links an existing rent income source for reporting; it does "
+                            "not create or deposit a second income. Enter that source as "
+                            "your attributable share—it is not scaled again here."
+                        ),
+                    )
                     item["monthly_expenses"] = st.number_input(
-                        "Monthly property expenses", min_value=0.0,
+                        "Monthly property expenses (your share)", min_value=0.0,
                         value=float(item["monthly_expenses"]), step=50.0, format="%.0f",
                         key=f"investment_expenses_{item_key(item)}",
                         help="Maintenance, insurance, management, and similar recurring costs.",
                     )
                     item["yearly_tax"] = st.number_input(
-                        "Yearly property tax", min_value=0.0,
+                        "Yearly property tax (your share)", min_value=0.0,
                         value=float(item["yearly_tax"]), step=100.0, format="%.0f",
                         key=f"investment_tax_{item_key(item)}",
                     )
                     st.caption(
-                        "These costs are deducted by the simulation and linked read-only "
-                        "in the Expenses category."
+                        "Enter costs attributable to your share; they are not multiplied "
+                        "by the ownership percentage. They are deducted once and linked "
+                        "read-only in the Expenses category."
                     )
                 else:
+                    item["ownership_percentage"] = 100.0
+                    item["linked_loan_name"] = None
+                    item["rental_income_name"] = None
                     item["monthly_contribution"] = st.number_input(
                         "Monthly contribution", min_value=0.0,
                         value=float(item["monthly_contribution"]), step=50.0,
@@ -1961,6 +2116,9 @@ def main():
             auto_invest_min_cash=_whole_amount(item["auto_invest_min_cash"]),
             auto_invest_percentage=float(item["auto_invest_percentage"]),
             auto_invest_max_per_year=int(item["auto_invest_max_per_year"]),
+            ownership_percentage=float(item.get("ownership_percentage", 100.0)),
+            linked_loan_name=item.get("linked_loan_name"),
+            rental_income_name=item.get("rental_income_name"),
         ) for item in st.session_state.investments],
         incomes=[IncomeConfig(
             item["name"], item["income_type"], _whole_amount(item["monthly_amount"]),

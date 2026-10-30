@@ -338,6 +338,9 @@ def execute_property_purchase(
             purchase.mortgage_interest_rate, purchase.mortgage_duration_years,
             purchase.fixed_rate,
         )
+    property_asset.ownership_percentage = 100.0
+    property_asset.linked_loan_name = purchase.mortgage_name if mortgage else None
+    property_asset.rental_income_name = None
     bank_account.withdraw(purchase.down_payment + purchase.transaction_fees)
     investments.append(property_asset)
     if mortgage is not None:

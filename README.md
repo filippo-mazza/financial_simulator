@@ -134,6 +134,21 @@ property costs are deducted every month; the tax is charged once in month 12 of
 each simulation year. Both appear as read-only linked costs in the Expenses
 category and must be edited from the corresponding investment.
 
+Each configured real-estate investment also has an **ownership share** applied
+to its full modeled market value. Only the owned value contributes to investment
+totals and net worth. A property may link one existing loan and one existing
+income source of type `rent` by exact name. The monthly details and JSON export
+then reconcile full market value, owned value, attributable outstanding debt,
+property equity, rental receipts, and linked operating costs. Links are reporting
+relationships: the loan remains one global liability, rent is deposited once by
+the existing income source, and costs are withdrawn once by the existing linked
+expenses. Property equity is therefore informative and is not added to net worth
+again. The entire linked loan balance is treated as attributable to the property;
+separate fractional liability shares are not modeled. Rental income, monthly
+expenses, and annual tax inputs must already represent the user's attributable
+share; they are not multiplied by the ownership percentage. Legacy scenarios
+default to 100% ownership with no loan or rental-income links.
+
 Stock and safe investments can optionally enable **automatic cash-sweep
 contributions**. The policy is disabled by default. For each enabled investment,
 the UI configures a cash threshold, the percentage of current cash to transfer,
