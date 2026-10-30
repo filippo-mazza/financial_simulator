@@ -1705,7 +1705,11 @@ def main():
             uploaded_export = st.file_uploader(
                 "Financial Simulator JSON", type="json",
                 help="Select a JSON file created by the export button.",
+                key=f"scenario_import_file_{st.session_state.get('import_uploader_counter', 0)}",
             )
+            import_notice = st.session_state.pop("import_success_notice", None)
+            if import_notice:
+                st.success(import_notice)
             if st.button(
                 "Import parameters", disabled=uploaded_export is None,
                 use_container_width=True,
@@ -1719,7 +1723,12 @@ def main():
                 except ValueError as error:
                     st.error(str(error))
                 else:
-                    st.success("Scenario imported.")
+                    st.session_state.import_uploader_counter = (
+                        st.session_state.get("import_uploader_counter", 0) + 1
+                    )
+                    st.session_state.import_success_notice = (
+                        f"Scenario imported from {uploaded_export.name}."
+                    )
                     st.rerun()
 
         years = st.slider(

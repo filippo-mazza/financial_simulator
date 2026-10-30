@@ -196,3 +196,20 @@ assert len(frame) <= 3
         text=True, capture_output=True, check=False, timeout=60,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_import_notice_is_shown_once_and_uploader_key_resets(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH))
+    app.session_state["import_uploader_counter"] = 1
+    app.session_state["import_success_notice"] = "Scenario imported from a.json."
+    app.run(timeout=30)
+
+    assert not app.exception
+    assert [s.value for s in app.success] == ["Scenario imported from a.json."]
+    assert "import_success_notice" not in app.session_state
+
+    app.run(timeout=30)
+    assert not [s for s in app.success if "imported" in s.value]
+    assert app.session_state["import_uploader_counter"] == 1
