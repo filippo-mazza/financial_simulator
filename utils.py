@@ -95,10 +95,18 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             "cash_after_purchase": None,
             "affordability": None,
             "failure_reason": None,
+            "first_eligible_month": None,
+            "initial_scheduled_completion_month": None,
+            "next_completion_month": None,
+            "completion_delay_months": None,
+            "completion_attempts": 0,
+            "completion_status": "not_eligible",
         }
     monthly_net_worth = []
     loan_repayment_dates = {}
     scheduled_purchase = None
+    pending_completion_month = None
+    automatic_purchase_cancelled = False
     if property_purchase is not None:
         if automatic_purchase:
             property_purchase.validate()
@@ -253,10 +261,19 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 )
                 automatic_contribution_counts[index] += 1
 
-            # Evaluate automatic affordability at the actual closing point,
-            # after this month's obligations and cash sweeps. Waiting is a
-            # normal outcome when the conditions are not met.
-            if automatic_purchase and not monthly_details["purchase_outcome"]["purchased"]:
+            # First eligibility can schedule a later completion. Cash and any
+            # mortgage rule are then checked again only when closing is due.
+            # A missing delay policy (or fixed zero) retains immediate closing.
+            automatic_check_due = (
+                automatic_purchase
+                and not monthly_details["purchase_outcome"]["purchased"]
+                and not automatic_purchase_cancelled
+                and (
+                    pending_completion_month is None
+                    or pending_completion_month == current_month
+                )
+            )
+            if automatic_check_due:
                 cash = bank_account.subaccounts["Main"]
                 refundable_rent = (
                     month_expense_values.get(selected_rent_expense, 0)
@@ -291,10 +308,66 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                     outcome["failure_reason"] = affordability["reason"]
                 else:
                     outcome["failure_reason"] = None
-                if cash_is_sufficient and affordability_passes:
-                    scheduled_purchase = property_purchase.purchase_for_month(current_month)
-                    scheduled_purchase.validate(None, investments, loans)
-                    purchase_due = True
+                conditions_pass = cash_is_sufficient and affordability_passes
+                if pending_completion_month is None:
+                    if conditions_pass:
+                        delay_policy = property_purchase.completion_delay
+                        delay_months = (
+                            delay_policy.sample_months(random)
+                            if delay_policy is not None else 0
+                        )
+                        pending_completion_month = current_month + delay_months
+                        outcome.update(
+                            first_eligible_month=current_month,
+                            initial_scheduled_completion_month=(
+                                pending_completion_month
+                            ),
+                            next_completion_month=pending_completion_month,
+                            completion_delay_months=delay_months,
+                            completion_status=(
+                                "not_completed_before_simulation_end"
+                                if pending_completion_month >= years * 12
+                                else "scheduled"
+                            ),
+                        )
+                        if delay_months == 0:
+                            outcome["completion_attempts"] += 1
+                            scheduled_purchase = (
+                                property_purchase.purchase_for_month(current_month)
+                            )
+                            scheduled_purchase.validate(None, investments, loans)
+                            purchase_due = True
+                    else:
+                        outcome["completion_status"] = "not_eligible"
+                else:
+                    outcome["completion_attempts"] += 1
+                    if conditions_pass:
+                        scheduled_purchase = (
+                            property_purchase.purchase_for_month(current_month)
+                        )
+                        scheduled_purchase.validate(None, investments, loans)
+                        purchase_due = True
+                    else:
+                        delay_policy = property_purchase.completion_delay
+                        failure_policy = (
+                            delay_policy.on_ineligible
+                            if delay_policy is not None else "retry"
+                        )
+                        if failure_policy == "retry":
+                            pending_completion_month = current_month + 1
+                            outcome["next_completion_month"] = (
+                                pending_completion_month
+                            )
+                            outcome["completion_status"] = (
+                                "not_completed_before_simulation_end"
+                                if pending_completion_month >= years * 12
+                                else "deferred"
+                            )
+                        else:
+                            automatic_purchase_cancelled = True
+                            pending_completion_month = None
+                            outcome["next_completion_month"] = None
+                            outcome["completion_status"] = "cancelled"
 
             if automatic_purchase and purchase_due and selected_rent_expense is not None:
                 matches = [
@@ -341,6 +414,8 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                         transaction_fees=event["transaction_fees"],
                         mortgage_principal=event["mortgage_principal"],
                         cash_after_purchase=bank_account.subaccounts["Main"],
+                        next_completion_month=None,
+                        completion_status="purchased",
                     )
                 investment_names.append(event["property_name"])
                 monthly_details["investment_values"][event["property_name"]] = (

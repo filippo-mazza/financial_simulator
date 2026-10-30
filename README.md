@@ -33,7 +33,8 @@ variable-income inclusion, total existing-plus-proposed debt service, a maximum
 debt-service ratio, and adult/dependent living buffers. Annual bonuses are
 excluded because they are not guaranteed, producing a more conservative estimate.
 This heuristic is not a lender decision or guarantee of approval. Comparison
-dashboards and closing delays are not implemented.
+dashboards are not implemented. Automatic purchases can optionally use either a
+fixed or seeded bounded-random delay between first eligibility and closing.
 
 Please be advised that the content presented in the previous article, code snippets, and any related materials do not constitute financial advice. I am not a licensed financial advisor. The information and tools are provided merely as examples and should not be construed as direct, personal, or professional financial guidance.
 
@@ -177,6 +178,19 @@ averaged Overview, one marker shows the rounded midpoint of the earliest/latest
 purchase-month range and states the range and trajectory count; Individual run
 markers show that run's exact event. The line itself uses a compact label, while
 the full range and trajectory count remain available in its tooltip and summary.
+
+An optional automatic-purchase **closing delay** separates the first eligible
+month from actual completion. The delay can be a fixed number of months or an
+inclusive minimum/maximum range sampled reproducibly for each trajectory. No
+extra random value is consumed when this feature is disabled or the delay is
+fixed. At the scheduled month, the simulator rechecks closing cash, reserve, and
+any enabled mortgage-affordability rule. If they no longer pass, the selected
+policy either retries monthly or cancels that trajectory's purchase. Rent keeps
+running, and the property, mortgage, linked owner expenses, and chart event do
+not exist until closing succeeds. Individual-run results and JSON output retain
+the first eligible month, initial scheduled month, sampled delay, attempts,
+latest scheduled month, status, and actual purchase month. A closing beyond the
+simulation horizon is recorded as not completed rather than manufactured.
 
 ### Financial assumptions
 

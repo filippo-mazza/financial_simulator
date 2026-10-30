@@ -17,6 +17,47 @@ class PropertyPurchaseError(ValueError):
 
 
 VARIABLE_INCOME_TYPES = frozenset({"freelance", "royalty", "other"})
+COMPLETION_FAILURE_POLICIES = frozenset({"retry", "cancel"})
+
+
+@dataclass(frozen=True)
+class PurchaseCompletionDelayPolicy:
+    """Waiting-time assumptions between eligibility and actual closing.
+
+    Equal bounds model a fixed delay. Unequal bounds are sampled inclusively
+    once, when the trajectory first becomes eligible. ``on_ineligible`` controls
+    what happens if the closing checks no longer pass in the scheduled month.
+    """
+
+    minimum_months: int = 0
+    maximum_months: int = 0
+    on_ineligible: str = "retry"
+
+    def validate(self):
+        for value, label in (
+            (self.minimum_months, "minimum completion delay"),
+            (self.maximum_months, "maximum completion delay"),
+        ):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise PropertyPurchaseError(
+                    f"{label} must be a nonnegative integer number of months"
+                )
+        if self.minimum_months > self.maximum_months:
+            raise PropertyPurchaseError(
+                "minimum completion delay cannot exceed maximum completion delay"
+            )
+        if self.on_ineligible not in COMPLETION_FAILURE_POLICIES:
+            raise PropertyPurchaseError(
+                "completion failure policy must be 'retry' or 'cancel'"
+            )
+        return self
+
+    def sample_months(self, random_source):
+        """Sample without consuming randomness for fixed, including zero, delays."""
+        self.validate()
+        if self.minimum_months == self.maximum_months:
+            return self.minimum_months
+        return random_source.randint(self.minimum_months, self.maximum_months)
 
 
 @dataclass(frozen=True)
@@ -81,14 +122,15 @@ class AutomaticPurchasePolicy:
     ``minimum_cash_reserve`` is the cash that must remain immediately after
     closing, in addition to the purchase's down payment and fees. It is a
     point-in-time affordability test, not a protected subaccount; later modeled
-    cash flows may use it. The embedded purchase is a template whose month is
-    chosen when the first eligible month is reached.
+    cash flows may use it. The embedded purchase is a template. First eligibility
+    either closes immediately or schedules completion through ``completion_delay``.
     """
 
     purchase: "PropertyPurchase"
     minimum_available_cash: float
     minimum_cash_reserve: float
     mortgage_affordability: MortgageAffordabilityPolicy | None = None
+    completion_delay: PurchaseCompletionDelayPolicy | None = None
 
     @property
     def minimum_required_cash(self):
@@ -110,6 +152,8 @@ class AutomaticPurchasePolicy:
         self.purchase.validate(None)
         if self.mortgage_affordability is not None:
             self.mortgage_affordability.validate()
+        if self.completion_delay is not None:
+            self.completion_delay.validate()
         return self
 
     def purchase_for_month(self, month):

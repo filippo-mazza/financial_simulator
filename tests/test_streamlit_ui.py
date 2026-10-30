@@ -50,6 +50,10 @@ def test_purchase_panel_exposes_optional_mortgage_affordability(monkeypatch, tmp
         item for item in app.checkbox
         if item.label == "Also require mortgage affordability"
     ).set_value(True).run(timeout=30)
+    next(
+        item for item in app.checkbox
+        if item.label == "Add a delay between eligibility and closing"
+    ).set_value(True).run(timeout=30)
 
     assert not app.exception
     labels = {item.label for item in app.number_input}
@@ -57,6 +61,11 @@ def test_purchase_panel_exposes_optional_mortgage_affordability(monkeypatch, tmp
     assert "Count freelance / royalty / other income (%)" in labels
     assert "Buffer per adult" in labels
     assert "Buffer per dependent" in labels
+    assert "Months from eligibility to closing" in labels
+    assert any(
+        item.label == "If closing checks no longer pass"
+        for item in app.selectbox
+    )
     assert any(
         "Current estimate" in item.value and "debt-service ratio" in item.value
         for item in app.caption
@@ -65,6 +74,19 @@ def test_purchase_panel_exposes_optional_mortgage_affordability(monkeypatch, tmp
         "Annual bonuses are excluded" in item.value
         for item in app.caption
     )
+    assert any(
+        "no property, mortgage, or owner costs" in item.value
+        for item in app.caption
+    )
+
+    next(
+        item for item in app.radio if item.label == "Closing delay"
+    ).set_value("Bounded random").run(timeout=30)
+
+    assert not app.exception
+    labels = {item.label for item in app.number_input}
+    assert "Minimum delay (months)" in labels
+    assert "Maximum delay (months)" in labels
 
 
 def test_monte_carlo_views_explain_average_and_individual_paths(tmp_path):
