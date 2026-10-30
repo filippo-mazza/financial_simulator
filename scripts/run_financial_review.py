@@ -6,6 +6,7 @@ import math
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -20,6 +21,8 @@ except ModuleNotFoundError:
 
 VERDICTS = ("PASS", "PASS WITH WARNINGS", "CHANGES REQUESTED", "UNABLE TO REVIEW")
 MAX_REPORT_BYTES = 64 * 1024
+VERDICT_CHECK_ATTEMPTS = 5
+VERDICT_CHECK_DELAY_SECONDS = 3
 
 
 def load_report(path):
@@ -106,6 +109,7 @@ class GitHubPRClient:
 
     def find_verdict(self, number, old_ids, head_sha):
         owner = self.repository.split("/", 1)[0]
+        self.last_verdict_issue = None
         for item in self._comments(number):
             body = item.get("body", "")
             if (item.get("id") in old_ids
@@ -113,11 +117,37 @@ class GitHubPRClient:
                 continue
             try:
                 reviewed_commit, _verdict = parse_review_comment(body)
-            except ReviewError:
+            except ReviewError as error:
+                if re.search(r"Reviewed commit\\s*:", body, re.IGNORECASE):
+                    match = re.search(r"Reviewed commit\\s*:\\s*[`*_]*([0-9a-f]{7,40})", body, re.IGNORECASE)
+                    if match and len(match.group(1)) != 40:
+                        self.last_verdict_issue = (
+                            f"review comment contains a {len(match.group(1))}-character commit SHA; "
+                            "the exact 40-character SHA is required"
+                        )
+                    else:
+                        self.last_verdict_issue = str(error)
                 continue
             if reviewed_commit == head_sha.lower():
                 return True
+            self.last_verdict_issue = "review comment references a different commit SHA"
         return False
+
+
+def wait_for_verdict(github, number, old_ids, head_sha, *,
+                     attempts=VERDICT_CHECK_ATTEMPTS,
+                     delay_seconds=VERDICT_CHECK_DELAY_SECONDS, sleeper=time.sleep):
+    """Wait briefly for GitHub to expose the posted comment; never weaken SHA validation."""
+    for attempt in range(attempts):
+        if github.find_verdict(number, old_ids, head_sha):
+            return
+        if attempt + 1 < attempts:
+            sleeper(delay_seconds)
+    detail = getattr(github, "last_verdict_issue", None)
+    message = "Financial Review did not post a valid PR-specific verdict"
+    if detail:
+        message += f": {detail}"
+    raise ReviewError(message)
 
     def finish_labels(self, number):
         self.request("POST", f"/issues/{number}/labels", {"labels": ["Financial reviewed"]})
@@ -147,12 +177,22 @@ def run(client, github, limiter, agent_id, vault_id, server_label, number, head_
     completed = False
     try:
         old_comments = github.comment_ids(number)
+        # A previous attempt may have posted a valid review but failed later.
+        # Reconcile it without invoking the paid agent a second time.
+        if github.find_verdict(number, set(), head_sha):
+            github.assert_eligible_head(number, head_sha)
+            github.finish_labels(number)
+            limiter.complete(number, head_sha)
+            completed = True
+            print("Financial Review reconciled an existing valid verdict without a new agent call.")
+            return True
         payload = {"agent_id": agent_id, "environment": {"type": "none"}, "stream": True,
                    "vault_ids": [vault_id], "input": json.dumps({"trigger": "financial_review",
                    "pull_request_number": number, "head_sha": head_sha,
                    "comment_requirements": (
                        "Post a human-readable review comment with separate lines "
                        f"'Reviewed commit: {head_sha}' and 'Verdict: <decision>'. "
+                       "Copy the complete 40-character commit SHA exactly; never abbreviate it. "
                        "The decision must be PASS, PASS WITH WARNINGS, CHANGES REQUESTED, "
                        "or UNABLE TO REVIEW."
                    ), "offline_validation": report},
@@ -169,8 +209,7 @@ def run(client, github, limiter, agent_id, vault_id, server_label, number, head_
         if not any(v.get("server_label") == expected_label and v.get("status") == "completed"
                    and v.get("error") in (None, {}) for v in calls.values()):
             raise ReviewError("Financial Review completed without successful GitHub MCP access")
-        if not github.find_verdict(number, old_comments, head_sha):
-            raise ReviewError("Financial Review did not post a valid PR-specific verdict")
+        wait_for_verdict(github, number, old_comments, head_sha)
         github.assert_eligible_head(number, head_sha)
         github.finish_labels(number)
         try:
