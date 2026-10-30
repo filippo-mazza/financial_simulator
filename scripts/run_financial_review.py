@@ -118,8 +118,8 @@ class GitHubPRClient:
             try:
                 reviewed_commit, _verdict = parse_review_comment(body)
             except ReviewError as error:
-                if re.search(r"Reviewed commit\\s*:", body, re.IGNORECASE):
-                    match = re.search(r"Reviewed commit\\s*:\\s*[`*_]*([0-9a-f]{7,40})", body, re.IGNORECASE)
+                if re.search(r"Reviewed commit\s*:", body, re.IGNORECASE):
+                    match = re.search(r"Reviewed commit\s*:\s*[`*_]*([0-9a-f]{7,40})", body, re.IGNORECASE)
                     if match and len(match.group(1)) != 40:
                         self.last_verdict_issue = (
                             f"review comment contains a {len(match.group(1))}-character commit SHA; "
