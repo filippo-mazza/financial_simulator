@@ -178,3 +178,29 @@ def test_liability_share_scales_attributable_debt_and_net_worth():
 def test_invalid_liability_share_is_rejected():
     with pytest.raises(ValueError):
         run_simulation(_linked_property_config(liability_share_percentage=0))
+
+
+def test_partial_ownership_without_loan_contributes_owned_value_only():
+    net_worth, _, details = run_simulation(_linked_property_config(
+        linked_loan_name=None, rental_income_name=None,
+        monthly_expenses=0, yearly_tax=0,
+    ))
+    name = "Fictional rental"
+    assert details["property_owned_values"][name][0] == 50_000
+    assert details["property_debt_balances"][name][0] == 0
+    assert details["property_equity"][name][0] == 50_000
+    assert details["investment_values"][name][0] == 50_000
+    remaining_loan = details["loan_balances"]["Rental mortgage"][0]
+    assert math.isclose(
+        net_worth[0], details["bank_account"][0] + 50_000 - remaining_loan
+    )
+
+
+def test_duplicate_rent_link_is_rejected_before_simulation():
+    config = _linked_property_config()
+    config.investments.append(InvestmentConfig(
+        "Second rental", "real_estate", 50_000, 0,
+        rental_income_name="Rental receipts",
+    ))
+    with pytest.raises(ValueError, match="only one property"):
+        run_simulation(config)
