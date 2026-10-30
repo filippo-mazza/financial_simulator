@@ -27,6 +27,14 @@ This is an editable planning heuristic, not lender approval. None preserves the
 legacy cash-only behavior. JSON import converts qualifying income names back to a
 tuple and older automatic policies remain valid. A short-lived pre-merge
 bonus-income field is ignored on import so it cannot weaken the conservative rule.
+AutomaticPurchasePolicy.completion_delay optionally carries a
+PurchaseCompletionDelayPolicy with inclusive minimum/maximum months and a retry
+or cancel rule. Equal bounds are fixed and do not consume random state; unequal
+bounds call the trajectory-seeded random source once at first eligibility. The
+engine keeps rent and renter state unchanged while pending, rechecks cash and
+mortgage affordability only when completion is due, and creates ownership state
+only after a successful closing. purchase_outcome retains eligibility, initial
+and next scheduled months, sampled delay, attempts, status, and actual month.
 The preview calls Loan.monthly_repayment. Import restoration populates purchase
 fields and selected rent; asdict export preserves optional fields and legacy
 exports omit them. Results report purchased trajectory count/share and actual
@@ -81,9 +89,9 @@ investment.py
 
 property_purchase.py
   Validated atomic property purchases and the optional cash-triggered purchase
-  policy plus its optional mortgage-affordability assessment. Purchases create
-  the property investment, pay down payment and fees, derive mortgage principal,
-  and emit accounting events for the simulation.
+  policy plus optional mortgage-affordability and completion-delay policies.
+  Purchases create the property investment, pay down payment and fees, derive
+  mortgage principal, and emit accounting events for the simulation.
 
 loan.py
   Fixed-payment amortization and optional fixed-interest behavior.
@@ -145,6 +153,12 @@ income, existing and proposed payments, total debt service, ratio/limit, living
 buffer, residual income, eligibility, and a readable reason. Missing or zero
 qualifying income uses a null ratio (never Infinity) so JSON remains portable.
 Both cash and mortgage tests must pass before closing.
+
+When completion_delay is present, first eligibility samples or selects the delay
+and records a pending closing without mutating renter/owner state. At the due
+month, both checks run again. retry schedules the following month after failure;
+cancel ends the attempt. A scheduled/retried month outside the horizon records
+not_completed_before_simulation_end. None and fixed zero retain immediate closing.
 
 Automatic cash-sweep contributions are configured per investment and supported
 only for stock and safe types. They default to disabled. Each enabled investment

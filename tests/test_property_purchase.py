@@ -4,7 +4,8 @@ import pytest
 
 from app import (SimulationConfig, automatic_purchase_warning,
                  create_simulation_export, purchase_outcome_from_details, read_simulation_export,
-                 run_simulation, run_simulation_batch)
+                 purchase_timing_explanation, run_simulation,
+                 run_simulation_batch)
 from bank_account import BankAccount, InsufficientFundsException
 from expense import Expense
 from income_source import IncomeSource
@@ -12,6 +13,7 @@ from loan import Loan
 from property_purchase import (AutomaticPurchasePolicy,
                                MortgageAffordabilityPolicy, PropertyPurchase,
                                PropertyPurchaseError,
+                               PurchaseCompletionDelayPolicy,
                                evaluate_mortgage_affordability,
                                execute_property_purchase)
 from utils import compute_net_worth_over_time
@@ -527,3 +529,236 @@ def test_mortgage_affordability_policy_round_trips_in_export():
 
     assert "Infinity" not in exported
     assert restored.property_purchase == config.property_purchase
+
+
+def test_zero_completion_delay_matches_immediate_purchase_results():
+    template = PropertyPurchase(100_000, 20, 500)
+    immediate = AutomaticPurchasePolicy(template, 20_500, 0)
+    explicit_zero = AutomaticPurchasePolicy(
+        template,
+        20_500,
+        0,
+        completion_delay=PurchaseCompletionDelayPolicy(0, 0, "retry"),
+    )
+
+    immediate_result = compute_net_worth_over_time(
+        1, BankAccount(30_000), [], [], [], [], seed=7,
+        property_purchase=immediate,
+    )
+    zero_result = compute_net_worth_over_time(
+        1, BankAccount(30_000), [], [], [], [], seed=7,
+        property_purchase=explicit_zero,
+    )
+
+    assert zero_result == immediate_result
+    assert zero_result[2]["purchase_outcome"]["purchase_month"] == 0
+
+
+def test_fixed_delay_validation_and_sampling_do_not_consume_randomness():
+    class FailingRandom:
+        def randint(self, _minimum, _maximum):
+            raise AssertionError("fixed delay must not consume a random draw")
+
+    assert PurchaseCompletionDelayPolicy(0, 0).sample_months(FailingRandom()) == 0
+    assert PurchaseCompletionDelayPolicy(3, 3).sample_months(FailingRandom()) == 3
+    with pytest.raises(PropertyPurchaseError, match="cannot exceed"):
+        PurchaseCompletionDelayPolicy(4, 2).validate()
+    with pytest.raises(PropertyPurchaseError, match="retry.*cancel"):
+        PurchaseCompletionDelayPolicy(0, 0, "unknown").validate()
+
+
+def test_fixed_completion_delay_keeps_rent_until_actual_closing():
+    rent = Expense("Rent", "housing", 500)
+    policy = AutomaticPurchasePolicy(
+        PropertyPurchase(100_000, 20),
+        20_000,
+        0,
+        completion_delay=PurchaseCompletionDelayPolicy(2, 2, "retry"),
+    )
+
+    result = compute_net_worth_over_time(
+        1, BankAccount(30_000), [], [], [], [rent], seed=9,
+        property_purchase=policy, selected_rent_expense="Rent",
+    )
+    outcome = result[2]["purchase_outcome"]
+
+    assert outcome["first_eligible_month"] == 0
+    assert outcome["initial_scheduled_completion_month"] == 2
+    assert outcome["completion_delay_months"] == 2
+    assert outcome["purchase_month"] == 2
+    assert outcome["completion_status"] == "purchased"
+    assert outcome["completion_attempts"] == 1
+    assert result[2]["expense_values"]["Rent"] == [500, 500] + [0] * 10
+
+
+def test_bounded_random_completion_delay_is_seeded_and_in_range():
+    policy = AutomaticPurchasePolicy(
+        PropertyPurchase(100_000, 20),
+        20_000,
+        0,
+        completion_delay=PurchaseCompletionDelayPolicy(1, 4, "retry"),
+    )
+
+    first = compute_net_worth_over_time(
+        1, BankAccount(30_000), [], [], [], [], seed=123,
+        property_purchase=policy,
+    )[2]["purchase_outcome"]
+    second = compute_net_worth_over_time(
+        1, BankAccount(30_000), [], [], [], [], seed=123,
+        property_purchase=policy,
+    )[2]["purchase_outcome"]
+
+    assert first["completion_delay_months"] == second["completion_delay_months"]
+    assert 1 <= first["completion_delay_months"] <= 4
+    assert first["purchase_month"] == first["completion_delay_months"]
+
+
+class _ScheduledCashFlow:
+    def __init__(self, name, amounts):
+        self.name = name
+        self.amounts = list(amounts)
+        self.index = 0
+        self.monthly_income = 0
+
+    def step(self):
+        amount = self.amounts[self.index] if self.index < len(self.amounts) else 0
+        self.index += 1
+        return amount
+
+
+class _ChangingIncome:
+    def __init__(self, name, monthly_amounts):
+        self.name = name
+        self.monthly_amounts = list(monthly_amounts)
+        self.index = 0
+        self.monthly_income = self.monthly_amounts[0]
+        self.income_type = "salary"
+        self.specific_taxation = 0
+        self.income_taxation = {"salary": 0}
+        self.bonus_pct = 0
+
+    def step(self):
+        amount = self.monthly_income
+        self.index += 1
+        if self.index < len(self.monthly_amounts):
+            self.monthly_income = self.monthly_amounts[self.index]
+        return amount
+
+
+def test_failed_completion_recheck_can_cancel_without_buying():
+    one_time_cost = _ScheduledCashFlow("One-time cost", [0, 0, 15_000])
+    policy = AutomaticPurchasePolicy(
+        PropertyPurchase(100_000, 20),
+        20_000,
+        0,
+        completion_delay=PurchaseCompletionDelayPolicy(2, 2, "cancel"),
+    )
+
+    result = compute_net_worth_over_time(
+        1, BankAccount(30_000), [], [], [], [one_time_cost], seed=4,
+        property_purchase=policy,
+    )
+    outcome = result[2]["purchase_outcome"]
+
+    assert outcome["first_eligible_month"] == 0
+    assert outcome["completion_attempts"] == 1
+    assert outcome["completion_status"] == "cancelled"
+    assert outcome["purchased"] is False
+    assert result[2]["purchase_events"] == []
+
+
+def test_completion_rechecks_mortgage_affordability_at_closing():
+    changing_income = _ChangingIncome("Salary", [5_000, 5_000, 1_000])
+    affordability = MortgageAffordabilityPolicy(
+        max_debt_service_ratio_pct=20,
+        qualifying_income_names=("Salary",),
+    )
+    policy = AutomaticPurchasePolicy(
+        PropertyPurchase(100_000, 20, mortgage_duration_years=25),
+        20_000,
+        0,
+        mortgage_affordability=affordability,
+        completion_delay=PurchaseCompletionDelayPolicy(2, 2, "cancel"),
+    )
+
+    outcome = compute_net_worth_over_time(
+        1, BankAccount(30_000), [], [], [changing_income], [], seed=5,
+        property_purchase=policy,
+    )[2]["purchase_outcome"]
+
+    assert outcome["first_eligible_month"] == 0
+    assert outcome["completion_status"] == "cancelled"
+    assert outcome["affordability"]["eligible"] is False
+    assert outcome["purchased"] is False
+
+
+def test_failed_completion_recheck_can_retry_and_later_close():
+    one_time_cost = _ScheduledCashFlow("One-time cost", [0, 0, 15_000])
+    later_income = _ScheduledCashFlow("Later income", [0, 0, 0, 15_000])
+    policy = AutomaticPurchasePolicy(
+        PropertyPurchase(100_000, 20),
+        20_000,
+        0,
+        completion_delay=PurchaseCompletionDelayPolicy(2, 2, "retry"),
+    )
+
+    result = compute_net_worth_over_time(
+        1, BankAccount(30_000), [], [], [later_income], [one_time_cost], seed=4,
+        property_purchase=policy,
+    )
+    outcome = result[2]["purchase_outcome"]
+
+    assert outcome["initial_scheduled_completion_month"] == 2
+    assert outcome["completion_attempts"] == 2
+    assert outcome["completion_status"] == "purchased"
+    assert outcome["purchase_month"] == 3
+
+
+def test_completion_after_horizon_records_no_purchase():
+    policy = AutomaticPurchasePolicy(
+        PropertyPurchase(100_000, 20),
+        20_000,
+        0,
+        completion_delay=PurchaseCompletionDelayPolicy(12, 12, "retry"),
+    )
+
+    details = compute_net_worth_over_time(
+        1, BankAccount(30_000), [], [], [], [], seed=3,
+        property_purchase=policy,
+    )[2]
+    outcome = details["purchase_outcome"]
+
+    assert outcome["first_eligible_month"] == 0
+    assert outcome["initial_scheduled_completion_month"] == 12
+    assert outcome["completion_status"] == "not_completed_before_simulation_end"
+    assert outcome["completion_attempts"] == 0
+    assert outcome["purchased"] is False
+    assert details["purchase_events"] == []
+
+
+def test_completion_delay_round_trips_and_timing_is_readable():
+    delay = PurchaseCompletionDelayPolicy(2, 5, "cancel")
+    config = SimulationConfig(
+        years=1, initial_cash=0, investments=[], incomes=[], expenses=[], loans=[],
+        property_purchase=AutomaticPurchasePolicy(
+            PropertyPurchase(100_000, 20), 20_000, 0,
+            completion_delay=delay,
+        ),
+    )
+    restored = read_simulation_export(
+        create_simulation_export(config, *run_simulation(config))
+    )
+
+    assert restored.property_purchase == config.property_purchase
+    explanation = purchase_timing_explanation({
+        "first_eligible_month": 1,
+        "initial_scheduled_completion_month": 4,
+        "completion_delay_months": 3,
+        "completion_attempts": 1,
+        "completion_status": "purchased",
+        "purchased": True,
+        "purchase_month": 4,
+    })
+    assert "First eligible in month 2" in explanation
+    assert "closing scheduled for month 5" in explanation
+    assert "completed in month 5" in explanation

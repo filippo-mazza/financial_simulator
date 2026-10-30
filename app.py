@@ -22,6 +22,7 @@ from property_purchase import (
     AutomaticPurchasePolicy,
     MortgageAffordabilityPolicy,
     PropertyPurchase,
+    PurchaseCompletionDelayPolicy,
     evaluate_mortgage_affordability,
 )
 from loan import Loan
@@ -472,6 +473,36 @@ def purchase_outcome_from_details(details):
 
 def automatic_purchase_warning(policy, not_purchased, trajectory_count, outcomes=None):
     """Explain a deferred automatic purchase without treating it as an error."""
+    completion_outcomes = [outcome for outcome in outcomes or [] if outcome]
+    unfinished = sum(
+        outcome.get("completion_status")
+        == "not_completed_before_simulation_end"
+        for outcome in completion_outcomes
+    )
+    cancelled = sum(
+        outcome.get("completion_status") == "cancelled"
+        for outcome in completion_outcomes
+    )
+    if unfinished or cancelled:
+        reasons = []
+        never_eligible = max(0, not_purchased - unfinished - cancelled)
+        if unfinished:
+            reasons.append(
+                f"{unfinished} remained scheduled or deferred when the simulation ended"
+            )
+        if cancelled:
+            reasons.append(
+                f"{cancelled} were cancelled after closing checks no longer passed"
+            )
+        if never_eligible:
+            reasons.append(
+                f"{never_eligible} never met the initial eligibility checks"
+            )
+        return (
+            f"Automatic purchase did not complete in {not_purchased} of "
+            f"{trajectory_count} trajectories: {'; '.join(reasons)}. "
+            "Those simulations continued without the purchase."
+        )
     cash_message = (
         "Automatic purchase was not affordable during the simulation in "
         f"{not_purchased} of {trajectory_count} trajectories."
@@ -493,6 +524,30 @@ def automatic_purchase_warning(policy, not_purchased, trajectory_count, outcomes
         f"{cash_message} Modeled cash did not reach the required "
         f"${policy.minimum_required_cash:,.0f} after monthly commitments; those "
         "simulations continued without the purchase."
+    )
+
+
+def purchase_timing_explanation(outcome):
+    """Describe eligibility, scheduled closing, and actual automatic outcome."""
+    if not isinstance(outcome, dict) or outcome.get("first_eligible_month") is None:
+        return None
+    eligible_month = outcome["first_eligible_month"] + 1
+    scheduled_month = outcome["initial_scheduled_completion_month"] + 1
+    delay_months = outcome["completion_delay_months"]
+    if outcome.get("purchased"):
+        result = f"completed in month {outcome['purchase_month'] + 1}"
+    elif outcome.get("completion_status") == "cancelled":
+        result = "was cancelled when the closing recheck failed"
+    elif outcome.get("completion_status") == "not_completed_before_simulation_end":
+        result = "did not complete before the simulation ended"
+    elif outcome.get("completion_status") == "deferred":
+        result = f"is deferred to month {outcome['next_completion_month'] + 1}"
+    else:
+        result = outcome.get("completion_status", "did not complete").replace("_", " ")
+    return (
+        f"First eligible in month {eligible_month}; initial closing scheduled for "
+        f"month {scheduled_month} after a {delay_months}-month delay; {result}. "
+        f"Closing checks attempted {outcome.get('completion_attempts', 0)} time(s)."
     )
 
 
@@ -826,11 +881,21 @@ def read_simulation_export(data, include_warnings=False):
                         )
                     affordability["qualifying_income_names"] = tuple(qualifying_names)
                     affordability = MortgageAffordabilityPolicy(**affordability)
+                completion_delay = purchase.get("completion_delay")
+                if completion_delay is not None:
+                    if not isinstance(completion_delay, dict):
+                        raise ValueError(
+                            "purchase completion delay policy must be an object"
+                        )
+                    completion_delay = PurchaseCompletionDelayPolicy(
+                        **completion_delay
+                    )
                 parameters["property_purchase"] = AutomaticPurchasePolicy(
                     PropertyPurchase(**template),
                     purchase["minimum_available_cash"],
                     purchase["minimum_cash_reserve"],
                     affordability,
+                    completion_delay,
                 )
             else:
                 parameters["property_purchase"] = PropertyPurchase(**purchase)
@@ -929,6 +994,12 @@ def main():
     st.session_state.setdefault("purchase_buffer_per_adult", 0.0)
     st.session_state.setdefault("purchase_dependent_count", 0)
     st.session_state.setdefault("purchase_buffer_per_dependent", 0.0)
+    st.session_state.setdefault("purchase_delay_enabled", False)
+    st.session_state.setdefault("purchase_delay_mode", "Fixed")
+    st.session_state.setdefault("purchase_fixed_delay_months", 0)
+    st.session_state.setdefault("purchase_random_delay_min", 1)
+    st.session_state.setdefault("purchase_random_delay_max", 3)
+    st.session_state.setdefault("purchase_delay_failure_policy", "retry")
     st.session_state.setdefault("selected_rent_expense", None)
     st.session_state.setdefault("purchase_fields", {
         "purchase_price": 250000.0, "down_payment_percentage": 20.0,
@@ -978,6 +1049,7 @@ def main():
             else "Scheduled — in a selected month"
         )
         st.session_state.purchase_affordability_enabled = False
+        st.session_state.purchase_delay_enabled = False
         template = purchase.purchase if isinstance(purchase, AutomaticPurchasePolicy) else purchase
         if template is not None:
             st.session_state.purchase_fields = asdict(template)
@@ -1009,6 +1081,28 @@ def main():
                     st.session_state.purchase_buffer_per_dependent = (
                         affordability.monthly_buffer_per_dependent
                     )
+                completion_delay = purchase.completion_delay
+                st.session_state.purchase_delay_enabled = completion_delay is not None
+                if completion_delay is not None:
+                    is_fixed_delay = (
+                        completion_delay.minimum_months
+                        == completion_delay.maximum_months
+                    )
+                    st.session_state.purchase_delay_mode = (
+                        "Fixed" if is_fixed_delay else "Bounded random"
+                    )
+                    st.session_state.purchase_fixed_delay_months = (
+                        completion_delay.minimum_months
+                    )
+                    st.session_state.purchase_random_delay_min = (
+                        completion_delay.minimum_months
+                    )
+                    st.session_state.purchase_random_delay_max = (
+                        completion_delay.maximum_months
+                    )
+                    st.session_state.purchase_delay_failure_policy = (
+                        completion_delay.on_ineligible
+                    )
         for key in (
             "purchase_price", "purchase_down_pct", "purchase_fees", "purchase_rate",
             "purchase_term", "purchase_fixed", "purchase_monthly_cost",
@@ -1019,6 +1113,9 @@ def main():
             "purchase_base_buffer_input", "purchase_adult_count_input",
             "purchase_adult_buffer_input", "purchase_dependent_count_input",
             "purchase_dependent_buffer_input",
+            "purchase_delay_toggle", "purchase_delay_mode_input",
+            "purchase_fixed_delay_input", "purchase_random_delay_min_input",
+            "purchase_random_delay_max_input", "purchase_delay_failure_input",
         ):
             st.session_state.pop(key, None)
         st.session_state.selected_rent_expense = imported.selected_rent_expense
@@ -1579,6 +1676,71 @@ def main():
                             step=100.0, format="%.0f",
                             key="purchase_dependent_buffer_input",
                         )
+                    st.session_state.purchase_delay_enabled = st.checkbox(
+                        "Add a delay between eligibility and closing",
+                        value=bool(st.session_state.purchase_delay_enabled),
+                        key="purchase_delay_toggle",
+                        help=(
+                            "When enabled, becoming eligible schedules a later closing. "
+                            "Cash and mortgage affordability are checked again then."
+                        ),
+                    )
+                    if st.session_state.purchase_delay_enabled:
+                        st.session_state.purchase_delay_mode = st.radio(
+                            "Closing delay",
+                            ("Fixed", "Bounded random"),
+                            index=(
+                                0 if st.session_state.purchase_delay_mode == "Fixed"
+                                else 1
+                            ),
+                            horizontal=True,
+                            key="purchase_delay_mode_input",
+                        )
+                        if st.session_state.purchase_delay_mode == "Fixed":
+                            st.session_state.purchase_fixed_delay_months = st.number_input(
+                                "Months from eligibility to closing",
+                                min_value=0,
+                                value=int(st.session_state.purchase_fixed_delay_months),
+                                step=1,
+                                key="purchase_fixed_delay_input",
+                            )
+                        else:
+                            delay_left, delay_right = st.columns(2)
+                            st.session_state.purchase_random_delay_min = delay_left.number_input(
+                                "Minimum delay (months)",
+                                min_value=0,
+                                value=int(st.session_state.purchase_random_delay_min),
+                                step=1,
+                                key="purchase_random_delay_min_input",
+                            )
+                            st.session_state.purchase_random_delay_max = delay_right.number_input(
+                                "Maximum delay (months)",
+                                min_value=0,
+                                value=int(st.session_state.purchase_random_delay_max),
+                                step=1,
+                                key="purchase_random_delay_max_input",
+                            )
+                        failure_options = {
+                            "Retry next month until the simulation ends": "retry",
+                            "Cancel this trajectory's purchase": "cancel",
+                        }
+                        current_failure_label = next(
+                            label for label, value in failure_options.items()
+                            if value == st.session_state.purchase_delay_failure_policy
+                        )
+                        selected_failure_label = st.selectbox(
+                            "If closing checks no longer pass",
+                            tuple(failure_options),
+                            index=tuple(failure_options).index(current_failure_label),
+                            key="purchase_delay_failure_input",
+                        )
+                        st.session_state.purchase_delay_failure_policy = (
+                            failure_options[selected_failure_label]
+                        )
+                        st.caption(
+                            "Rent continues and no property, mortgage, or owner costs are "
+                            "created until closing actually succeeds."
+                        )
                 else:
                     max_purchase_month = years * 12
                     current_purchase_month = min(
@@ -1593,6 +1755,27 @@ def main():
                 st.session_state.selected_rent_expense = None if selected == rent_options[0] else selected
                 preview = PropertyPurchase(**purchase)
                 st.info(f"Configuration estimate: upfront cash **${preview.down_payment + preview.transaction_fees:,.0f}**, mortgage principal **${preview.mortgage_principal:,.0f}**, estimated payment **${property_purchase_payment(preview):,.0f}/month**. Automatic purchase is stochastic and may not occur. The configured closing cash is a point-in-time minimum, not a protected account.")
+                if (st.session_state.purchase_mode.startswith("Automatic")
+                        and st.session_state.purchase_delay_enabled):
+                    if st.session_state.purchase_delay_mode == "Fixed":
+                        delay_text = (
+                            f"{st.session_state.purchase_fixed_delay_months} month(s)"
+                        )
+                    else:
+                        delay_text = (
+                            f"{st.session_state.purchase_random_delay_min}–"
+                            f"{st.session_state.purchase_random_delay_max} months, "
+                            "sampled once per trajectory"
+                        )
+                    failure_text = (
+                        "retry monthly"
+                        if st.session_state.purchase_delay_failure_policy == "retry"
+                        else "cancel the purchase"
+                    )
+                    st.caption(
+                        f"Closing delay: {delay_text}. At the scheduled month, recheck "
+                        f"cash and mortgage affordability; if either fails, {failure_text}."
+                    )
                 if (st.session_state.purchase_mode.startswith("Automatic")
                         and st.session_state.purchase_affordability_enabled):
                     affordability_policy = MortgageAffordabilityPolicy(
@@ -1714,6 +1897,7 @@ def main():
     if st.session_state.purchase_enabled:
         purchase_template = PropertyPurchase(**st.session_state.purchase_fields)
         affordability_policy = None
+        completion_delay_policy = None
         if (st.session_state.purchase_mode.startswith("Automatic")
                 and st.session_state.purchase_affordability_enabled):
             affordability_policy = MortgageAffordabilityPolicy(
@@ -1738,12 +1922,27 @@ def main():
                     st.session_state.purchase_buffer_per_dependent
                 ),
             )
+        if (st.session_state.purchase_mode.startswith("Automatic")
+                and st.session_state.purchase_delay_enabled):
+            if st.session_state.purchase_delay_mode == "Fixed":
+                minimum_delay = maximum_delay = int(
+                    st.session_state.purchase_fixed_delay_months
+                )
+            else:
+                minimum_delay = int(st.session_state.purchase_random_delay_min)
+                maximum_delay = int(st.session_state.purchase_random_delay_max)
+            completion_delay_policy = PurchaseCompletionDelayPolicy(
+                minimum_months=minimum_delay,
+                maximum_months=maximum_delay,
+                on_ineligible=st.session_state.purchase_delay_failure_policy,
+            )
         purchase_config = (
             AutomaticPurchasePolicy(
                 purchase_template,
                 float(st.session_state.purchase_min_cash),
                 float(st.session_state.purchase_reserve),
                 affordability_policy,
+                completion_delay_policy,
             )
             if st.session_state.purchase_mode.startswith("Automatic") else purchase_template
         )
@@ -1878,6 +2077,9 @@ def main():
         detail_prefix = "Average"
 
     selected_outcome = purchase_outcome_from_details(details)
+    timing_explanation = purchase_timing_explanation(selected_outcome)
+    if timing_explanation is not None:
+        st.info(f"**{detail_prefix} purchase timing:** {timing_explanation}")
     affordability = (
         selected_outcome.get("affordability")
         if isinstance(selected_outcome, dict) else None
