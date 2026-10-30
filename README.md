@@ -143,8 +143,9 @@ property equity, rental receipts, and linked operating costs. Links are reportin
 relationships: the loan remains one global liability, rent is deposited once by
 the existing income source, and costs are withdrawn once by the existing linked
 expenses. Property equity is therefore informative and is not added to net worth
-again. The entire linked loan balance is treated as attributable to the property;
-separate fractional liability shares are not modeled. Rental income, monthly
+again. By default the entire linked loan balance is attributable to the user; an optional
+**liability share** percentage scales the debt subtracted from net worth and shown
+in property equity (loan payments remain the user's full cashflow). Rental income, monthly
 expenses, and annual tax inputs must already represent the user's attributable
 share; they are not multiplied by the ownership percentage. Legacy scenarios
 default to 100% ownership with no loan or rental-income links.

@@ -27,7 +27,8 @@ class Investment:
                  contribution_fee: float = None,
                  ownership_percentage: float = 100.0,
                  linked_loan_name: str = None,
-                 rental_income_name: str = None):
+                 rental_income_name: str = None,
+                 liability_share_percentage: float = 100.0):
         if typology not in self.TOPOLOGY_DETAILS:
             raise ValueError(f"Invalid typology. Must be one of {list(self.TOPOLOGY_DETAILS.keys())}")
         if auto_invest_enabled and typology not in self.AUTO_INVEST_TYPES:
@@ -40,8 +41,11 @@ class Investment:
             raise ValueError("Automatic contribution maximum per year must be positive")
         if not 0 < ownership_percentage <= 100:
             raise ValueError("Ownership percentage must be greater than 0 and at most 100")
+        if not 0 < liability_share_percentage <= 100:
+            raise ValueError("Liability share percentage must be greater than 0 and at most 100")
         if typology != "real_estate" and (
                 ownership_percentage != 100
+                or liability_share_percentage != 100
                 or linked_loan_name is not None
                 or rental_income_name is not None):
             raise ValueError("Property ownership and links require a real-estate investment")
@@ -56,6 +60,7 @@ class Investment:
         self.auto_invest_max_per_year = auto_invest_max_per_year
         self.ownership_percentage = ownership_percentage
         self.linked_loan_name = linked_loan_name
+        self.liability_share_percentage = liability_share_percentage
         self.rental_income_name = rental_income_name
         defaults = self.TOPOLOGY_DETAILS[typology]
         self.annual_return_mean = (

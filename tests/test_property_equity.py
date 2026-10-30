@@ -158,3 +158,23 @@ def test_purchased_property_reports_full_ownership_and_linked_mortgage_equity():
     assert details["property_owned_values"]["Future home"][0] == 100_000
     assert details["property_debt_balances"]["Future home"][0] == 80_000
     assert details["property_equity"]["Future home"][0] == 20_000
+
+
+def test_liability_share_scales_attributable_debt_and_net_worth():
+    full_nw, _, full = run_simulation(_linked_property_config())
+    share_nw, _, shared = run_simulation(
+        _linked_property_config(liability_share_percentage=50)
+    )
+    name = "Fictional rental"
+    full_debt = full["property_debt_balances"][name][0]
+    assert math.isclose(shared["property_debt_balances"][name][0], full_debt / 2)
+    assert math.isclose(
+        shared["property_equity"][name][0],
+        shared["property_owned_values"][name][0] - full_debt / 2,
+    )
+    assert math.isclose(share_nw[0] - full_nw[0], full_debt / 2, abs_tol=1e-6)
+
+
+def test_invalid_liability_share_is_rejected():
+    with pytest.raises(ValueError):
+        run_simulation(_linked_property_config(liability_share_percentage=0))

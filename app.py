@@ -76,6 +76,7 @@ class InvestmentConfig:
     auto_invest_max_per_year: int = 3
     ownership_percentage: float = 100.0
     linked_loan_name: str | None = None
+    liability_share_percentage: float = 100.0
     rental_income_name: str | None = None
 
 
@@ -261,8 +262,11 @@ def build_components(config: SimulationConfig):
     for item in investment_specs:
         if not 0 < item.ownership_percentage <= 100:
             raise ValueError("Property ownership percentage must be above 0 and at most 100")
+        if not 0 < item.liability_share_percentage <= 100:
+            raise ValueError("Property liability share must be above 0 and at most 100")
         if item.investment_type != "real_estate":
             if (item.ownership_percentage != 100
+                    or item.liability_share_percentage != 100
                     or item.linked_loan_name is not None
                     or item.rental_income_name is not None):
                 raise ValueError(
@@ -407,6 +411,7 @@ def build_components(config: SimulationConfig):
         investment.auto_invest_max_per_year = item.auto_invest_max_per_year
         investment.ownership_percentage = item.ownership_percentage
         investment.linked_loan_name = item.linked_loan_name
+        investment.liability_share_percentage = item.liability_share_percentage
         investment.rental_income_name = item.rental_income_name
         investments.append(investment)
     loans = [Loan(item.name, item.amount, item.interest_rate, item.duration_years,
@@ -921,6 +926,7 @@ def read_simulation_export(data, include_warnings=False):
                     values.setdefault("auto_invest_max_per_year", 3)
                     values.setdefault("ownership_percentage", 100.0)
                     values.setdefault("linked_loan_name", None)
+                    values.setdefault("liability_share_percentage", 100.0)
                     values.setdefault("rental_income_name", None)
                     if not auto_invest_feature_supported:
                         values["auto_invest_enabled"] = False
@@ -1053,6 +1059,7 @@ def main():
         "auto_invest_enabled": False, "auto_invest_min_cash": 10000.0,
         "auto_invest_percentage": 10.0, "auto_invest_max_per_year": 3,
         "ownership_percentage": 100.0, "linked_loan_name": None,
+        "liability_share_percentage": 100.0,
         "rental_income_name": None,
     }])
     st.session_state.setdefault("incomes", [{
@@ -1112,6 +1119,7 @@ def main():
                 item.setdefault("auto_invest_max_per_year", 3)
                 item.setdefault("ownership_percentage", 100.0)
                 item.setdefault("linked_loan_name", None)
+                item.setdefault("liability_share_percentage", 100.0)
                 item.setdefault("rental_income_name", None)
 
     def item_key(item):
@@ -1290,6 +1298,7 @@ def main():
             "auto_invest_enabled": False, "auto_invest_min_cash": 10000.0,
             "auto_invest_percentage": 10.0, "auto_invest_max_per_year": 3,
             "ownership_percentage": 100.0, "linked_loan_name": None,
+        "liability_share_percentage": 100.0,
             "rental_income_name": None,
             "_id": uuid.uuid4().hex,
         })
@@ -1391,8 +1400,19 @@ def main():
                         format_func=lambda value: "No linked loan" if value is None else value,
                         key=f"investment_linked_loan_{item_key(item)}",
                         help=(
-                            "The linked outstanding balance is shown as attributable debt "
-                            "and subtracted once globally from net worth."
+                            "The attributable share of the linked outstanding balance is "
+                            "subtracted once globally from net worth."
+                        ),
+                    )
+                    item["liability_share_percentage"] = st.number_input(
+                        "Your share of the linked loan (%)", min_value=0.01,
+                        max_value=100.0,
+                        value=float(item.get("liability_share_percentage", 100.0)),
+                        step=1.0, key=f"investment_liability_share_{item_key(item)}",
+                        disabled=item["linked_loan_name"] is None,
+                        help=(
+                            "Portion of the linked loan balance attributable to you. "
+                            "Loan payments entered remain your full cashflow."
                         ),
                     )
                     rent_options = [None] + [
@@ -1436,6 +1456,7 @@ def main():
                 else:
                     item["ownership_percentage"] = 100.0
                     item["linked_loan_name"] = None
+                    item["liability_share_percentage"] = 100.0
                     item["rental_income_name"] = None
                     item["monthly_contribution"] = st.number_input(
                         "Monthly contribution", min_value=0.0,
@@ -2118,6 +2139,7 @@ def main():
             auto_invest_max_per_year=int(item["auto_invest_max_per_year"]),
             ownership_percentage=float(item.get("ownership_percentage", 100.0)),
             linked_loan_name=item.get("linked_loan_name"),
+            liability_share_percentage=float(item.get("liability_share_percentage", 100.0)),
             rental_income_name=item.get("rental_income_name"),
         ) for item in st.session_state.investments],
         incomes=[IncomeConfig(

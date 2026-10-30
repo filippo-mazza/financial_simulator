@@ -23,10 +23,24 @@ def total_investment_value(investments):
 
 import numpy as np
 
+def linked_loan_liability_shares(investments):
+    """Map each property-linked loan name to the user's liability fraction."""
+    return {
+        investment.linked_loan_name: (
+            getattr(investment, "liability_share_percentage", 100.0) / 100
+        )
+        for investment in investments
+        if getattr(investment, "linked_loan_name", None) is not None
+    }
+
+
 def get_net_worth(investments,loans,bank_account):
     # Compute the current net worth
     total_investments = total_investment_value(investments)
-    total_loans = sum(loan.remaining_amount for loan in loans)
+    shares = linked_loan_liability_shares(investments)
+    total_loans = sum(
+        loan.remaining_amount * shares.get(loan.name, 1.0) for loan in loans
+    )
     return bank_account.total_balance() + total_investments - total_loans
 
 import random
@@ -531,6 +545,7 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 linked_loan_name = getattr(investment, "linked_loan_name", None)
                 debt_balance = (
                     loan_balances.get(linked_loan_name, 0)
+                    * getattr(investment, "liability_share_percentage", 100.0) / 100
                     if linked_loan_name is not None else 0
                 )
                 rental_income_name = getattr(
