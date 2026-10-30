@@ -94,13 +94,14 @@ class FinancialReviewDispatchTest(unittest.TestCase):
         def stream_session(self, payload): self.payload = payload; return iter(self.events)
 
     class GitHub:
-        def __init__(self, verdict=True):
-            self.verdict, self.labeled, self.restored, self.eligible = verdict, False, False, True
+        def __init__(self, verdict=True, existing=False):
+            self.verdict, self.existing = verdict, existing
+            self.labeled, self.restored, self.eligible = False, False, True
             self.verdict_calls = 0
         def comment_ids(self, _number): return {1}
         def find_verdict(self, _number, _old_ids, _sha):
             self.verdict_calls += 1
-            return self.verdict
+            return self.existing if not _old_ids else self.verdict
         def finish_labels(self, _number): self.labeled = True
         def restore_request_labels(self, _number): self.restored = True; self.labeled = False
         def assert_eligible_head(self, _number, _sha):
@@ -143,7 +144,7 @@ class FinancialReviewDispatchTest(unittest.TestCase):
 
 
     def test_existing_valid_review_is_reconciled_without_paid_agent(self):
-        client, github, limiter = self.Client(self.events()), self.GitHub(True), self.Limiter()
+        client, github, limiter = self.Client(self.events()), self.GitHub(True, existing=True), self.Limiter()
         self.assertTrue(run(client, github, limiter, "agent_1", "vault_1", "github", 63, SHA, {"status": "PASS"}))
         self.assertIsNone(client.payload)
         self.assertTrue(github.labeled)
