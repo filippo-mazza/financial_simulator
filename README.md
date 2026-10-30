@@ -29,10 +29,11 @@ engine. Imported purchase settings replace stale widget values, and a scheduled
 month is clamped when the simulation horizon is shortened. Settings round-trip
 through JSON; legacy exports remain disabled. Automatic mode can optionally add
 an editable mortgage-affordability planning rule: selected qualifying incomes,
-bonus and variable-income inclusion, total existing-plus-proposed debt service,
-a maximum debt-service ratio, and adult/dependent living buffers. This heuristic
-is not a lender decision or guarantee of approval. Comparison dashboards and
-closing delays are not implemented.
+variable-income inclusion, total existing-plus-proposed debt service, a maximum
+debt-service ratio, and adult/dependent living buffers. Annual bonuses are
+excluded because they are not guaranteed, producing a more conservative estimate.
+This heuristic is not a lender decision or guarantee of approval. Comparison
+dashboards and closing delays are not implemented.
 
 Please be advised that the content presented in the previous article, code snippets, and any related materials do not constitute financial advice. I am not a licensed financial advisor. The information and tools are provided merely as examples and should not be construed as direct, personal, or professional financial guidance.
 
@@ -163,8 +164,9 @@ or unforeseen costs can reduce it. Results record both the configured minimum
 and actual post-closing cash. When enabled, the separate mortgage-affordability
 gate uses the authoritative loan payment calculation and counts the proposed
 mortgage exactly once alongside active existing loan payments. It compares that
-total with selected net regular incomes using editable bonus/variable-income
-inclusion percentages, a debt-service limit, and optional household buffers.
+total with selected net regular incomes using an editable variable-income
+inclusion percentage, a debt-service limit, and optional household buffers.
+Configured annual bonuses are never qualifying income because they are uncertain.
 The assessment, assumptions, ratio, amounts, and reason are shown in results and
 exported; disabling it preserves the previous cash-only rule. These are planning
 assumptions, not universal lender criteria. Purchase parameters, events, fees,

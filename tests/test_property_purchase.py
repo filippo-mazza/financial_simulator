@@ -366,10 +366,9 @@ def test_dependent_living_buffer_can_block_otherwise_affordable_mortgage():
     assert "below the configured household buffer" in assessment["reason"]
 
 
-def test_bonus_and_variable_income_use_explicit_inclusion_percentages():
+def test_annual_bonus_is_excluded_and_variable_income_uses_explicit_percentage():
     policy = MortgageAffordabilityPolicy(
         qualifying_income_names=("Salary", "Freelance"),
-        bonus_income_inclusion_pct=50,
         variable_income_inclusion_pct=50,
     )
 
@@ -377,14 +376,67 @@ def test_bonus_and_variable_income_use_explicit_inclusion_percentages():
         PropertyPurchase(100_000, 100),
         policy,
         [
-            IncomeSource("Salary", "salary", 3_000, 0, 10),
+            IncomeSource("Salary", "salary", 3_000, 0, 100),
             IncomeSource("Freelance", "freelance", 2_000, 0, 0),
         ],
         [],
     )
 
-    assert assessment["qualifying_monthly_income"] == 4_150
+    assert assessment["qualifying_monthly_income"] == 4_000
     assert assessment["eligible"] is True
+
+
+def test_configured_bonus_does_not_increase_qualifying_income():
+    policy = MortgageAffordabilityPolicy(
+        qualifying_income_names=("Salary",),
+    )
+    purchase = PropertyPurchase(100_000, 20)
+
+    without_bonus = evaluate_mortgage_affordability(
+        purchase, policy,
+        [IncomeSource("Salary", "salary", 3_000, 30, 0)], [],
+    )
+    with_bonus = evaluate_mortgage_affordability(
+        purchase, policy,
+        [IncomeSource("Salary", "salary", 3_000, 30, 100)], [],
+    )
+
+    assert without_bonus["qualifying_monthly_income"] == 2_100
+    assert with_bonus["qualifying_monthly_income"] == 2_100
+    assert with_bonus["annual_bonus_treatment"] == "excluded"
+    assert with_bonus["debt_service_ratio_pct"] == (
+        without_bonus["debt_service_ratio_pct"]
+    )
+
+
+def test_month_twelve_bonus_payment_does_not_change_affordability_income():
+    affordability = MortgageAffordabilityPolicy(
+        max_debt_service_ratio_pct=5,
+        qualifying_income_names=("Salary",),
+    )
+    result = compute_net_worth_over_time(
+        1,
+        BankAccount(100_000),
+        [],
+        [],
+        [IncomeSource("Salary", "salary", 3_000, 0, 100)],
+        [],
+        seed=42,
+        property_purchase=AutomaticPurchasePolicy(
+            PropertyPurchase(100_000, 20, mortgage_duration_years=25),
+            20_000,
+            0,
+            affordability,
+        ),
+    )
+    details = result[2]
+
+    assert details["income_values"]["Salary"][11] > 3_000
+    assert details["purchase_outcome"]["purchased"] is False
+    assert (
+        details["purchase_outcome"]["affordability"]["qualifying_monthly_income"]
+        == 3_000
+    )
 
 
 def test_automatic_purchase_waits_when_mortgage_affordability_fails():
@@ -451,7 +503,6 @@ def test_mortgage_affordability_policy_round_trips_in_export():
     affordability = MortgageAffordabilityPolicy(
         max_debt_service_ratio_pct=35,
         qualifying_income_names=("Salary", "Partner salary"),
-        bonus_income_inclusion_pct=25,
         variable_income_inclusion_pct=40,
         base_monthly_living_buffer=500,
         adult_count=2,

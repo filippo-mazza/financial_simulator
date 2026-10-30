@@ -23,15 +23,14 @@ VARIABLE_INCOME_TYPES = frozenset({"freelance", "royalty", "other"})
 class MortgageAffordabilityPolicy:
     """Editable planning assumptions for an optional mortgage eligibility gate.
 
-    Income inclusion percentages are deliberately explicit rather than lender
-    defaults.  A value of 0 excludes that income category; 100 includes the
-    configured amount in full.  The policy is a planning heuristic and is not a
-    prediction or guarantee of mortgage approval.
+    Variable-income inclusion is deliberately explicit rather than a lender
+    default. A value of 0 excludes it; 100 includes the configured regular rate
+    in full. Annual bonuses are always excluded because they are unguaranteed.
+    The policy is a planning heuristic, not a prediction or approval guarantee.
     """
 
     max_debt_service_ratio_pct: float = 33.0
     qualifying_income_names: tuple[str, ...] = ()
-    bonus_income_inclusion_pct: float = 0.0
     variable_income_inclusion_pct: float = 0.0
     base_monthly_living_buffer: float = 0.0
     adult_count: int = 1
@@ -50,7 +49,6 @@ class MortgageAffordabilityPolicy:
     def validate(self):
         percentages = (
             (self.max_debt_service_ratio_pct, "maximum debt-service ratio"),
-            (self.bonus_income_inclusion_pct, "bonus income inclusion"),
             (self.variable_income_inclusion_pct, "variable income inclusion"),
         )
         for value, label in percentages:
@@ -151,13 +149,10 @@ def evaluate_mortgage_affordability(
         net_regular = _net_regular_income(source, rate)
         if source.income_type in VARIABLE_INCOME_TYPES:
             net_regular *= policy.variable_income_inclusion_pct / 100
-        bonus_pct = getattr(source, "bonus_pct", 0) or 0
-        bonus_monthly = (
-            net_regular
-            * bonus_pct / 100
-            * policy.bonus_income_inclusion_pct / 100
-        )
-        qualifying_income += net_regular + bonus_monthly
+        # Annual bonuses are deliberately excluded. They are stochastic and
+        # unguaranteed in the engine, so counting them would make this planning
+        # gate less conservative and could overstate mortgage affordability.
+        qualifying_income += net_regular
         included_sources.append(source.name)
 
     existing_debt_payment = sum(
@@ -215,7 +210,7 @@ def evaluate_mortgage_affordability(
         "max_debt_service_ratio_pct": policy.max_debt_service_ratio_pct,
         "monthly_living_buffer": policy.monthly_living_buffer,
         "income_after_debt": income_after_debt,
-        "bonus_income_inclusion_pct": policy.bonus_income_inclusion_pct,
+        "annual_bonus_treatment": "excluded",
         "variable_income_inclusion_pct": policy.variable_income_inclusion_pct,
     }
 

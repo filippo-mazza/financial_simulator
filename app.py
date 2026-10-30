@@ -814,6 +814,9 @@ def read_simulation_export(data, include_warnings=False):
                             "mortgage affordability policy must be an object"
                         )
                     affordability = dict(affordability)
+                    # A short-lived pre-merge format exposed bonus inclusion.
+                    # Ignore it safely: bonuses are never qualifying income.
+                    affordability.pop("bonus_income_inclusion_pct", None)
                     qualifying_names = affordability.get(
                         "qualifying_income_names", ()
                     )
@@ -920,7 +923,6 @@ def main():
     st.session_state.setdefault("purchase_affordability_enabled", False)
     st.session_state.setdefault("purchase_affordability_ratio", 33.0)
     st.session_state.setdefault("purchase_qualifying_incomes", ["Salary"])
-    st.session_state.setdefault("purchase_bonus_income_pct", 0.0)
     st.session_state.setdefault("purchase_variable_income_pct", 0.0)
     st.session_state.setdefault("purchase_base_living_buffer", 0.0)
     st.session_state.setdefault("purchase_adult_count", 1)
@@ -991,9 +993,6 @@ def main():
                     st.session_state.purchase_qualifying_incomes = list(
                         affordability.qualifying_income_names
                     )
-                    st.session_state.purchase_bonus_income_pct = (
-                        affordability.bonus_income_inclusion_pct
-                    )
                     st.session_state.purchase_variable_income_pct = (
                         affordability.variable_income_inclusion_pct
                     )
@@ -1016,7 +1015,7 @@ def main():
             "purchase_yearly_tax", "purchase_threshold", "purchase_reserve_input",
             "purchase_month", "purchase_affordability_toggle",
             "purchase_affordability_ratio_input", "purchase_qualifying_income_input",
-            "purchase_bonus_income_input", "purchase_variable_income_input",
+            "purchase_variable_income_input",
             "purchase_base_buffer_input", "purchase_adult_count_input",
             "purchase_adult_buffer_input", "purchase_dependent_count_input",
             "purchase_dependent_buffer_input",
@@ -1518,7 +1517,9 @@ def main():
                     )
                     if st.session_state.purchase_affordability_enabled:
                         st.caption(
-                            "Mortgage affordability · editable planning assumptions"
+                            "Mortgage affordability · editable planning assumptions. "
+                            "Annual bonuses are excluded because they are not guaranteed, "
+                            "giving a more conservative estimate."
                         )
                         income_options = [
                             item["name"] for item in st.session_state.incomes
@@ -1542,16 +1543,6 @@ def main():
                             min_value=0.0, max_value=100.0,
                             value=float(st.session_state.purchase_affordability_ratio),
                             step=1.0, key="purchase_affordability_ratio_input",
-                        )
-                        st.session_state.purchase_bonus_income_pct = st.number_input(
-                            "Count configured bonus income (%)",
-                            min_value=0.0, max_value=100.0,
-                            value=float(st.session_state.purchase_bonus_income_pct),
-                            step=5.0, key="purchase_bonus_income_input",
-                            help=(
-                                "Percentage of the configured annual bonus estimate to "
-                                "include as a monthly equivalent."
-                            ),
                         )
                         st.session_state.purchase_variable_income_pct = st.number_input(
                             "Count freelance / royalty / other income (%)",
@@ -1610,9 +1601,6 @@ def main():
                         ),
                         qualifying_income_names=tuple(
                             st.session_state.purchase_qualifying_incomes
-                        ),
-                        bonus_income_inclusion_pct=float(
-                            st.session_state.purchase_bonus_income_pct
                         ),
                         variable_income_inclusion_pct=float(
                             st.session_state.purchase_variable_income_pct
@@ -1734,9 +1722,6 @@ def main():
                 ),
                 qualifying_income_names=tuple(
                     st.session_state.purchase_qualifying_incomes
-                ),
-                bonus_income_inclusion_pct=float(
-                    st.session_state.purchase_bonus_income_pct
                 ),
                 variable_income_inclusion_pct=float(
                     st.session_state.purchase_variable_income_pct
@@ -1908,7 +1893,7 @@ def main():
             f"proposed mortgage ${affordability['proposed_mortgage_payment']:,.0f}; "
             f"debt-service ratio {ratio_text} against "
             f"{affordability['max_debt_service_ratio_pct']:.1f}%; household buffer "
-            f"${affordability['monthly_living_buffer']:,.0f}. "
+            f"${affordability['monthly_living_buffer']:,.0f}; annual bonuses excluded. "
             f"{affordability['reason']}"
         )
 

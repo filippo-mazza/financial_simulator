@@ -54,12 +54,15 @@ def test_purchase_panel_exposes_optional_mortgage_affordability(monkeypatch, tmp
     assert not app.exception
     labels = {item.label for item in app.number_input}
     assert "Maximum total debt service (% of qualifying income)" in labels
-    assert "Count configured bonus income (%)" in labels
     assert "Count freelance / royalty / other income (%)" in labels
     assert "Buffer per adult" in labels
     assert "Buffer per dependent" in labels
     assert any(
         "Current estimate" in item.value and "debt-service ratio" in item.value
+        for item in app.caption
+    )
+    assert any(
+        "Annual bonuses are excluded" in item.value
         for item in app.caption
     )
 
