@@ -18,7 +18,12 @@ from financial_assumptions import FinancialAssumptions, INCOME_TYPES, INVESTMENT
 from income_source import IncomeSource
 from investment import Investment
 from utils import compute_net_worth_over_time
-from property_purchase import PropertyPurchase, AutomaticPurchasePolicy
+from property_purchase import (
+    AutomaticPurchasePolicy,
+    MortgageAffordabilityPolicy,
+    PropertyPurchase,
+    evaluate_mortgage_affordability,
+)
 from loan import Loan
 
 AUTO_INVEST_EXPORT_VERSION = 1
@@ -143,6 +148,32 @@ def property_purchase_payment(purchase):
     return Loan("preview", purchase.mortgage_principal,
                 purchase.mortgage_interest_rate, purchase.mortgage_duration_years,
                 purchase.fixed_rate).monthly_repayment
+
+
+def mortgage_affordability_preview(purchase, policy, incomes, loans, assumptions):
+    """Evaluate UI configuration with the same domain objects as a simulation."""
+    income_sources = []
+    for item in incomes:
+        taxation = (
+            item["tax_rate"]
+            if item["tax_rate"] else assumptions.income_tax_rates[item["income_type"]]
+        )
+        source = IncomeSource(
+            item["name"], item["income_type"], item["monthly_amount"],
+            specific_taxation=None, bonus_pct=item["bonus_pct"] or None,
+        )
+        source.specific_taxation = taxation
+        income_sources.append(source)
+    debt_loans = [
+        Loan(
+            item["name"], item["amount"], item["interest_rate"],
+            item["duration_years"], item["fixed_rate"], item["already_paid"],
+        )
+        for item in loans
+    ]
+    return evaluate_mortgage_affordability(
+        purchase, policy, income_sources, debt_loans,
+    )
 
 
 @dataclass(frozen=True)
@@ -439,13 +470,29 @@ def purchase_outcome_from_details(details):
     return {"purchased": True, "purchase_month": events[0]["month"]}
 
 
-def automatic_purchase_warning(policy, not_purchased, trajectory_count):
+def automatic_purchase_warning(policy, not_purchased, trajectory_count, outcomes=None):
     """Explain a deferred automatic purchase without treating it as an error."""
-    return (
+    cash_message = (
         "Automatic purchase was not affordable during the simulation in "
-        f"{not_purchased} of {trajectory_count} trajectories. Modeled cash did not "
-        f"reach the required ${policy.minimum_required_cash:,.0f} after monthly "
-        "commitments; those simulations continued without the purchase."
+        f"{not_purchased} of {trajectory_count} trajectories."
+    )
+    failed_assessments = [
+        outcome["affordability"]
+        for outcome in outcomes or []
+        if outcome and outcome.get("affordability")
+        and not outcome["affordability"]["eligible"]
+    ]
+    if failed_assessments:
+        example = failed_assessments[0]
+        return (
+            f"{cash_message} The mortgage affordability rule was not met in "
+            f"{len(failed_assessments)} trajectory/trajectories; for example: "
+            f"{example['reason']} Simulations continued without the purchase."
+        )
+    return (
+        f"{cash_message} Modeled cash did not reach the required "
+        f"${policy.minimum_required_cash:,.0f} after monthly commitments; those "
+        "simulations continued without the purchase."
     )
 
 
@@ -760,10 +807,30 @@ def read_simulation_export(data, include_warnings=False):
                 template = purchase["purchase"]
                 if not isinstance(template, dict):
                     raise ValueError("automatic purchase template must be an object")
+                affordability = purchase.get("mortgage_affordability")
+                if affordability is not None:
+                    if not isinstance(affordability, dict):
+                        raise ValueError(
+                            "mortgage affordability policy must be an object"
+                        )
+                    affordability = dict(affordability)
+                    # A short-lived pre-merge format exposed bonus inclusion.
+                    # Ignore it safely: bonuses are never qualifying income.
+                    affordability.pop("bonus_income_inclusion_pct", None)
+                    qualifying_names = affordability.get(
+                        "qualifying_income_names", ()
+                    )
+                    if not isinstance(qualifying_names, (list, tuple)):
+                        raise ValueError(
+                            "qualifying income names must be a list"
+                        )
+                    affordability["qualifying_income_names"] = tuple(qualifying_names)
+                    affordability = MortgageAffordabilityPolicy(**affordability)
                 parameters["property_purchase"] = AutomaticPurchasePolicy(
                     PropertyPurchase(**template),
                     purchase["minimum_available_cash"],
                     purchase["minimum_cash_reserve"],
+                    affordability,
                 )
             else:
                 parameters["property_purchase"] = PropertyPurchase(**purchase)
@@ -853,6 +920,15 @@ def main():
     st.session_state.setdefault("purchase_mode", "Automatic — when affordable")
     st.session_state.setdefault("purchase_min_cash", 10000.0)
     st.session_state.setdefault("purchase_reserve", 0.0)
+    st.session_state.setdefault("purchase_affordability_enabled", False)
+    st.session_state.setdefault("purchase_affordability_ratio", 33.0)
+    st.session_state.setdefault("purchase_qualifying_incomes", ["Salary"])
+    st.session_state.setdefault("purchase_variable_income_pct", 0.0)
+    st.session_state.setdefault("purchase_base_living_buffer", 0.0)
+    st.session_state.setdefault("purchase_adult_count", 1)
+    st.session_state.setdefault("purchase_buffer_per_adult", 0.0)
+    st.session_state.setdefault("purchase_dependent_count", 0)
+    st.session_state.setdefault("purchase_buffer_per_dependent", 0.0)
     st.session_state.setdefault("selected_rent_expense", None)
     st.session_state.setdefault("purchase_fields", {
         "purchase_price": 250000.0, "down_payment_percentage": 20.0,
@@ -901,17 +977,48 @@ def main():
             "Automatic — when affordable" if isinstance(purchase, AutomaticPurchasePolicy)
             else "Scheduled — in a selected month"
         )
+        st.session_state.purchase_affordability_enabled = False
         template = purchase.purchase if isinstance(purchase, AutomaticPurchasePolicy) else purchase
         if template is not None:
             st.session_state.purchase_fields = asdict(template)
             if isinstance(purchase, AutomaticPurchasePolicy):
                 st.session_state.purchase_min_cash = purchase.minimum_available_cash
                 st.session_state.purchase_reserve = purchase.minimum_cash_reserve
+                affordability = purchase.mortgage_affordability
+                st.session_state.purchase_affordability_enabled = affordability is not None
+                if affordability is not None:
+                    st.session_state.purchase_affordability_ratio = (
+                        affordability.max_debt_service_ratio_pct
+                    )
+                    st.session_state.purchase_qualifying_incomes = list(
+                        affordability.qualifying_income_names
+                    )
+                    st.session_state.purchase_variable_income_pct = (
+                        affordability.variable_income_inclusion_pct
+                    )
+                    st.session_state.purchase_base_living_buffer = (
+                        affordability.base_monthly_living_buffer
+                    )
+                    st.session_state.purchase_adult_count = affordability.adult_count
+                    st.session_state.purchase_buffer_per_adult = (
+                        affordability.monthly_buffer_per_adult
+                    )
+                    st.session_state.purchase_dependent_count = (
+                        affordability.dependent_count
+                    )
+                    st.session_state.purchase_buffer_per_dependent = (
+                        affordability.monthly_buffer_per_dependent
+                    )
         for key in (
             "purchase_price", "purchase_down_pct", "purchase_fees", "purchase_rate",
             "purchase_term", "purchase_fixed", "purchase_monthly_cost",
             "purchase_yearly_tax", "purchase_threshold", "purchase_reserve_input",
-            "purchase_month",
+            "purchase_month", "purchase_affordability_toggle",
+            "purchase_affordability_ratio_input", "purchase_qualifying_income_input",
+            "purchase_variable_income_input",
+            "purchase_base_buffer_input", "purchase_adult_count_input",
+            "purchase_adult_buffer_input", "purchase_dependent_count_input",
+            "purchase_dependent_buffer_input",
         ):
             st.session_state.pop(key, None)
         st.session_state.selected_rent_expense = imported.selected_rent_expense
@@ -1399,6 +1506,79 @@ def main():
                             "payments, and unforeseen costs can use it."
                         ),
                     )
+                    st.session_state.purchase_affordability_enabled = st.checkbox(
+                        "Also require mortgage affordability",
+                        value=bool(st.session_state.purchase_affordability_enabled),
+                        key="purchase_affordability_toggle",
+                        help=(
+                            "Optional planning heuristic only—not a lender decision or "
+                            "guarantee of approval. Disabled preserves cash-only behavior."
+                        ),
+                    )
+                    if st.session_state.purchase_affordability_enabled:
+                        st.caption(
+                            "Mortgage affordability · editable planning assumptions. "
+                            "Annual bonuses are excluded because they are not guaranteed, "
+                            "giving a more conservative estimate."
+                        )
+                        income_options = [
+                            item["name"] for item in st.session_state.incomes
+                        ]
+                        selected_incomes = [
+                            name for name in st.session_state.purchase_qualifying_incomes
+                            if name in income_options
+                        ]
+                        st.session_state.purchase_qualifying_incomes = st.multiselect(
+                            "Qualifying income sources",
+                            income_options,
+                            default=selected_incomes,
+                            key="purchase_qualifying_income_input",
+                            help=(
+                                "Select only household income sources you want this "
+                                "planning rule to count."
+                            ),
+                        )
+                        st.session_state.purchase_affordability_ratio = st.number_input(
+                            "Maximum total debt service (% of qualifying income)",
+                            min_value=0.0, max_value=100.0,
+                            value=float(st.session_state.purchase_affordability_ratio),
+                            step=1.0, key="purchase_affordability_ratio_input",
+                        )
+                        st.session_state.purchase_variable_income_pct = st.number_input(
+                            "Count freelance / royalty / other income (%)",
+                            min_value=0.0, max_value=100.0,
+                            value=float(st.session_state.purchase_variable_income_pct),
+                            step=5.0, key="purchase_variable_income_input",
+                        )
+                        st.session_state.purchase_base_living_buffer = st.number_input(
+                            "Base monthly living buffer",
+                            min_value=0.0,
+                            value=float(st.session_state.purchase_base_living_buffer),
+                            step=100.0, format="%.0f", key="purchase_base_buffer_input",
+                        )
+                        buffer_left, buffer_right = st.columns(2)
+                        st.session_state.purchase_adult_count = buffer_left.number_input(
+                            "Adults", min_value=0,
+                            value=int(st.session_state.purchase_adult_count),
+                            step=1, key="purchase_adult_count_input",
+                        )
+                        st.session_state.purchase_buffer_per_adult = buffer_right.number_input(
+                            "Buffer per adult", min_value=0.0,
+                            value=float(st.session_state.purchase_buffer_per_adult),
+                            step=100.0, format="%.0f", key="purchase_adult_buffer_input",
+                        )
+                        dependent_left, dependent_right = st.columns(2)
+                        st.session_state.purchase_dependent_count = dependent_left.number_input(
+                            "Dependents", min_value=0,
+                            value=int(st.session_state.purchase_dependent_count),
+                            step=1, key="purchase_dependent_count_input",
+                        )
+                        st.session_state.purchase_buffer_per_dependent = dependent_right.number_input(
+                            "Buffer per dependent", min_value=0.0,
+                            value=float(st.session_state.purchase_buffer_per_dependent),
+                            step=100.0, format="%.0f",
+                            key="purchase_dependent_buffer_input",
+                        )
                 else:
                     max_purchase_month = years * 12
                     current_purchase_month = min(
@@ -1413,6 +1593,50 @@ def main():
                 st.session_state.selected_rent_expense = None if selected == rent_options[0] else selected
                 preview = PropertyPurchase(**purchase)
                 st.info(f"Configuration estimate: upfront cash **${preview.down_payment + preview.transaction_fees:,.0f}**, mortgage principal **${preview.mortgage_principal:,.0f}**, estimated payment **${property_purchase_payment(preview):,.0f}/month**. Automatic purchase is stochastic and may not occur. The configured closing cash is a point-in-time minimum, not a protected account.")
+                if (st.session_state.purchase_mode.startswith("Automatic")
+                        and st.session_state.purchase_affordability_enabled):
+                    affordability_policy = MortgageAffordabilityPolicy(
+                        max_debt_service_ratio_pct=float(
+                            st.session_state.purchase_affordability_ratio
+                        ),
+                        qualifying_income_names=tuple(
+                            st.session_state.purchase_qualifying_incomes
+                        ),
+                        variable_income_inclusion_pct=float(
+                            st.session_state.purchase_variable_income_pct
+                        ),
+                        base_monthly_living_buffer=float(
+                            st.session_state.purchase_base_living_buffer
+                        ),
+                        adult_count=int(st.session_state.purchase_adult_count),
+                        monthly_buffer_per_adult=float(
+                            st.session_state.purchase_buffer_per_adult
+                        ),
+                        dependent_count=int(
+                            st.session_state.purchase_dependent_count
+                        ),
+                        monthly_buffer_per_dependent=float(
+                            st.session_state.purchase_buffer_per_dependent
+                        ),
+                    )
+                    assessment = mortgage_affordability_preview(
+                        preview, affordability_policy,
+                        st.session_state.incomes, st.session_state.loans,
+                        FinancialAssumptions(**st.session_state.financial_assumptions),
+                    )
+                    status = "passes" if assessment["eligible"] else "does not pass"
+                    ratio = assessment["debt_service_ratio_pct"]
+                    ratio_text = f"{ratio:.1f}%" if ratio is not None else "not defined"
+                    st.caption(
+                        f"Current estimate {status}: qualifying income "
+                        f"${assessment['qualifying_monthly_income']:,.0f}/month; "
+                        f"existing debt ${assessment['existing_monthly_debt_payments']:,.0f}; "
+                        f"new mortgage ${assessment['proposed_mortgage_payment']:,.0f}; "
+                        f"debt-service ratio {ratio_text} (limit "
+                        f"{assessment['max_debt_service_ratio_pct']:.1f}%); household "
+                        f"buffer ${assessment['monthly_living_buffer']:,.0f}. "
+                        f"{assessment['reason']}"
+                    )
 
         assumptions = st.session_state.financial_assumptions
         with st.expander(
@@ -1489,8 +1713,38 @@ def main():
     purchase_config = None
     if st.session_state.purchase_enabled:
         purchase_template = PropertyPurchase(**st.session_state.purchase_fields)
+        affordability_policy = None
+        if (st.session_state.purchase_mode.startswith("Automatic")
+                and st.session_state.purchase_affordability_enabled):
+            affordability_policy = MortgageAffordabilityPolicy(
+                max_debt_service_ratio_pct=float(
+                    st.session_state.purchase_affordability_ratio
+                ),
+                qualifying_income_names=tuple(
+                    st.session_state.purchase_qualifying_incomes
+                ),
+                variable_income_inclusion_pct=float(
+                    st.session_state.purchase_variable_income_pct
+                ),
+                base_monthly_living_buffer=float(
+                    st.session_state.purchase_base_living_buffer
+                ),
+                adult_count=int(st.session_state.purchase_adult_count),
+                monthly_buffer_per_adult=float(
+                    st.session_state.purchase_buffer_per_adult
+                ),
+                dependent_count=int(st.session_state.purchase_dependent_count),
+                monthly_buffer_per_dependent=float(
+                    st.session_state.purchase_buffer_per_dependent
+                ),
+            )
         purchase_config = (
-            AutomaticPurchasePolicy(purchase_template, float(st.session_state.purchase_min_cash), float(st.session_state.purchase_reserve))
+            AutomaticPurchasePolicy(
+                purchase_template,
+                float(st.session_state.purchase_min_cash),
+                float(st.session_state.purchase_reserve),
+                affordability_policy,
+            )
             if st.session_state.purchase_mode.startswith("Automatic") else purchase_template
         )
     config = SimulationConfig(
@@ -1579,7 +1833,7 @@ def main():
             not_purchased = len(trajectories) - len(purchased)
             if not_purchased:
                 st.warning(automatic_purchase_warning(
-                    config.property_purchase, not_purchased, len(trajectories),
+                    config.property_purchase, not_purchased, len(trajectories), outcomes,
                 ))
         elif not purchased:
             st.info("Not purchased during this simulation.")
@@ -1622,6 +1876,26 @@ def main():
             f"({simulation_count} simulations)"
         )
         detail_prefix = "Average"
+
+    selected_outcome = purchase_outcome_from_details(details)
+    affordability = (
+        selected_outcome.get("affordability")
+        if isinstance(selected_outcome, dict) else None
+    )
+    if affordability is not None:
+        ratio = affordability["debt_service_ratio_pct"]
+        ratio_text = f"{ratio:.1f}%" if ratio is not None else "not defined"
+        st.info(
+            f"**{detail_prefix} mortgage affordability:** "
+            f"{'Eligible' if affordability['eligible'] else 'Not eligible'} — "
+            f"qualifying income ${affordability['qualifying_monthly_income']:,.0f}/month; "
+            f"existing debt ${affordability['existing_monthly_debt_payments']:,.0f}; "
+            f"proposed mortgage ${affordability['proposed_mortgage_payment']:,.0f}; "
+            f"debt-service ratio {ratio_text} against "
+            f"{affordability['max_debt_service_ratio_pct']:.1f}%; household buffer "
+            f"${affordability['monthly_living_buffer']:,.0f}; annual bonuses excluded. "
+            f"{affordability['reason']}"
+        )
 
     final_net_worth = net_worth[-1]
     starting_net_worth = net_worth[0]

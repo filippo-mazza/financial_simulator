@@ -19,7 +19,11 @@ def get_net_worth(investments,loans,bank_account):
 import random
 from expense import Expense, YearlyExpense
 from bank_account import InsufficientFundsException
-from property_purchase import execute_property_purchase, AutomaticPurchasePolicy
+from property_purchase import (
+    AutomaticPurchasePolicy,
+    evaluate_mortgage_affordability,
+    execute_property_purchase,
+)
 
 
 def _withdraw_for_simulation(bank_account, amount, month, reason):
@@ -89,6 +93,8 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             "mortgage_principal": None,
             "minimum_cash_reserve": property_purchase.minimum_cash_reserve,
             "cash_after_purchase": None,
+            "affordability": None,
+            "failure_reason": None,
         }
     monthly_net_worth = []
     loan_repayment_dates = {}
@@ -117,6 +123,7 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
         for month in range(12):
             current_month = year * 12 + month  # Counting months from the start
             month_income_rates = {}
+            affordability_income_rates = []
             month_income_values = {}
             month_expense_values = {}
             month_loan_payments = {}
@@ -129,9 +136,13 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 # Capture the regular gross monthly rate used for this month.
                 # ``step`` applies annual growth after month 12, so recording it
                 # first makes the new rate correctly appear from month 13.
+                regular_monthly_rate = getattr(
+                    source, "monthly_income", getattr(source, "amount", 0)
+                )
+                affordability_income_rates.append(regular_monthly_rate)
                 month_income_rates[source_name] = (
                     month_income_rates.get(source_name, 0)
-                    + getattr(source, "monthly_income", getattr(source, "amount", 0))
+                    + regular_monthly_rate
                 )
                 monthly_income = source.step()
                 year_income+=monthly_income
@@ -254,7 +265,33 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 # Selected rent is reversed if closing occurs this month, so
                 # include it when deciding whether the closing is affordable.
                 closing_cash = cash + refundable_rent
-                if closing_cash >= property_purchase.minimum_required_cash:
+                affordability = None
+                if property_purchase.mortgage_affordability is not None:
+                    affordability = evaluate_mortgage_affordability(
+                        property_purchase.purchase,
+                        property_purchase.mortgage_affordability,
+                        income_sources,
+                        loans,
+                        affordability_income_rates,
+                    )
+                cash_is_sufficient = (
+                    closing_cash >= property_purchase.minimum_required_cash
+                )
+                affordability_passes = (
+                    affordability is None or affordability["eligible"]
+                )
+                outcome = monthly_details["purchase_outcome"]
+                outcome["affordability"] = affordability
+                if not cash_is_sufficient:
+                    outcome["failure_reason"] = (
+                        f"Closing cash ${closing_cash:,.0f} is below the required "
+                        f"${property_purchase.minimum_required_cash:,.0f}."
+                    )
+                elif not affordability_passes:
+                    outcome["failure_reason"] = affordability["reason"]
+                else:
+                    outcome["failure_reason"] = None
+                if cash_is_sufficient and affordability_passes:
                     scheduled_purchase = property_purchase.purchase_for_month(current_month)
                     scheduled_purchase.validate(None, investments, loans)
                     purchase_due = True

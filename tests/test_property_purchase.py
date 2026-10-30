@@ -7,8 +7,13 @@ from app import (SimulationConfig, automatic_purchase_warning,
                  run_simulation, run_simulation_batch)
 from bank_account import BankAccount, InsufficientFundsException
 from expense import Expense
-from property_purchase import (AutomaticPurchasePolicy, PropertyPurchase,
-                               PropertyPurchaseError, execute_property_purchase)
+from income_source import IncomeSource
+from loan import Loan
+from property_purchase import (AutomaticPurchasePolicy,
+                               MortgageAffordabilityPolicy, PropertyPurchase,
+                               PropertyPurchaseError,
+                               evaluate_mortgage_affordability,
+                               execute_property_purchase)
 from utils import compute_net_worth_over_time
 
 
@@ -292,3 +297,233 @@ def test_mortgage_balance_decreases_after_repayment_begins():
 
     assert balances[0] == 80_000
     assert balances[1] < balances[0]
+
+
+def test_affordability_counts_existing_debt_and_new_mortgage_once():
+    purchase = PropertyPurchase(100_000, 20, mortgage_duration_years=25)
+    policy = MortgageAffordabilityPolicy(
+        max_debt_service_ratio_pct=40,
+        qualifying_income_names=("First salary",),
+    )
+
+    assessment = evaluate_mortgage_affordability(
+        purchase,
+        policy,
+        [IncomeSource("First salary", "salary", 3_000, 0, 0)],
+        [Loan("Existing loan", 12_000, 0, 1)],
+    )
+
+    assert assessment["eligible"] is False
+    assert assessment["existing_monthly_debt_payments"] == 1_000
+    assert math.isclose(assessment["proposed_mortgage_payment"], 800 / 3)
+    assert math.isclose(assessment["total_monthly_debt_payments"], 3_800 / 3)
+    assert math.isclose(assessment["debt_service_ratio_pct"], 380 / 9)
+    assert "above the configured 40.0% limit" in assessment["reason"]
+
+
+def test_second_selected_income_can_make_mortgage_affordable():
+    purchase = PropertyPurchase(100_000, 20, mortgage_duration_years=25)
+    policy = MortgageAffordabilityPolicy(
+        max_debt_service_ratio_pct=40,
+        qualifying_income_names=("First salary", "Second salary"),
+    )
+
+    assessment = evaluate_mortgage_affordability(
+        purchase,
+        policy,
+        [
+            IncomeSource("First salary", "salary", 3_000, 0, 0),
+            IncomeSource("Second salary", "salary", 2_000, 0, 0),
+        ],
+        [Loan("Existing loan", 12_000, 0, 1)],
+    )
+
+    assert assessment["eligible"] is True
+    assert assessment["qualifying_monthly_income"] == 5_000
+    assert assessment["qualifying_income_names"] == [
+        "First salary", "Second salary",
+    ]
+
+
+def test_dependent_living_buffer_can_block_otherwise_affordable_mortgage():
+    policy = MortgageAffordabilityPolicy(
+        max_debt_service_ratio_pct=50,
+        qualifying_income_names=("Salary",),
+        dependent_count=2,
+        monthly_buffer_per_dependent=1_000,
+    )
+
+    assessment = evaluate_mortgage_affordability(
+        PropertyPurchase(100_000, 20, mortgage_duration_years=25),
+        policy,
+        [IncomeSource("Salary", "salary", 2_000, 0, 0)],
+        [],
+    )
+
+    assert assessment["debt_service_ratio_pct"] < 50
+    assert assessment["monthly_living_buffer"] == 2_000
+    assert assessment["eligible"] is False
+    assert "below the configured household buffer" in assessment["reason"]
+
+
+def test_annual_bonus_is_excluded_and_variable_income_uses_explicit_percentage():
+    policy = MortgageAffordabilityPolicy(
+        qualifying_income_names=("Salary", "Freelance"),
+        variable_income_inclusion_pct=50,
+    )
+
+    assessment = evaluate_mortgage_affordability(
+        PropertyPurchase(100_000, 100),
+        policy,
+        [
+            IncomeSource("Salary", "salary", 3_000, 0, 100),
+            IncomeSource("Freelance", "freelance", 2_000, 0, 0),
+        ],
+        [],
+    )
+
+    assert assessment["qualifying_monthly_income"] == 4_000
+    assert assessment["eligible"] is True
+
+
+def test_configured_bonus_does_not_increase_qualifying_income():
+    policy = MortgageAffordabilityPolicy(
+        qualifying_income_names=("Salary",),
+    )
+    purchase = PropertyPurchase(100_000, 20)
+
+    without_bonus = evaluate_mortgage_affordability(
+        purchase, policy,
+        [IncomeSource("Salary", "salary", 3_000, 30, 0)], [],
+    )
+    with_bonus = evaluate_mortgage_affordability(
+        purchase, policy,
+        [IncomeSource("Salary", "salary", 3_000, 30, 100)], [],
+    )
+
+    assert without_bonus["qualifying_monthly_income"] == 2_100
+    assert with_bonus["qualifying_monthly_income"] == 2_100
+    assert with_bonus["annual_bonus_treatment"] == "excluded"
+    assert with_bonus["debt_service_ratio_pct"] == (
+        without_bonus["debt_service_ratio_pct"]
+    )
+
+
+def test_month_twelve_bonus_payment_does_not_change_affordability_income():
+    affordability = MortgageAffordabilityPolicy(
+        max_debt_service_ratio_pct=5,
+        qualifying_income_names=("Salary",),
+    )
+    result = compute_net_worth_over_time(
+        1,
+        BankAccount(100_000),
+        [],
+        [],
+        [IncomeSource("Salary", "salary", 3_000, 0, 100)],
+        [],
+        seed=42,
+        property_purchase=AutomaticPurchasePolicy(
+            PropertyPurchase(100_000, 20, mortgage_duration_years=25),
+            20_000,
+            0,
+            affordability,
+        ),
+    )
+    details = result[2]
+
+    assert details["income_values"]["Salary"][11] > 3_000
+    assert details["purchase_outcome"]["purchased"] is False
+    assert (
+        details["purchase_outcome"]["affordability"]["qualifying_monthly_income"]
+        == 3_000
+    )
+
+
+def test_automatic_purchase_waits_when_mortgage_affordability_fails():
+    affordability = MortgageAffordabilityPolicy(
+        max_debt_service_ratio_pct=20,
+        qualifying_income_names=("Salary",),
+    )
+    purchase = AutomaticPurchasePolicy(
+        PropertyPurchase(100_000, 20, mortgage_duration_years=25),
+        20_000,
+        0,
+        affordability,
+    )
+
+    result = compute_net_worth_over_time(
+        1,
+        BankAccount(100_000),
+        [],
+        [],
+        [IncomeSource("Salary", "salary", 1_000, 0, 0)],
+        [],
+        property_purchase=purchase,
+    )
+    outcome = result[2]["purchase_outcome"]
+
+    assert outcome["purchased"] is False
+    assert outcome["affordability"]["eligible"] is False
+    assert outcome["failure_reason"] == outcome["affordability"]["reason"]
+    assert result[2]["purchase_events"] == []
+
+
+def test_automatic_purchase_closes_when_cash_and_affordability_pass():
+    affordability = MortgageAffordabilityPolicy(
+        max_debt_service_ratio_pct=40,
+        qualifying_income_names=("Salary",),
+        base_monthly_living_buffer=1_000,
+    )
+    purchase = AutomaticPurchasePolicy(
+        PropertyPurchase(100_000, 20, mortgage_duration_years=25),
+        20_000,
+        0,
+        affordability,
+    )
+
+    result = compute_net_worth_over_time(
+        1,
+        BankAccount(100_000),
+        [],
+        [],
+        [IncomeSource("Salary", "salary", 3_000, 0, 0)],
+        [],
+        property_purchase=purchase,
+    )
+    outcome = result[2]["purchase_outcome"]
+
+    assert outcome["purchased"] is True
+    assert outcome["purchase_month"] == 0
+    assert outcome["affordability"]["eligible"] is True
+    assert outcome["failure_reason"] is None
+    assert len(result[2]["purchase_events"]) == 1
+
+
+def test_mortgage_affordability_policy_round_trips_in_export():
+    affordability = MortgageAffordabilityPolicy(
+        max_debt_service_ratio_pct=35,
+        qualifying_income_names=("Salary", "Partner salary"),
+        variable_income_inclusion_pct=40,
+        base_monthly_living_buffer=500,
+        adult_count=2,
+        monthly_buffer_per_adult=300,
+        dependent_count=1,
+        monthly_buffer_per_dependent=200,
+    )
+    config = SimulationConfig(
+        years=1,
+        initial_cash=0,
+        investments=[],
+        incomes=[],
+        expenses=[],
+        loans=[],
+        property_purchase=AutomaticPurchasePolicy(
+            PropertyPurchase(100_000, 20), 20_000, 5_000, affordability,
+        ),
+    )
+
+    exported = create_simulation_export(config, *run_simulation(config))
+    restored = read_simulation_export(exported)
+
+    assert "Infinity" not in exported
+    assert restored.property_purchase == config.property_purchase
