@@ -37,6 +37,31 @@ def test_streamlit_minimum_supports_persistent_keyed_expanders():
     assert "streamlit>=1.56,<2" in REQUIREMENTS_PATH.read_text()
 
 
+def test_real_estate_panel_exposes_ownership_and_exact_links(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+    app.selectbox(key="investment_type_to_add").set_value("real_estate").run(timeout=30)
+    next(
+        item for item in app.button if item.label == "＋ Add investment"
+    ).click().run(timeout=30)
+    next(
+        item for item in app.button if item.label.endswith("Investment 2")
+    ).click().run(timeout=30)
+
+    assert not app.exception
+    assert any(item.label == "Ownership share (%)" for item in app.number_input)
+    assert any(
+        item.label == "Mortgage / loan linked to this property"
+        for item in app.selectbox
+    )
+    assert any(
+        item.label == "Rental income linked to this property"
+        for item in app.selectbox
+    )
+
+
 def test_purchase_panel_exposes_optional_mortgage_affordability(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))

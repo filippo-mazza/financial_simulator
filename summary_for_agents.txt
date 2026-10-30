@@ -125,12 +125,30 @@ Do not replace an explicit empty list with defaults.
 
 Real estate is special:
   - monthly_contribution is forced to zero;
+  - initial_amount is the full market value; ownership_percentage (default 100)
+    determines the owned value included in investment totals and net worth;
+  - linked_loan_name optionally identifies exactly one configured loan whose full
+    remaining balance is reported as attributable property debt;
+  - rental_income_name optionally identifies exactly one rent IncomeConfig and is
+    copied into property reporting without another deposit;
   - monthly_expenses becomes a linked housing Expense;
   - yearly_tax becomes a linked YearlyExpense;
   - linked costs are displayed read-only under Expenses and edited under the
     real-estate investment;
   - annual property tax is charged in months 12, 24, ... and then inflated by
     the housing rate for the next year.
+
+utils.py emits stable property_market_values, property_owned_values,
+property_debt_balances, property_equity, property_rental_income, and
+property_operating_costs series. Equity is owned value minus the full linked-loan
+balance. These property series are drill-down/reconciliation outputs only:
+total_investment_value uses owned value, global loans are subtracted once by
+get_net_worth, and linked income/expenses retain their original single cash
+transactions. A loan or rent income can link to at most one property. Fractional
+loan liability, joint cashflow allocation, property sale, and refinancing are not
+modeled. Rental income and operating-cost inputs are already-attributable user
+cashflows and are not scaled by ownership_percentage. Purchased properties are
+100% owned and link their created mortgage.
 
 Property purchases are opt-in and validated before mutation. A purchase records
 the property at nominal price, expenses transaction fees, derives mortgage
@@ -276,6 +294,11 @@ monthly_contribution as monthly_expenses. Exports without the automatic-policy
 feature marker import with all automatic policies disabled and surface a safety
 warning. Keep old schema files readable or explicitly version a breaking format
 change.
+
+Monthly export rows contain a property_positions mapping with market value,
+owned value, attributable debt, equity, rental income, and operating costs.
+InvestmentConfig exports preserve ownership_percentage, linked_loan_name, and
+rental_income_name; legacy files receive 100%, None, and None respectively.
 
 Financial assumptions are stored under parameters.assumptions and marked by
 features.financial_assumptions version 1. Missing assumptions in older exports
