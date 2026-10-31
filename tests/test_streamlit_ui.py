@@ -38,6 +38,71 @@ def test_streamlit_minimum_supports_persistent_keyed_expanders():
     assert "streamlit>=1.56,<2" in REQUIREMENTS_PATH.read_text()
 
 
+def test_ab_workspace_keeps_baseline_and_alternative_inputs_isolated(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+    app.button(key="create_scenario_workspace").click().run(timeout=30)
+    assert not app.exception
+    assert app.text_input(key="scenario_baseline_name").value == "Baseline A"
+    assert app.text_input(key="scenario_alternative_name").value == "Alternative B"
+
+    app.radio(key="scenario_variant_selector").set_value("alternative").run(timeout=30)
+    app.number_input(key="scenario_initial_cash").set_value(9_000).run(timeout=30)
+    app.radio(key="scenario_variant_selector").set_value("baseline").run(timeout=30)
+
+    assert not app.exception
+    assert app.number_input(key="scenario_initial_cash").value == 5_000
+
+    app.radio(key="scenario_variant_selector").set_value("alternative").run(timeout=30)
+
+    assert not app.exception
+    assert app.number_input(key="scenario_initial_cash").value == 9_000
+    assert "simulation_result" not in app.session_state
+
+
+def test_ab_workspace_restores_each_scenario_rent_selection(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+    next(
+        item for item in app.checkbox
+        if item.label == "Enable future property purchase"
+    ).set_value(True).run(timeout=30)
+    rent_selector = next(
+        item for item in app.selectbox
+        if item.label == "Rent expense to stop after purchase"
+    )
+    rent_selector.set_value("Living expenses").run(timeout=30)
+    app.button(key="create_scenario_workspace").click().run(timeout=30)
+
+    app.radio(key="scenario_variant_selector").set_value("alternative").run(timeout=30)
+    next(
+        item for item in app.selectbox
+        if item.label == "Rent expense to stop after purchase"
+    ).set_value("Do not stop any expense").run(timeout=30)
+    app.radio(key="scenario_variant_selector").set_value("baseline").run(timeout=30)
+
+    assert not app.exception
+    assert app.session_state["selected_rent_expense"] == "Living expenses"
+    assert next(
+        item for item in app.selectbox
+        if item.label == "Rent expense to stop after purchase"
+    ).value == "Living expenses"
+
+    app.radio(key="scenario_variant_selector").set_value("alternative").run(timeout=30)
+
+    assert not app.exception
+    assert app.session_state["selected_rent_expense"] is None
+    assert next(
+        item for item in app.selectbox
+        if item.label == "Rent expense to stop after purchase"
+    ).value == "Do not stop any expense"
+
+
 def test_real_estate_panel_exposes_ownership_and_exact_links(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))

@@ -120,6 +120,18 @@ To revisit it later, open **Import saved scenario** in the sidebar, select that
 JSON file, and choose **Import parameters**. The saved inputs are restored and
 the simulation is rerun with the same seed.
 
+The optional **A/B scenario workspace** duplicates the current inputs into
+named **Baseline A** and **Alternative B** configurations. Select either name to
+edit it with the existing sidebar; switching first saves the visible inputs and
+then loads an independent defensive copy, while clearing the previous scenario's
+result. Resetting B copies the current saved A inputs again. Workspace JSON saves
+both names and input configurations without results, alongside the existing
+single-scenario result export rather than replacing it. This first workspace
+slice is configuration management only: paired-seed execution, side-by-side
+charts, and financial deltas belong to issue #31. Until then, run and export each
+active scenario separately and do not interpret two unpaired runs as a controlled
+comparison.
+
 ### Screenshots
 
 Choose a run count and click **Run simulations** to average multiple stochastic
