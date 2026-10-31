@@ -113,20 +113,21 @@ make run
 The sidebar exposes the simulator's supported income, expense, investment, and
 loan options. Use `make test` to run the unit and end-to-end test suite.
 
-After a successful simulation, use **Export parameters and results** to download
-a JSON record containing the complete scenario configuration and seed, summary
-figures, month-by-month net worth/cash/investments, and loan repayment timing.
-To revisit it later, open **Import saved scenario** in the sidebar, select that
-JSON file, and choose **Import parameters**. The saved inputs are restored and
-the simulation is rerun with the same seed.
+After a successful simulation, open **Scenario import/export** in the sidebar
+and use **Export single-scenario JSON** to download a record containing the
+complete scenario configuration and seed, summary figures, month-by-month net
+worth/cash/investments, and loan repayment timing. To revisit it later, select
+that file under **Import single-scenario JSON** and choose **Import parameters**.
+The saved inputs are restored and the simulation is rerun with the same seed.
 
 The optional **A/B scenario workspace** duplicates the current inputs into
 named **Baseline A** and **Alternative B** configurations. Select either name to
 edit it with the existing sidebar; switching first saves the visible inputs and
 then loads an independent defensive copy, while clearing the previous scenario's
-result. Resetting B copies the current saved A inputs again. Workspace JSON saves
-both names and input configurations without results, alongside the existing
-single-scenario result export rather than replacing it. This first workspace
+result. Resetting B copies the current saved A inputs again. Under
+**A/B workspace JSON** in the sidebar, **Export A/B workspace JSON** saves both
+names and input configurations without results, alongside the single-scenario result export
+rather than replacing it. This first workspace
 slice is configuration management only: paired-seed execution, side-by-side
 charts, and financial deltas belong to issue #31. Until then, run and export each
 active scenario separately and do not interpret two unpaired runs as a controlled
