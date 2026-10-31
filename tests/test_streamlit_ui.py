@@ -22,6 +22,7 @@ def test_sidebar_expanders_keep_stable_identity_when_summary_changes(monkeypatch
     expected_keys = {
         "sidebar_import", "sidebar_cash", "sidebar_investments", "sidebar_income",
         "sidebar_expenses", "sidebar_loans", "sidebar_assumptions", "sidebar_family",
+        "sidebar_jurisdictions",
     }
     assert {expander.key for expander in app.expander} == expected_keys
     assert _expander(app, "sidebar_cash").label.startswith("Cash · $5,000")
@@ -125,6 +126,14 @@ def test_real_estate_panel_exposes_ownership_and_exact_links(monkeypatch, tmp_pa
         item.label == "Rental income linked to this property"
         for item in app.selectbox
     )
+    assert any(
+        item.label == "Property jurisdiction estimate profile"
+        for item in app.selectbox
+    )
+    assert any(
+        item.label.startswith("Acquisition costs")
+        for item in app.number_input
+    )
 
 
 def test_purchase_panel_exposes_optional_mortgage_affordability(monkeypatch, tmp_path):
@@ -147,6 +156,10 @@ def test_purchase_panel_exposes_optional_mortgage_affordability(monkeypatch, tmp
 
     assert not app.exception
     labels = {item.label for item in app.number_input}
+    assert any(
+        item.label == "Purchase jurisdiction estimate profile"
+        for item in app.selectbox
+    )
     assert "Maximum total debt service (% of qualifying income)" in labels
     assert "Count freelance / royalty / other income (%)" in labels
     affordability_help = {

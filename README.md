@@ -162,6 +162,22 @@ expenses, and annual tax inputs must already represent the user's attributable
 share; they are not multiplied by the ownership percentage. Legacy scenarios
 default to 100% ownership with no loan or rental-income links.
 
+The **Property jurisdictions** sidebar section contains reusable, editable
+estimate profiles. The bundled `Fictional Metro` and `Fictional Coast` profiles
+are synthetic examples, not statements about any real country. A profile can
+estimate acquisition costs as a percentage of full purchase price, recurring
+property tax and maintenance as percentages of the user's owned starting value,
+and rental operating costs as a percentage of the linked gross monthly rent at
+scenario start. The resulting rental-cost estimate is not recalculated as rent
+changes; like other monthly property expenses, its dollar amount follows the
+normal housing-expense inflation rule.
+Selecting a profile adds those estimates to the property's explicitly entered
+fixed costs; no profile preserves the prior behavior. Value-derived recurring
+estimates use the starting value and then follow normal expense inflation—they
+are not dynamically reassessed as property value changes. These estimates are not
+jurisdictional tax advice, lender terms, or a prediction of future law. Profiles,
+assignments, and manual overrides round-trip in scenario JSON.
+
 Stock and safe investments can optionally enable **automatic cash-sweep
 contributions**. The policy is disabled by default. For each enabled investment,
 the UI configures a cash threshold, the percentage of current cash to transfer,
@@ -311,5 +327,5 @@ subprocess smoke test that runs the documented five-year example with the real
 financial model components.
 
 ```text
-117 passed
+199 passed
 ```
