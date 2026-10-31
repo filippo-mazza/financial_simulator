@@ -1,11 +1,14 @@
 import json
 import math
+from dataclasses import replace
 
 import pytest
 
 from app import (
+    ExpenseConfig,
     IncomeConfig,
     InvestmentConfig,
+    LoanConfig,
     SimulationConfig,
     create_simulation_export,
     read_simulation_export,
@@ -74,7 +77,7 @@ def test_selected_profile_adds_existing_property_costs_once():
         "Fictional Rental District", 5, 1, 1.2, 10,
     )
     config = SimulationConfig(
-        years=1,
+        years=2,
         initial_cash=10_000,
         yearly_fee=0,
         investments=[InvestmentConfig(
@@ -95,14 +98,109 @@ def test_selected_profile_adds_existing_property_costs_once():
     details = run_simulation(config)[2]
     costs = details["property_operating_costs"]["Synthetic rental"]
 
-    assert math.isclose(costs[0], 220)
-    assert math.isclose(costs[10], 220)
+    assert all(math.isclose(amount, 220) for amount in costs[:11])
     assert math.isclose(costs[11], 1_340)
+    assert math.isclose(costs[12], 223.3)
+    assert math.isclose(costs[22], 223.3)
+    assert math.isclose(costs[23], 1_360.1)
+    monthly_expenses = details["expense_values"][
+        "Synthetic rental — property expenses (linked)"
+    ]
+    assert all(math.isclose(amount, 220) for amount in monthly_expenses[:12])
+    assert all(
+        math.isclose(amount, 223.3) for amount in monthly_expenses[12:]
+    )
+    yearly_tax = details["expense_values"][
+        "Synthetic rental — property tax (linked)"
+    ]
+    assert yearly_tax[:11] == [0] * 11
+    assert math.isclose(yearly_tax[11], 1_120)
+    assert yearly_tax[12:23] == [0] * 11
+    assert math.isclose(yearly_tax[23], 1_136.8)
+
+
+def test_unassigned_profile_preserves_legacy_simulation_series():
+    legacy_config = SimulationConfig(
+        years=2,
+        seed=1729,
+        initial_cash=20_000,
+        yearly_fee=0,
+        investments=[
+            InvestmentConfig(
+                "Synthetic home", "real_estate", 200_000, 0,
+                monthly_expenses=20,
+                yearly_tax=120,
+                ownership_percentage=50,
+                linked_loan_name="Synthetic mortgage",
+                rental_income_name="Synthetic rent",
+            ),
+            InvestmentConfig("Synthetic stocks", "stock", 5_000, 100),
+        ],
+        incomes=[IncomeConfig("Synthetic rent", "rent", 1_000, 0)],
+        expenses=[ExpenseConfig("Living costs", "utilities", 500)],
+        loans=[LoanConfig("Synthetic mortgage", 40_000, 2, 10)],
+        assumptions=_zero_property_returns(),
+    )
+    profile_config = replace(
+        legacy_config,
+        jurisdiction_profiles=[
+            PropertyJurisdictionProfile("Unassigned profile", 5, 1, 1.2, 10)
+        ],
+    )
+
+    legacy_result = run_simulation(legacy_config)
+    profile_result = run_simulation(profile_config)
+
+    assert legacy_result[0] == profile_result[0]
+    assert legacy_result[1] == profile_result[1]
+    for key in ("bank_account", "investment_values", "loan_balances"):
+        assert legacy_result[2][key] == profile_result[2][key]
+
+
+def test_seeded_profile_estimates_and_purchase_outcome_are_reproducible():
+    profile = PropertyJurisdictionProfile(
+        "Fictional Reproducible District", 5, 1, 1.2, 10,
+    )
+    config = SimulationConfig(
+        years=2,
+        seed=8675309,
+        initial_cash=80_000,
+        yearly_fee=0,
+        investments=[
+            InvestmentConfig(
+                "Synthetic rental", "real_estate", 200_000, 0,
+                monthly_expenses=20,
+                yearly_tax=120,
+                ownership_percentage=50,
+                rental_income_name="Synthetic rent",
+                jurisdiction_profile_name=profile.name,
+            ),
+            InvestmentConfig("Synthetic stocks", "stock", 5_000, 100),
+        ],
+        incomes=[IncomeConfig("Synthetic rent", "rent", 1_000, 0)],
+        expenses=[],
+        loans=[],
+        assumptions=_zero_property_returns(),
+        property_purchase=AutomaticPurchasePolicy(
+            PropertyPurchase(
+                100_000, 20, transaction_fees=1_000,
+                monthly_expenses=10, yearly_tax=100,
+            ),
+            minimum_available_cash=10_000,
+            minimum_cash_reserve=2_000,
+        ),
+        jurisdiction_profiles=[profile],
+        property_purchase_jurisdiction_profile=profile.name,
+    )
+
+    first = run_simulation(config)
+    second = run_simulation(config)
+
+    assert first == second
+    assert first[2]["purchase_outcome"]["purchased"] is True
+    assert first[2]["purchase_events"][0]["transaction_fees"] == 6_000
     assert math.isclose(
-        details["expense_values"][
-            "Synthetic rental — property expenses (linked)"
-        ][0],
-        220,
+        first[2]["property_operating_costs"]["Synthetic rental"][0], 220
     )
 
 
