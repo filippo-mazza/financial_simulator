@@ -93,6 +93,11 @@ property_purchase.py
   Purchases create the property investment, pay down payment and fees, derive
   mortgage principal, and emit accounting events for the simulation.
 
+scenario_workspace.py
+  Defensive named configuration snapshots for the optional A/B workspace.
+  ScenarioVariant never exposes its stored mutable config; ScenarioWorkspace
+  returns new workspaces for save, rename, activate, and reset operations.
+
 loan.py
   Fixed-payment amortization and optional fixed-interest behavior.
 
@@ -294,6 +299,17 @@ monthly_contribution as monthly_expenses. Exports without the automatic-policy
 feature marker import with all automatic policies disabled and surface a safety
 warning. Keep old schema files readable or explicitly version a breaking format
 change.
+
+The opt-in A/B workspace stores exactly Baseline A and Alternative B in v1. On
+each rerun app.py saves the visible SimulationConfig only into the active variant;
+Streamlit callbacks load a target config before keyed sidebar widgets are
+instantiated. Switching or resetting an active variant clears simulation_result,
+so results cannot leak between scenarios. create_scenario_workspace_export()
+writes a separate parameters-only `financial-simulator-scenario-workspace`
+schema; each embedded scenario uses the established single-scenario parameter
+document and reader. Existing single-scenario JSON is unchanged. This slice does
+not run paired scenarios or calculate deltas; issue #31 owns paired seeds and the
+comparison dashboard.
 
 Monthly export rows contain a property_positions mapping with market value,
 owned value, attributable debt, equity, rental income, and operating costs.
