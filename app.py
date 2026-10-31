@@ -25,10 +25,13 @@ from property_purchase import (
     PurchaseCompletionDelayPolicy,
     evaluate_mortgage_affordability,
 )
-from property_jurisdiction import (
-    PropertyJurisdictionProfile,
+from property_jurisdiction_catalog import (
     default_property_jurisdiction_profiles,
     preset_update_notices,
+)
+from property_jurisdiction import (
+    describe_profile_assumptions,
+    PropertyJurisdictionProfile,
     estimate_property_costs,
     profiles_by_name,
 )
@@ -149,6 +152,8 @@ class SimulationConfig:
     selected_rent_expense: str | None = None
     jurisdiction_profiles: list[PropertyJurisdictionProfile] = field(default_factory=list)
     property_purchase_jurisdiction_profile: str | None = None
+    purchase_cadastral_income: float | None = None
+    purchase_assessed_value: float | None = None
 
 
 @dataclass(frozen=True)
@@ -236,6 +241,16 @@ def _investment_profile_costs(item, income_specs, profile_lookup):
     return estimate.monthly_operating_costs, estimate.annual_property_tax
 
 
+def purchase_cost_estimate(profile, purchase, cadastral_income=None,
+                           assessed_value=None):
+    """Estimate acquisition costs for a purchase, including financed amount."""
+    return estimate_property_costs(
+        profile, purchase.purchase_price,
+        mortgage_amount=purchase.mortgage_principal,
+        cadastral_income=cadastral_income, assessed_value=assessed_value,
+    )
+
+
 def resolved_property_purchase(config):
     """Add selected jurisdiction estimates to a purchase without mutating config."""
     configured = config.property_purchase
@@ -249,7 +264,10 @@ def resolved_property_purchase(config):
     purchase = configured.purchase if isinstance(
         configured, AutomaticPurchasePolicy
     ) else configured
-    estimate = estimate_property_costs(profile, purchase.purchase_price)
+    estimate = purchase_cost_estimate(
+        profile, purchase, config.purchase_cadastral_income,
+        config.purchase_assessed_value,
+    )
     resolved = replace(
         purchase,
         transaction_fees=purchase.transaction_fees + estimate.acquisition_costs,
@@ -1168,6 +1186,8 @@ def read_simulation_export(data, include_warnings=False):
             f"The exported jurisdiction profiles are invalid: {error}"
         ) from error
     parameters.setdefault("property_purchase_jurisdiction_profile", None)
+    parameters.setdefault("purchase_cadastral_income", None)
+    parameters.setdefault("purchase_assessed_value", None)
     purchase = parameters.get("property_purchase")
     if purchase is not None:
         if not isinstance(purchase, dict):
@@ -1317,6 +1337,8 @@ def main():
         for profile in default_property_jurisdiction_profiles()
     ])
     st.session_state.setdefault("purchase_jurisdiction_profile", None)
+    st.session_state.setdefault("purchase_cadastral_income", 0.0)
+    st.session_state.setdefault("purchase_assessed_value", 0.0)
     st.session_state.setdefault("purchase_enabled", False)
     st.session_state.setdefault("purchase_mode", "Automatic — when affordable")
     st.session_state.setdefault("purchase_min_cash", 10000.0)
@@ -1432,6 +1454,12 @@ def main():
         st.session_state.purchase_jurisdiction_profile = (
             imported.property_purchase_jurisdiction_profile
         )
+        st.session_state.purchase_cadastral_income = (
+            imported.purchase_cadastral_income or 0.0
+        )
+        st.session_state.purchase_assessed_value = (
+            imported.purchase_assessed_value or 0.0
+        )
         purchase = imported.property_purchase
         st.session_state.purchase_enabled = purchase is not None
         st.session_state.purchase_mode = (
@@ -1508,6 +1536,7 @@ def main():
             "purchase_random_delay_max_input", "purchase_delay_failure_input",
             "purchase_rent",
             "purchase_jurisdiction_profile_input",
+            "purchase_cadastral_income_input", "purchase_assessed_value_input",
         ):
             st.session_state.pop(key, None)
         st.session_state.selected_rent_expense = imported.selected_rent_expense
@@ -1670,7 +1699,37 @@ def main():
             "_id": uuid.uuid4().hex,
         })
 
+    @st.dialog("Jurisdiction presets: assumptions, sources and limitations",
+               width="large")
+    def show_jurisdiction_help():
+        st.markdown(
+            "**Dated planning estimates, not legal or tax advice.** Preset "
+            "values come from the official pages cited below (research dated "
+            "2026-10-31) and may be outdated or incomplete. A preset covers one "
+            "transaction scope only; reliefs, eligibility, municipal surcharges, "
+            "agent and lender fees are not modelled unless listed.\n\n"
+            "- **Statutory** values are rates/fees from the cited official page.\n"
+            "- **Indicative allowance** values are budgeting guesses, not law.\n"
+            "- **User assumption** values are yours, including any edited value.\n"
+            "- *Source-checked* applies per component, never to the whole "
+            "profile; profiles with omissions are at most *partially verified*.\n"
+            "- Annual property tax depends on assessed/cadastral values and "
+            "municipal rates: enter it yourself. Zero does **not** mean tax-free.\n"
+            "- Maintenance is a planning assumption, not a tax. Rental costs "
+            "depend on your management choices.\n"
+            "- Do not repeat a cost in both a profile and the fixed-amount "
+            "fields; profile costs are added on top of them.\n"
+            "- Saved scenarios keep their own copy (with version); newer catalog "
+            "versions never overwrite them."
+        )
+        for profile in configured_jurisdiction_profiles():
+            with st.expander(profile.name):
+                st.markdown(describe_profile_assumptions(profile))
+
     def render_jurisdiction_profiles():
+        if st.button("? Assumptions, sources and limitations",
+                     key="jurisdiction_help_button", use_container_width=True):
+            show_jurisdiction_help()
         st.caption(
             "Dated planning estimates—not tax, legal, lending, or valuation advice. "
             "Profiles add costs to the explicit fixed amounts entered on each property; "
@@ -1736,6 +1795,45 @@ def main():
                     if value != before:
                         profile[basis_field] = "user"
 
+                for c_index, component in enumerate(
+                        profile.get("acquisition_components", [])):
+                    ckey = f"{profile_key}_{c_index}"
+                    overridden = component.get("override_percentage") is not None
+                    basis = "user" if overridden else component.get("basis", "user")
+                    checked = (component.get("verified") and not overridden)
+                    st.markdown(
+                        f"**{component['label']}** · {_BASIS_LABELS[basis]} · "
+                        + ("source-checked" if checked else "not source-checked")
+                    )
+                    if component["method"] == "fixed":
+                        amount = st.number_input(
+                            "Fixed amount ($)", min_value=0.0, max_value=1e9,
+                            value=float(component["amount"]),
+                            key=f"jurisdiction_component_amount_{ckey}",
+                        )
+                        if amount != component["amount"]:
+                            component["amount"] = amount
+                            component["basis"] = "user"
+                            component["verified"] = False
+                        continue
+                    if component.get("note"):
+                        st.caption(component["note"])
+                    use_override = st.checkbox(
+                        "Override with my own flat % of the tax base",
+                        value=overridden, key=f"jurisdiction_component_toggle_{ckey}",
+                    )
+                    if use_override:
+                        component["override_percentage"] = st.number_input(
+                            "Own rate (% of base)", min_value=0.0, max_value=100.0,
+                            value=float(component.get("override_percentage") or 0.0),
+                            key=f"jurisdiction_component_override_{ckey}",
+                        )
+                    else:
+                        component["override_percentage"] = None
+                        if component["method"] == "rate":
+                            st.caption(f"{component['rate_percentage']:g}% of the base")
+                        else:
+                            st.caption("Banded rates; see the help popup for the bands.")
                 rate_input(
                     "Acquisition costs: transfer taxes (% of full purchase price)",
                     "acquisition_cost_percentage", "acquisition_cost_basis",
@@ -2317,17 +2415,39 @@ def main():
                     ),
                 )
                 purchase["purchase_price"] = st.number_input("Target property price", min_value=1.0, value=float(purchase["purchase_price"]), step=1000.0, key="purchase_price")
+                purchase["down_payment_percentage"] = st.number_input("Down payment (%)", min_value=0.0, max_value=100.0, value=float(purchase["down_payment_percentage"]), key="purchase_down_pct")
                 purchase_profile = jurisdiction_profile_from_state(
                     st.session_state.purchase_jurisdiction_profile)
                 if purchase_profile is not None:
-                    breakdown = estimate_property_costs(
-                        purchase_profile, purchase["purchase_price"]
-                    ).acquisition_breakdown
-                    for label, amount, basis in breakdown:
+                    needs = {c.base for c in purchase_profile.acquisition_components}
+                    if "cadastral_value" in needs:
+                        st.session_state.purchase_cadastral_income = st.number_input(
+                            "Cadastral income (rendita catastale, annual; 0 = not entered)",
+                            min_value=0.0,
+                            value=float(st.session_state.purchase_cadastral_income),
+                            key="purchase_cadastral_income_input",
+                            help="Only for the prezzo-valore regime. If not entered, the "
+                                 "sale price is used as an indicative proxy.",
+                        )
+                    if "higher_of_price_and_assessed" in needs:
+                        st.session_state.purchase_assessed_value = st.number_input(
+                            "Assessed value (e.g. Portuguese VPT; 0 = not entered)",
+                            min_value=0.0,
+                            value=float(st.session_state.purchase_assessed_value),
+                            key="purchase_assessed_value_input",
+                            help="The tax base is the higher of price and assessed value.",
+                        )
+                    purchase_estimate = purchase_cost_estimate(
+                        purchase_profile, PropertyPurchase(**purchase),
+                        st.session_state.purchase_cadastral_income or None,
+                        st.session_state.purchase_assessed_value or None,
+                    )
+                    for label, amount, basis in purchase_estimate.acquisition_breakdown:
                         st.caption(f"{label}: ${amount:,.0f} ({_BASIS_LABELS[basis]})")
+                    for warning in purchase_estimate.warnings:
+                        st.warning(warning)
                     if purchase_profile.unsupported_cases:
                         st.warning(f"Not covered: {purchase_profile.unsupported_cases}")
-                purchase["down_payment_percentage"] = st.number_input("Down payment (%)", min_value=0.0, max_value=100.0, value=float(purchase["down_payment_percentage"]), key="purchase_down_pct")
                 purchase["transaction_fees"] = st.number_input("Additional fixed one-off transaction fees", min_value=0.0, value=float(purchase["transaction_fees"]), step=500.0, key="purchase_fees")
                 purchase["mortgage_interest_rate"] = st.number_input("Mortgage annual interest (%)", min_value=0.0, value=float(purchase["mortgage_interest_rate"]), step=0.1, key="purchase_rate")
                 purchase["mortgage_duration_years"] = st.number_input("Mortgage term (years)", min_value=1, value=int(purchase["mortgage_duration_years"]), key="purchase_term")
@@ -2520,8 +2640,11 @@ def main():
                     st.session_state.purchase_jurisdiction_profile
                 )
                 profile_estimate = (
-                    estimate_property_costs(selected_profile, preview.purchase_price)
-                    if selected_profile is not None else None
+                    purchase_cost_estimate(
+                        selected_profile, preview,
+                        st.session_state.purchase_cadastral_income or None,
+                        st.session_state.purchase_assessed_value or None,
+                    ) if selected_profile is not None else None
                 )
                 estimated_fees = (
                     profile_estimate.acquisition_costs if profile_estimate else 0
@@ -2777,6 +2900,14 @@ def main():
         jurisdiction_profiles=configured_jurisdiction_profiles(),
         property_purchase_jurisdiction_profile=(
             st.session_state.purchase_jurisdiction_profile
+            if purchase_config is not None else None
+        ),
+        purchase_cadastral_income=(
+            st.session_state.purchase_cadastral_income or None
+            if purchase_config is not None else None
+        ),
+        purchase_assessed_value=(
+            st.session_state.purchase_assessed_value or None
             if purchase_config is not None else None
         ),
     )

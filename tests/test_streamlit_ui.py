@@ -291,3 +291,56 @@ def test_import_notice_is_shown_once_and_uploader_key_resets(monkeypatch, tmp_pa
     app.run(timeout=30)
     assert not [s for s in app.success if "imported" in s.value]
     assert app.session_state["import_uploader_counter"] == 1
+
+
+def _fresh_app(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    return AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+
+def test_jurisdiction_help_popup_lists_assumptions_sources_and_limitations(
+        monkeypatch, tmp_path):
+    app = _fresh_app(monkeypatch, tmp_path)
+
+    app.button(key="jurisdiction_help_button").click().run(timeout=30)
+
+    assert not app.exception
+    text = " ".join(item.value for item in app.markdown)
+    assert "not legal or tax advice" in text
+    assert "Zero does **not** mean tax-free" in text
+    assert "Not covered" in text
+    assert "https://atc.gencat.cat/" in text
+
+
+def test_jurisdiction_cards_label_bases_and_flag_unsupported_cases(
+        monkeypatch, tmp_path):
+    app = _fresh_app(monkeypatch, tmp_path)
+
+    assert not app.exception
+    captions = " ".join(item.value for item in app.caption)
+    assert "assessed/cadastral" in captions or "assessed" in captions
+    assert any("Not covered" in item.value for item in app.warning)
+    assert any("· indicative allowance" in item.label for item in app.number_input)
+    assert any("**Grunderwerbsteuer" in item.value and "statutory rate" in item.value
+               for item in app.markdown)
+
+
+def test_lazio_purchase_profile_prompts_for_cadastral_income_and_warns(
+        monkeypatch, tmp_path):
+    app = _fresh_app(monkeypatch, tmp_path)
+    next(
+        item for item in app.checkbox
+        if item.label == "Enable future property purchase"
+    ).set_value(True).run(timeout=30)
+    app.selectbox(key="purchase_jurisdiction_profile_input").set_value(
+        "Lazio (Italy) — private resale, prima casa").run(timeout=30)
+
+    assert not app.exception
+    assert app.number_input(key="purchase_cadastral_income_input").value == 0
+    assert any("proxy" in item.value for item in app.warning)
+
+    app.number_input(key="purchase_cadastral_income_input").set_value(
+        1_500).run(timeout=30)
+    assert not app.exception
+    assert not any("proxy" in item.value for item in app.warning)
