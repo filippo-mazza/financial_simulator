@@ -258,3 +258,135 @@ def test_unknown_selected_profile_is_rejected_before_simulation():
 
     with pytest.raises(ValueError, match="Unknown property jurisdiction profile"):
         run_simulation(config)
+
+
+# --- researched-catalog and extended-schema coverage -----------------------
+
+from property_jurisdiction import (  # noqa: E402
+    GENERIC_PROFILE_NAME,
+    default_property_jurisdiction_profiles,
+    preset_update_notices,
+)
+
+
+def test_catalog_has_generic_profile_and_provenance_for_every_preset():
+    catalog = default_property_jurisdiction_profiles()
+    assert catalog[0].name == GENERIC_PROFILE_NAME
+    assert estimate_property_costs(catalog[0], 300_000).acquisition_costs == 0
+    presets = catalog[1:]
+    assert len(presets) >= 5
+    assert not any("Fictional" in profile.name for profile in catalog)
+    assert len({profile.profile_id for profile in catalog}) == len(catalog)
+    for profile in presets:
+        assert profile.source_url.startswith("https://")
+        assert profile.data_as_of and profile.unsupported_cases
+        assert profile.verification_status == "unverified"
+        assert profile.acquisition_cost_basis in {"statutory", "indicative"}
+        assert profile.property_tax_basis == "user"
+        assert profile.property_tax_base == "assessed_value"
+
+
+def test_breakdown_sums_to_acquisition_costs_with_percentage_and_fixed_parts():
+    by_id = {p.profile_id: p for p in default_property_jurisdiction_profiles()}
+    bavaria = estimate_property_costs(by_id["de-bavaria-resale"], 400_000)
+    assert [(l, a, b) for l, a, b in bavaria.acquisition_breakdown] == [
+        ("Transfer / registration taxes", 14_000, "statutory"),
+        ("Other transaction costs", 8_000, "indicative"),
+    ]
+    lazio = estimate_property_costs(by_id["it-lazio-resale-primary"], 200_000)
+    assert lazio.acquisition_costs == 4_100
+    assert lazio.acquisition_breakdown[-1] == ("Fixed fees", 100, "statutory")
+    for profile in by_id.values():
+        estimate = estimate_property_costs(profile, 250_000)
+        assert math.isclose(
+            estimate.acquisition_costs,
+            sum(amount for _, amount, _ in estimate.acquisition_breakdown),
+        )
+        assert estimate.acquisition_costs >= 0
+        assert estimate_property_costs(profile, 0).acquisition_costs == \
+            profile.fixed_acquisition_costs
+
+
+def test_preset_override_and_unsupported_text_survive_export_round_trip():
+    preset = default_property_jurisdiction_profiles()[1]
+    from dataclasses import replace as _replace
+    overridden = _replace(
+        preset, acquisition_cost_percentage=1.0, acquisition_cost_basis="user",
+    )
+    config = SimulationConfig(
+        years=1, investments=[], incomes=[], expenses=[], loans=[],
+        jurisdiction_profiles=[overridden],
+    )
+    restored = read_simulation_export(
+        create_simulation_export(config, *run_simulation(config))
+    ).jurisdiction_profiles[0]
+    assert restored == overridden
+    assert restored.version == preset.version
+    assert restored.profile_id == preset.profile_id
+    assert restored.unsupported_cases == preset.unsupported_cases
+    assert estimate_property_costs(restored, 100_000).acquisition_costs == 1_000
+
+
+def test_legacy_export_profile_loads_unchanged_as_user_defined():
+    legacy = {
+        "name": "Fictional Metro", "acquisition_cost_percentage": 4.0,
+        "annual_property_tax_percentage": 1.0,
+        "annual_maintenance_percentage": 1.0, "rental_expense_percentage": 8.0,
+    }
+    config = SimulationConfig(
+        years=1, investments=[], incomes=[], expenses=[], loans=[],
+        jurisdiction_profiles=[PropertyJurisdictionProfile("x")],
+    )
+    exported = json.loads(create_simulation_export(config, *run_simulation(config)))
+    exported["parameters"]["jurisdiction_profiles"] = [legacy]
+    restored = read_simulation_export(json.dumps(exported)).jurisdiction_profiles[0]
+    assert restored == PropertyJurisdictionProfile(**legacy)
+    assert restored.acquisition_cost_basis == "user"
+    assert restored.version == 1 and restored.profile_id == ""
+
+
+def test_newer_catalog_version_only_produces_notice_and_keeps_saved_values():
+    preset = default_property_jurisdiction_profiles()[1]
+    from dataclasses import replace as _replace
+    old = _replace(preset, version=0 + 1)
+    assert preset_update_notices([old]) == []
+    import property_jurisdiction as module
+    original = module.default_property_jurisdiction_profiles
+    module.default_property_jurisdiction_profiles = lambda: [
+        _replace(preset, version=2, acquisition_cost_percentage=9.0)
+    ]
+    try:
+        notices = preset_update_notices([old])
+    finally:
+        module.default_property_jurisdiction_profiles = original
+    assert len(notices) == 1 and "left unchanged" in notices[0]
+    assert old.acquisition_cost_percentage == preset.acquisition_cost_percentage
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"acquisition_cost_basis": "official"},
+    {"property_tax_base": "rent"},
+    {"fixed_acquisition_costs": -1},
+    {"version": 0},
+    {"source_url": "http://example.com"},
+    {"other_transaction_cost_percentage": 101},
+])
+def test_extended_profile_fields_are_validated(kwargs):
+    with pytest.raises(ValueError):
+        PropertyJurisdictionProfile("Fictional X", **kwargs)
+
+
+def test_real_world_profile_drives_purchase_fees_once():
+    bavaria = next(
+        p for p in default_property_jurisdiction_profiles()
+        if p.profile_id == "de-bavaria-resale"
+    )
+    config = SimulationConfig(
+        property_purchase=PropertyPurchase(
+            100_000, 20, transaction_fees=1_000, monthly_expenses=10),
+        property_purchase_jurisdiction_profile=bavaria.name,
+        jurisdiction_profiles=[bavaria],
+    )
+    resolved = resolved_property_purchase(config)
+    assert resolved.transaction_fees == 1_000 + 5_500
+    assert resolved.monthly_expenses == 10 + 100_000 * 0.01 / 12

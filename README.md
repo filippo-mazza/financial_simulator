@@ -163,8 +163,25 @@ share; they are not multiplied by the ownership percentage. Legacy scenarios
 default to 100% ownership with no loan or rental-income links.
 
 The **Property jurisdictions** sidebar section contains reusable, editable
-estimate profiles. The bundled `Fictional Metro` and `Fictional Coast` profiles
-are synthetic examples, not statements about any real country. A profile can
+estimate profiles. The bundled catalog starts with an all-zero
+`Generic / manual` profile plus resale presets for the Netherlands, Austria,
+Madrid (Spain), Lazio (Italy) and Bavaria (Germany). France, Portugal and
+Catalonia are not yet covered (progressive brackets, municipal/departmental
+variation and recent rate changes need primary-source review). Each value is
+labelled a *statutory rate*, an *indicative allowance* or a *user assumption*
+(editing a value marks it as a user assumption); each preset lists its covered
+transaction, unsupported cases (investor/second-home/new-build regimes,
+exemptions), a source URL, a data-as-of date and a verification status.
+**Preset rates are dated estimates entered without live access to the primary
+sources and are marked `unverified`; confirm them on the official page. They
+are not legal or tax advice.** Annual property tax in these places depends on an
+assessed/cadastral value and municipal rates, so presets leave it for the user
+to enter; the UI flags assessed-value bases. Fixed fees and a separate
+other-transaction-cost percentage are supported alongside the transfer-tax
+percentage, and the acquisition breakdown is shown. Fictional profiles remain
+only in tests. Scenarios store full copies of profiles including `profile_id`
+and `version`; a newer catalog version only raises a notice and never rewrites
+saved values, and legacy exports load as user-defined profiles. A profile can
 estimate acquisition costs as a percentage of full purchase price, recurring
 property tax and maintenance as percentages of the user's owned starting value,
 and rental operating costs as a percentage of the linked gross monthly rent at

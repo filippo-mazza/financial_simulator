@@ -28,6 +28,7 @@ from property_purchase import (
 from property_jurisdiction import (
     PropertyJurisdictionProfile,
     default_property_jurisdiction_profiles,
+    preset_update_notices,
     estimate_property_costs,
     profiles_by_name,
 )
@@ -195,6 +196,13 @@ def mortgage_affordability_preview(purchase, policy, incomes, loans, assumptions
     return evaluate_mortgage_affordability(
         purchase, policy, income_sources, debt_loans,
     )
+
+
+_BASIS_LABELS = {
+    "statutory": "statutory rate",
+    "indicative": "indicative allowance",
+    "user": "user assumption",
+}
 
 
 def _jurisdiction_lookup(config):
@@ -1654,7 +1662,7 @@ def main():
 
     def add_jurisdiction_profile():
         st.session_state.jurisdiction_profiles.append({
-            "name": f"Fictional jurisdiction {len(st.session_state.jurisdiction_profiles) + 1}",
+            "name": f"Custom jurisdiction {len(st.session_state.jurisdiction_profiles) + 1}",
             "acquisition_cost_percentage": 0.0,
             "annual_property_tax_percentage": 0.0,
             "annual_maintenance_percentage": 0.0,
@@ -1664,9 +1672,28 @@ def main():
 
     def render_jurisdiction_profiles():
         st.caption(
-            "Editable planning estimates—not tax, legal, lending, or valuation advice. "
-            "Profiles add costs to the explicit fixed amounts entered on each property."
+            "Dated planning estimates—not tax, legal, lending, or valuation advice. "
+            "Profiles add costs to the explicit fixed amounts entered on each property; "
+            "do not enter the same cost in both places."
         )
+        catalog = {
+            item.name: item for item in default_property_jurisdiction_profiles()
+        }
+        existing_names = {
+            profile["name"] for profile in st.session_state.jurisdiction_profiles
+        }
+        for notice in preset_update_notices(configured_jurisdiction_profiles()):
+            st.warning(notice)
+        missing = [name for name in catalog if name not in existing_names]
+        if missing:
+            chosen = st.selectbox(
+                "Catalog preset to add", missing, key="jurisdiction_catalog_choice",
+            )
+            if st.button("＋ Add catalog preset", use_container_width=True):
+                st.session_state.jurisdiction_profiles.append({
+                    **asdict(catalog[chosen]), "_id": uuid.uuid4().hex,
+                })
+                st.rerun()
         if st.button("＋ Add jurisdiction profile", use_container_width=True):
             add_jurisdiction_profile()
             st.rerun()
@@ -1677,29 +1704,74 @@ def main():
                     "Profile name", profile["name"],
                     key=f"jurisdiction_name_{profile_key}",
                 )
-                profile["acquisition_cost_percentage"] = st.number_input(
-                    "Acquisition costs (% of full purchase price) · estimate",
-                    min_value=0.0, max_value=100.0,
-                    value=float(profile["acquisition_cost_percentage"]),
-                    key=f"jurisdiction_acquisition_{profile_key}",
+                if profile.get("profile_id"):
+                    st.caption(
+                        f"Catalog preset `{profile['profile_id']}` v{profile.get('version', 1)} · "
+                        f"{profile.get('verification_status', 'unverified')} · "
+                        f"data as of {profile.get('data_as_of') or 'n/a'}"
+                        + (f" · [source]({profile['source_url']})"
+                           if profile.get("source_url") else "")
+                    )
+                    if profile.get("verification_status") != "verified":
+                        st.warning(
+                            "Rates are not verified against a primary source; "
+                            "confirm before relying on them."
+                        )
+                    if profile.get("transaction_scope"):
+                        st.caption(f"Covers: {profile['transaction_scope']}")
+                    if profile.get("unsupported_cases"):
+                        st.warning(f"Not covered: {profile['unsupported_cases']}")
+                    if profile.get("notes"):
+                        st.caption(profile["notes"])
+
+                def rate_input(label, field, basis_field, key, max_value=100.0):
+                    before = float(profile.get(field, 0.0))
+                    basis = profile.get(basis_field, "user")
+                    value = st.number_input(
+                        f"{label} · {_BASIS_LABELS[basis]}",
+                        min_value=0.0, max_value=max_value, value=before,
+                        key=f"jurisdiction_{key}_{profile_key}",
+                    )
+                    profile[field] = value
+                    if value != before:
+                        profile[basis_field] = "user"
+
+                rate_input(
+                    "Acquisition costs: transfer taxes (% of full purchase price)",
+                    "acquisition_cost_percentage", "acquisition_cost_basis",
+                    "acquisition",
                 )
-                profile["annual_property_tax_percentage"] = st.number_input(
-                    "Annual property tax (% of owned starting value) · estimate",
-                    min_value=0.0, max_value=100.0,
-                    value=float(profile["annual_property_tax_percentage"]),
-                    key=f"jurisdiction_tax_{profile_key}",
+                rate_input(
+                    "Other transaction costs (% of full purchase price)",
+                    "other_transaction_cost_percentage",
+                    "other_transaction_cost_basis", "other_transaction",
                 )
-                profile["annual_maintenance_percentage"] = st.number_input(
-                    "Annual maintenance (% of owned starting value) · estimate",
-                    min_value=0.0, max_value=100.0,
-                    value=float(profile["annual_maintenance_percentage"]),
-                    key=f"jurisdiction_maintenance_{profile_key}",
+                rate_input(
+                    "Fixed acquisition fees ($)",
+                    "fixed_acquisition_costs", "fixed_acquisition_cost_basis",
+                    "fixed_acquisition", max_value=1e9,
                 )
-                profile["rental_expense_percentage"] = st.number_input(
-                    "Rental operating costs (% of gross monthly rent) · estimate",
-                    min_value=0.0, max_value=100.0,
-                    value=float(profile["rental_expense_percentage"]),
-                    key=f"jurisdiction_rental_{profile_key}",
+                tax_base = profile.get("property_tax_base", "market_value")
+                rate_input(
+                    "Annual property tax (% of owned starting value)",
+                    "annual_property_tax_percentage", "property_tax_basis", "tax",
+                )
+                if tax_base == "assessed_value":
+                    st.caption(
+                        "This tax is levied on an assessed/cadastral value, not market "
+                        "value; the simulator applies the rate to the property value "
+                        "you enter, so adjust the rate to your assessed base."
+                    )
+                else:
+                    st.caption("This tax base is the market value you enter.")
+                rate_input(
+                    "Annual maintenance (% of owned starting value)",
+                    "annual_maintenance_percentage", "maintenance_basis",
+                    "maintenance",
+                )
+                rate_input(
+                    "Rental operating costs (% of gross monthly rent)",
+                    "rental_expense_percentage", "rental_expense_basis", "rental",
                 )
                 if st.button("Remove profile", key=f"remove_jurisdiction_{profile_key}"):
                     remove_item(st.session_state.jurisdiction_profiles, index)
@@ -1863,6 +1935,10 @@ def main():
                             f"costs and ${estimate.annual_property_tax:,.0f}/year tax. "
                             "Acquisition costs apply only to future purchases."
                         )
+                        selected = jurisdiction_profile_from_state(
+                            item.get("jurisdiction_profile_name"))
+                        if selected is not None and selected.unsupported_cases:
+                            st.warning(f"Not covered: {selected.unsupported_cases}")
                     item["monthly_expenses"] = st.number_input(
                         "Additional fixed monthly property expenses (your share)",
                         min_value=0.0,
@@ -2241,6 +2317,16 @@ def main():
                     ),
                 )
                 purchase["purchase_price"] = st.number_input("Target property price", min_value=1.0, value=float(purchase["purchase_price"]), step=1000.0, key="purchase_price")
+                purchase_profile = jurisdiction_profile_from_state(
+                    st.session_state.purchase_jurisdiction_profile)
+                if purchase_profile is not None:
+                    breakdown = estimate_property_costs(
+                        purchase_profile, purchase["purchase_price"]
+                    ).acquisition_breakdown
+                    for label, amount, basis in breakdown:
+                        st.caption(f"{label}: ${amount:,.0f} ({_BASIS_LABELS[basis]})")
+                    if purchase_profile.unsupported_cases:
+                        st.warning(f"Not covered: {purchase_profile.unsupported_cases}")
                 purchase["down_payment_percentage"] = st.number_input("Down payment (%)", min_value=0.0, max_value=100.0, value=float(purchase["down_payment_percentage"]), key="purchase_down_pct")
                 purchase["transaction_fees"] = st.number_input("Additional fixed one-off transaction fees", min_value=0.0, value=float(purchase["transaction_fees"]), step=500.0, key="purchase_fees")
                 purchase["mortgage_interest_rate"] = st.number_input("Mortgage annual interest (%)", min_value=0.0, value=float(purchase["mortgage_interest_rate"]), step=0.1, key="purchase_rate")
