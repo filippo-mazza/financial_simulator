@@ -127,8 +127,9 @@ Real estate is special:
   - monthly_contribution is forced to zero;
   - initial_amount is the full market value; ownership_percentage (default 100)
     determines the owned value included in investment totals and net worth;
-  - linked_loan_name optionally identifies exactly one configured loan whose full
-    remaining balance is reported as attributable property debt;
+  - linked_loan_name optionally identifies exactly one configured loan;
+    liability_share_percentage controls how much of its remaining balance is
+    attributable property debt (loan payments remain the user's full cashflow);
   - rental_income_name optionally identifies exactly one rent IncomeConfig and is
     copied into property reporting without another deposit;
   - monthly_expenses becomes a linked housing Expense;
@@ -138,15 +139,27 @@ Real estate is special:
   - annual property tax is charged in months 12, 24, ... and then inflated by
     the housing rate for the next year.
 
+property_jurisdiction.py owns PropertyJurisdictionProfile and the pure
+estimate_property_costs() conversion. Profiles contain editable percentage
+estimates for acquisition costs, annual property tax, annual maintenance, and
+rental operating costs. Value-based recurring estimates use the owned starting
+value; acquisition costs use full purchase price; rental expenses use the linked
+gross rent already attributable to the user. app.py resolves these estimates to
+ordinary dollar costs before simulation and adds explicit fixed amounts once.
+Core accounting classes do not contain country branches. No selected profile is
+the legacy behavior. The two UI defaults are explicitly fictional. Estimates do
+not dynamically reassess with property value or model real tax/legal rules.
+
 utils.py emits stable property_market_values, property_owned_values,
 property_debt_balances, property_equity, property_rental_income, and
-property_operating_costs series. Equity is owned value minus the full linked-loan
-balance. These property series are drill-down/reconciliation outputs only:
+property_operating_costs series. Equity is owned value minus the configured
+attributable share of the linked-loan balance. These property series are
+drill-down/reconciliation outputs only:
 total_investment_value uses owned value, global loans are subtracted once by
 get_net_worth, and linked income/expenses retain their original single cash
-transactions. A loan or rent income can link to at most one property. Fractional
-loan liability, joint cashflow allocation, property sale, and refinancing are not
-modeled. Rental income and operating-cost inputs are already-attributable user
+transactions. A loan or rent income can link to at most one property. Joint
+cashflow allocation, property sale, and refinancing are not modeled. Rental
+income and operating-cost inputs are already-attributable user
 cashflows and are not scaled by ownership_percentage. Purchased properties are
 100% owned and link their created mortgage.
 
@@ -297,8 +310,11 @@ change.
 
 Monthly export rows contain a property_positions mapping with market value,
 owned value, attributable debt, equity, rental income, and operating costs.
-InvestmentConfig exports preserve ownership_percentage, linked_loan_name, and
-rental_income_name; legacy files receive 100%, None, and None respectively.
+InvestmentConfig exports preserve ownership_percentage, linked_loan_name,
+liability_share_percentage, rental_income_name, and jurisdiction_profile_name;
+legacy files receive 100%, None, 100%, None, and None respectively. Scenario
+exports also preserve the editable jurisdiction_profiles collection and the
+future-purchase profile assignment; legacy files default both to empty/unset.
 
 Financial assumptions are stored under parameters.assumptions and marked by
 features.financial_assumptions version 1. Missing assumptions in older exports
