@@ -1346,6 +1346,7 @@ def main():
             "purchase_delay_toggle", "purchase_delay_mode_input",
             "purchase_fixed_delay_input", "purchase_random_delay_min_input",
             "purchase_random_delay_max_input", "purchase_delay_failure_input",
+            "purchase_rent",
         ):
             st.session_state.pop(key, None)
         st.session_state.selected_rent_expense = imported.selected_rent_expense
