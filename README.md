@@ -163,8 +163,36 @@ share; they are not multiplied by the ownership percentage. Legacy scenarios
 default to 100% ownership with no loan or rental-income links.
 
 The **Property jurisdictions** sidebar section contains reusable, editable
-estimate profiles. The bundled `Fictional Metro` and `Fictional Coast` profiles
-are synthetic examples, not statements about any real country. A profile can
+estimate profiles. The bundled catalog starts with an all-zero
+`Generic / manual` profile plus one preset per transaction scope for the
+Netherlands (owner-occupied, investor 8%, starter exemption), Austria, Madrid
+(general and habitual-home relief), Catalonia (progressive ITP bands), Lazio
+(prima casa and second home), metropolitan France (existing property at 4.5%
+or 5% département rate, new property) , Bavaria and mainland Portugal
+(primary-residence IMT bands). Acquisition costs are now *components*: each
+line (transfer tax, registry fee, mortgage pledge, notary tariff, fixed fees,
+indicative legal allowance) is separately labelled a *statutory rate*, an
+*indicative allowance* or a *user assumption*, supports marginal bands,
+flat-on-whole-base bands, minimums, fixed amounts and financed-only charges,
+and can be overridden with your own flat percentage (which relabels it as a
+user assumption). Italian registration tax uses a cadastral base when you
+enter the cadastral income (prezzo-valore) and otherwise falls back to the
+sale price with an explicit "proxy" warning; Portuguese taxes use the higher
+of price and the assessed value (VPT) you enter. Each preset cites specific
+official pages, a data-as-of date and a verification status; *source-checked*
+is tracked per component and no profile with omissions is labelled fully
+verified. Eligibility rules (starter exemption, Madrid relief) are **not**
+checked by the simulator. Component rates come from research dated 2026-10-31
+and were not re-fetched by the code authors. **They are dated planning
+estimates, not legal or tax advice; confirm them with the cited source and a
+notary or tax adviser.** Annual property tax depends on assessed/cadastral
+values and municipal rates, so presets leave it to the user (zero does not
+mean no tax); maintenance is a 1% indicative allowance, not a tax. The **?**
+button in the section opens a popup listing every profile's assumptions,
+sources and limitations. Fictional profiles remain only in tests. Scenarios
+store full profile copies including `profile_id` and `version`; a newer
+catalog version only raises a notice and never rewrites saved values, and
+legacy exports load as user-defined profiles. A profile can
 estimate acquisition costs as a percentage of full purchase price, recurring
 property tax and maintenance as percentages of the user's owned starting value,
 and rental operating costs as a percentage of the linked gross monthly rent at
