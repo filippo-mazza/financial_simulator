@@ -25,6 +25,12 @@ from property_purchase import (
     PurchaseCompletionDelayPolicy,
     evaluate_mortgage_affordability,
 )
+from property_jurisdiction import (
+    PropertyJurisdictionProfile,
+    default_property_jurisdiction_profiles,
+    estimate_property_costs,
+    profiles_by_name,
+)
 from loan import Loan
 
 AUTO_INVEST_EXPORT_VERSION = 1
@@ -78,6 +84,7 @@ class InvestmentConfig:
     linked_loan_name: str | None = None
     liability_share_percentage: float = 100.0
     rental_income_name: str | None = None
+    jurisdiction_profile_name: str | None = None
 
 
 @dataclass
@@ -132,6 +139,8 @@ class SimulationConfig:
     # follow-up features.  The asset is recorded at price and is 100% owned.
     property_purchase: PropertyPurchase | AutomaticPurchasePolicy | None = None
     selected_rent_expense: str | None = None
+    jurisdiction_profiles: list[PropertyJurisdictionProfile] = field(default_factory=list)
+    property_purchase_jurisdiction_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -181,6 +190,70 @@ def mortgage_affordability_preview(purchase, policy, incomes, loans, assumptions
     )
 
 
+def _jurisdiction_lookup(config):
+    """Return validated scenario profiles keyed by exact display name."""
+    return profiles_by_name(config.jurisdiction_profiles)
+
+
+def _profile_for_name(lookup, name):
+    if name is None:
+        return None
+    try:
+        return lookup[name]
+    except KeyError as error:
+        raise ValueError(f"Unknown property jurisdiction profile '{name}'") from error
+
+
+def _investment_profile_costs(item, income_specs, profile_lookup):
+    """Return profile-derived monthly and annual costs for one investment."""
+    profile = _profile_for_name(profile_lookup, item.jurisdiction_profile_name)
+    if profile is None:
+        return 0.0, 0.0
+    if item.investment_type != "real_estate":
+        raise ValueError("Jurisdiction profiles require a real-estate investment")
+    gross_rent = next((
+        income.monthly_amount for income in income_specs
+        if income.name == item.rental_income_name
+    ), 0.0)
+    estimate = estimate_property_costs(
+        profile, item.initial_amount, gross_rent, item.ownership_percentage,
+    )
+    return estimate.monthly_operating_costs, estimate.annual_property_tax
+
+
+def resolved_property_purchase(config):
+    """Add selected jurisdiction estimates to a purchase without mutating config."""
+    configured = config.property_purchase
+    profile = _profile_for_name(
+        _jurisdiction_lookup(config), config.property_purchase_jurisdiction_profile,
+    )
+    if profile is None:
+        return configured
+    if configured is None:
+        raise ValueError("A purchase jurisdiction profile requires a property purchase")
+    purchase = configured.purchase if isinstance(
+        configured, AutomaticPurchasePolicy
+    ) else configured
+    estimate = estimate_property_costs(profile, purchase.purchase_price)
+    resolved = replace(
+        purchase,
+        transaction_fees=purchase.transaction_fees + estimate.acquisition_costs,
+        monthly_expenses=(
+            purchase.monthly_expenses + estimate.monthly_operating_costs
+        ),
+        yearly_tax=purchase.yearly_tax + estimate.annual_property_tax,
+    )
+    if not isinstance(configured, AutomaticPurchasePolicy):
+        return resolved
+    return AutomaticPurchasePolicy(
+        resolved,
+        configured.minimum_available_cash,
+        configured.minimum_cash_reserve,
+        configured.mortgage_affordability,
+        configured.completion_delay,
+    )
+
+
 @dataclass(frozen=True)
 class SimulationBatch:
     """A Monte Carlo average together with the individual paths behind it."""
@@ -216,6 +289,7 @@ def aggregate_purchase_events(trajectories):
 
 def build_components(config: SimulationConfig):
     """Create fresh model objects from UI/configuration values."""
+    profile_lookup = _jurisdiction_lookup(config)
     if config.incomes is None:
         income_specs = [IncomeConfig("Primary income", config.income_type,
                                      config.monthly_income, config.tax_rate, config.bonus_pct)]
@@ -268,7 +342,8 @@ def build_components(config: SimulationConfig):
             if (item.ownership_percentage != 100
                     or item.liability_share_percentage != 100
                     or item.linked_loan_name is not None
-                    or item.rental_income_name is not None):
+                    or item.rental_income_name is not None
+                    or item.jurisdiction_profile_name is not None):
                 raise ValueError(
                     "Property ownership and links require a real-estate investment"
                 )
@@ -296,6 +371,11 @@ def build_components(config: SimulationConfig):
     if len(linked_rental_names) != len(set(linked_rental_names)):
         raise ValueError("A rental income source can be linked to only one property")
 
+    profile_costs = {
+        item.name: _investment_profile_costs(item, income_specs, profile_lookup)
+        for item in investment_specs
+    }
+
     if config.expenses is None:
         expense_specs = [ExpenseConfig("Living expenses", config.expense_type,
                                        config.monthly_expense)]
@@ -308,22 +388,25 @@ def build_components(config: SimulationConfig):
     for investment in investment_specs:
         if investment.investment_type != "real_estate":
             continue
-        if investment.monthly_expenses > 0:
+        estimated_monthly, estimated_yearly_tax = profile_costs[investment.name]
+        monthly_expenses = investment.monthly_expenses + estimated_monthly
+        yearly_tax = investment.yearly_tax + estimated_yearly_tax
+        if monthly_expenses > 0:
             linked_name = f"{investment.name} — property expenses (linked)"
             if linked_name in used_expense_names:
                 raise ValueError(f"Linked property expense name '{linked_name}' already exists")
             expenses.append(Expense(
                 linked_name,
-                "housing", investment.monthly_expenses,
+                "housing", monthly_expenses,
             ))
             used_expense_names.add(linked_name)
-        if investment.yearly_tax > 0:
+        if yearly_tax > 0:
             linked_name = f"{investment.name} — property tax (linked)"
             if linked_name in used_expense_names:
                 raise ValueError(f"Linked property expense name '{linked_name}' already exists")
             expenses.append(YearlyExpense(
                 linked_name,
-                investment.yearly_tax,
+                yearly_tax,
             ))
             used_expense_names.add(linked_name)
     # A dependent is a recurring cost in the model. Keeping this explicit makes
@@ -428,7 +511,7 @@ def run_simulation(config: SimulationConfig):
         components = build_components(config)
         return compute_net_worth_over_time(
             config.years, *components, seed=config.seed,
-            property_purchase=config.property_purchase,
+            property_purchase=resolved_property_purchase(config),
             selected_rent_expense=config.selected_rent_expense,
             assumptions=config.assumptions,
         )
@@ -969,6 +1052,7 @@ def read_simulation_export(data, include_warnings=False):
                     values.setdefault("linked_loan_name", None)
                     values.setdefault("liability_share_percentage", 100.0)
                     values.setdefault("rental_income_name", None)
+                    values.setdefault("jurisdiction_profile_name", None)
                     if not auto_invest_feature_supported:
                         values["auto_invest_enabled"] = False
                 rebuilt.append(config_type(**values))
@@ -984,6 +1068,20 @@ def read_simulation_export(data, include_warnings=False):
         rebuild_collection("additional_expenses", ExpenseConfig) or []
     )
     parameters["dependents"] = rebuild_collection("dependents", DependentConfig) or []
+    profile_values = parameters.get("jurisdiction_profiles", [])
+    if (not isinstance(profile_values, list)
+            or not all(isinstance(item, dict) for item in profile_values)):
+        raise ValueError("The exported jurisdiction profiles must be a list.")
+    try:
+        parameters["jurisdiction_profiles"] = [
+            PropertyJurisdictionProfile(**item) for item in profile_values
+        ]
+        profiles_by_name(parameters["jurisdiction_profiles"])
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"The exported jurisdiction profiles are invalid: {error}"
+        ) from error
+    parameters.setdefault("property_purchase_jurisdiction_profile", None)
     purchase = parameters.get("property_purchase")
     if purchase is not None:
         if not isinstance(purchase, dict):
@@ -1102,6 +1200,7 @@ def main():
         "ownership_percentage": 100.0, "linked_loan_name": None,
         "liability_share_percentage": 100.0,
         "rental_income_name": None,
+        "jurisdiction_profile_name": None,
     }])
     st.session_state.setdefault("incomes", [{
         "name": "Salary", "income_type": "salary", "monthly_amount": 3000.0,
@@ -1115,6 +1214,11 @@ def main():
         "duration_years": 25, "fixed_rate": False, "already_paid": 0.0,
     }])
     st.session_state.setdefault("financial_assumptions", asdict(FinancialAssumptions()))
+    st.session_state.setdefault("jurisdiction_profiles", [
+        {**asdict(profile), "_id": uuid.uuid4().hex}
+        for profile in default_property_jurisdiction_profiles()
+    ])
+    st.session_state.setdefault("purchase_jurisdiction_profile", None)
     st.session_state.setdefault("purchase_enabled", False)
     st.session_state.setdefault("purchase_mode", "Automatic — when affordable")
     st.session_state.setdefault("purchase_min_cash", 10000.0)
@@ -1162,9 +1266,50 @@ def main():
                 item.setdefault("linked_loan_name", None)
                 item.setdefault("liability_share_percentage", 100.0)
                 item.setdefault("rental_income_name", None)
+                item.setdefault("jurisdiction_profile_name", None)
+    for profile in st.session_state.jurisdiction_profiles:
+        profile.setdefault("_id", uuid.uuid4().hex)
 
     def item_key(item):
         return item["_id"]
+
+    def configured_jurisdiction_profiles():
+        return [
+            PropertyJurisdictionProfile(**{
+                key: value for key, value in profile.items() if key != "_id"
+            })
+            for profile in st.session_state.jurisdiction_profiles
+            if profile.get("name", "").strip()
+        ]
+
+    def jurisdiction_profile_from_state(name):
+        values = next((
+            profile for profile in st.session_state.jurisdiction_profiles
+            if profile.get("name") == name
+        ), None)
+        if values is None:
+            return None
+        try:
+            return PropertyJurisdictionProfile(**{
+                key: value for key, value in values.items() if key != "_id"
+            })
+        except ValueError:
+            return None
+
+    def investment_jurisdiction_estimate(item):
+        profile = jurisdiction_profile_from_state(
+            item.get("jurisdiction_profile_name")
+        )
+        if profile is None or item.get("investment_type") != "real_estate":
+            return None
+        gross_rent = next((
+            income["monthly_amount"] for income in st.session_state.incomes
+            if income["name"] == item.get("rental_income_name")
+        ), 0.0)
+        return estimate_property_costs(
+            profile, item["initial_amount"], gross_rent,
+            item.get("ownership_percentage", 100.0),
+        )
 
     def editable_items(items, money_fields=()):
         editable = []
@@ -1180,6 +1325,13 @@ def main():
         st.session_state.scenario_initial_cash = float(_whole_amount(imported.initial_cash))
         st.session_state.scenario_yearly_fee = float(_whole_amount(imported.yearly_fee))
         st.session_state.financial_assumptions = asdict(imported.assumptions)
+        st.session_state.jurisdiction_profiles = [
+            {**asdict(profile), "_id": uuid.uuid4().hex}
+            for profile in imported.jurisdiction_profiles
+        ]
+        st.session_state.purchase_jurisdiction_profile = (
+            imported.property_purchase_jurisdiction_profile
+        )
         purchase = imported.property_purchase
         st.session_state.purchase_enabled = purchase is not None
         st.session_state.purchase_mode = (
@@ -1254,6 +1406,7 @@ def main():
             "purchase_delay_toggle", "purchase_delay_mode_input",
             "purchase_fixed_delay_input", "purchase_random_delay_min_input",
             "purchase_random_delay_max_input", "purchase_delay_failure_input",
+            "purchase_jurisdiction_profile_input",
         ):
             st.session_state.pop(key, None)
         st.session_state.selected_rent_expense = imported.selected_rent_expense
@@ -1339,8 +1492,9 @@ def main():
             "auto_invest_enabled": False, "auto_invest_min_cash": 10000.0,
             "auto_invest_percentage": 10.0, "auto_invest_max_per_year": 3,
             "ownership_percentage": 100.0, "linked_loan_name": None,
-        "liability_share_percentage": 100.0,
+            "liability_share_percentage": 100.0,
             "rental_income_name": None,
+            "jurisdiction_profile_name": None,
             "_id": uuid.uuid4().hex,
         })
 
@@ -1359,6 +1513,59 @@ def main():
             "already_paid": 0.0,
             "_id": uuid.uuid4().hex,
         })
+
+    def add_jurisdiction_profile():
+        st.session_state.jurisdiction_profiles.append({
+            "name": f"Fictional jurisdiction {len(st.session_state.jurisdiction_profiles) + 1}",
+            "acquisition_cost_percentage": 0.0,
+            "annual_property_tax_percentage": 0.0,
+            "annual_maintenance_percentage": 0.0,
+            "rental_expense_percentage": 0.0,
+            "_id": uuid.uuid4().hex,
+        })
+
+    def render_jurisdiction_profiles():
+        st.caption(
+            "Editable planning estimates—not tax, legal, lending, or valuation advice. "
+            "Profiles add costs to the explicit fixed amounts entered on each property."
+        )
+        if st.button("＋ Add jurisdiction profile", use_container_width=True):
+            add_jurisdiction_profile()
+            st.rerun()
+        for index, profile in enumerate(st.session_state.jurisdiction_profiles):
+            profile_key = profile["_id"]
+            with st.container(border=True):
+                profile["name"] = st.text_input(
+                    "Profile name", profile["name"],
+                    key=f"jurisdiction_name_{profile_key}",
+                )
+                profile["acquisition_cost_percentage"] = st.number_input(
+                    "Acquisition costs (% of full purchase price) · estimate",
+                    min_value=0.0, max_value=100.0,
+                    value=float(profile["acquisition_cost_percentage"]),
+                    key=f"jurisdiction_acquisition_{profile_key}",
+                )
+                profile["annual_property_tax_percentage"] = st.number_input(
+                    "Annual property tax (% of owned starting value) · estimate",
+                    min_value=0.0, max_value=100.0,
+                    value=float(profile["annual_property_tax_percentage"]),
+                    key=f"jurisdiction_tax_{profile_key}",
+                )
+                profile["annual_maintenance_percentage"] = st.number_input(
+                    "Annual maintenance (% of owned starting value) · estimate",
+                    min_value=0.0, max_value=100.0,
+                    value=float(profile["annual_maintenance_percentage"]),
+                    key=f"jurisdiction_maintenance_{profile_key}",
+                )
+                profile["rental_expense_percentage"] = st.number_input(
+                    "Rental operating costs (% of gross monthly rent) · estimate",
+                    min_value=0.0, max_value=100.0,
+                    value=float(profile["rental_expense_percentage"]),
+                    key=f"jurisdiction_rental_{profile_key}",
+                )
+                if st.button("Remove profile", key=f"remove_jurisdiction_{profile_key}"):
+                    remove_item(st.session_state.jurisdiction_profiles, index)
+                    st.rerun()
 
     def remove_item(collection, index):
         collection.pop(index)
@@ -1379,12 +1586,21 @@ def main():
                             item["initial_amount"]
                             * item.get("ownership_percentage", 100) / 100
                         )
+                        profile_estimate = investment_jurisdiction_estimate(item)
+                        estimated_monthly = (
+                            profile_estimate.monthly_operating_costs
+                            if profile_estimate else 0
+                        )
+                        estimated_tax = (
+                            profile_estimate.annual_property_tax
+                            if profile_estimate else 0
+                        )
                         st.caption(
                             f"real estate · value ${item['initial_amount']:,.0f} · "
                             f"owned {item.get('ownership_percentage', 100):g}% "
                             f"(${owned_amount:,.0f}) · "
-                            f"expenses ${item['monthly_expenses']:,.0f}/month · "
-                            f"tax ${item['yearly_tax']:,.0f}/year"
+                            f"expenses ${item['monthly_expenses'] + estimated_monthly:,.0f}/month · "
+                            f"tax ${item['yearly_tax'] + estimated_tax:,.0f}/year"
                         )
                     else:
                         auto_summary = ""
@@ -1478,27 +1694,60 @@ def main():
                             "your attributable share—it is not scaled again here."
                         ),
                     )
+                    profile_options = [None] + [
+                        profile["name"]
+                        for profile in st.session_state.jurisdiction_profiles
+                        if profile["name"]
+                    ]
+                    current_profile = (
+                        item.get("jurisdiction_profile_name")
+                        if item.get("jurisdiction_profile_name") in profile_options
+                        else None
+                    )
+                    item["jurisdiction_profile_name"] = st.selectbox(
+                        "Property jurisdiction estimate profile",
+                        profile_options,
+                        index=profile_options.index(current_profile),
+                        format_func=lambda value: (
+                            "No jurisdiction estimates" if value is None else value
+                        ),
+                        key=f"investment_jurisdiction_{item_key(item)}",
+                        help=(
+                            "Adds the selected profile's value- and rent-based estimates "
+                            "to the fixed costs below."
+                        ),
+                    )
+                    estimate = investment_jurisdiction_estimate(item)
+                    if estimate is not None:
+                        st.caption(
+                            f"Profile estimate at starting values: "
+                            f"${estimate.monthly_operating_costs:,.0f}/month operating "
+                            f"costs and ${estimate.annual_property_tax:,.0f}/year tax. "
+                            "Acquisition costs apply only to future purchases."
+                        )
                     item["monthly_expenses"] = st.number_input(
-                        "Monthly property expenses (your share)", min_value=0.0,
+                        "Additional fixed monthly property expenses (your share)",
+                        min_value=0.0,
                         value=float(item["monthly_expenses"]), step=50.0, format="%.0f",
                         key=f"investment_expenses_{item_key(item)}",
                         help="Maintenance, insurance, management, and similar recurring costs.",
                     )
                     item["yearly_tax"] = st.number_input(
-                        "Yearly property tax (your share)", min_value=0.0,
+                        "Additional fixed yearly property tax (your share)", min_value=0.0,
                         value=float(item["yearly_tax"]), step=100.0, format="%.0f",
                         key=f"investment_tax_{item_key(item)}",
                     )
                     st.caption(
-                        "Enter costs attributable to your share; they are not multiplied "
-                        "by the ownership percentage. They are deducted once and linked "
-                        "read-only in the Expenses category."
+                        "Fixed amounts are already attributable to your share. Profile "
+                        "value-based estimates are scaled by ownership; linked gross rent "
+                        "is already your share and is not scaled twice."
                     )
                 else:
                     item["ownership_percentage"] = 100.0
                     item["linked_loan_name"] = None
                     item["liability_share_percentage"] = 100.0
                     item["rental_income_name"] = None
+                    item["jurisdiction_profile_name"] = None
                     item["monthly_contribution"] = st.number_input(
                         "Monthly contribution", min_value=0.0,
                         value=float(item["monthly_contribution"]), step=50.0,
@@ -1755,6 +2004,13 @@ def main():
                 key="scenario_yearly_fee",
             )
 
+        with st.expander(
+            f"Property jurisdictions · {len(st.session_state.jurisdiction_profiles)} "
+            "editable profile(s)",
+            key="sidebar_jurisdictions",
+        ):
+            render_jurisdiction_profiles()
+
         investments = st.session_state.investments
         investment_initial = sum(item["initial_amount"] for item in investments)
         investment_monthly = sum(
@@ -1780,8 +2036,22 @@ def main():
         linked_properties = [
             item for item in investments if item["investment_type"] == "real_estate"
         ]
-        linked_monthly = sum(item["monthly_expenses"] for item in linked_properties)
-        linked_yearly_tax = sum(item["yearly_tax"] for item in linked_properties)
+        linked_property_estimates = [
+            (item, investment_jurisdiction_estimate(item))
+            for item in linked_properties
+        ]
+        linked_monthly = sum(
+            item["monthly_expenses"] + (
+                estimate.monthly_operating_costs if estimate else 0
+            )
+            for item, estimate in linked_property_estimates
+        )
+        linked_yearly_tax = sum(
+            item["yearly_tax"] + (
+                estimate.annual_property_tax if estimate else 0
+            )
+            for item, estimate in linked_property_estimates
+        )
         expense_monthly = sum(item["monthly_amount"] for item in expenses) + linked_monthly
         with st.expander(
             f"Expenses · {len(expenses)} editable + {len(linked_properties)} linked · "
@@ -1809,14 +2079,37 @@ def main():
                     "Timing", ("Automatic — when affordable", "Scheduled — in a selected month"),
                     index=0 if st.session_state.purchase_mode.startswith("Automatic") else 1,
                     help="Automatic mode purchases once when both cash conditions are met.")
+                purchase_profile_options = [None] + [
+                    profile["name"]
+                    for profile in st.session_state.jurisdiction_profiles
+                    if profile["name"]
+                ]
+                current_purchase_profile = (
+                    st.session_state.purchase_jurisdiction_profile
+                    if st.session_state.purchase_jurisdiction_profile
+                    in purchase_profile_options else None
+                )
+                st.session_state.purchase_jurisdiction_profile = st.selectbox(
+                    "Purchase jurisdiction estimate profile",
+                    purchase_profile_options,
+                    index=purchase_profile_options.index(current_purchase_profile),
+                    format_func=lambda value: (
+                        "No jurisdiction estimates" if value is None else value
+                    ),
+                    key="purchase_jurisdiction_profile_input",
+                    help=(
+                        "Adds estimated acquisition, maintenance, and property-tax "
+                        "costs from the editable profile to the fixed amounts below."
+                    ),
+                )
                 purchase["purchase_price"] = st.number_input("Target property price", min_value=1.0, value=float(purchase["purchase_price"]), step=1000.0, key="purchase_price")
                 purchase["down_payment_percentage"] = st.number_input("Down payment (%)", min_value=0.0, max_value=100.0, value=float(purchase["down_payment_percentage"]), key="purchase_down_pct")
-                purchase["transaction_fees"] = st.number_input("One-off transaction fees", min_value=0.0, value=float(purchase["transaction_fees"]), step=500.0, key="purchase_fees")
+                purchase["transaction_fees"] = st.number_input("Additional fixed one-off transaction fees", min_value=0.0, value=float(purchase["transaction_fees"]), step=500.0, key="purchase_fees")
                 purchase["mortgage_interest_rate"] = st.number_input("Mortgage annual interest (%)", min_value=0.0, value=float(purchase["mortgage_interest_rate"]), step=0.1, key="purchase_rate")
                 purchase["mortgage_duration_years"] = st.number_input("Mortgage term (years)", min_value=1, value=int(purchase["mortgage_duration_years"]), key="purchase_term")
                 purchase["fixed_rate"] = st.checkbox("Fixed-rate mortgage", value=bool(purchase["fixed_rate"]), key="purchase_fixed")
-                purchase["monthly_expenses"] = st.number_input("Monthly ownership costs", min_value=0.0, value=float(purchase["monthly_expenses"]), step=25.0, key="purchase_monthly_cost")
-                purchase["yearly_tax"] = st.number_input("Annual ownership tax", min_value=0.0, value=float(purchase["yearly_tax"]), step=100.0, key="purchase_yearly_tax")
+                purchase["monthly_expenses"] = st.number_input("Additional fixed monthly ownership costs", min_value=0.0, value=float(purchase["monthly_expenses"]), step=25.0, key="purchase_monthly_cost")
+                purchase["yearly_tax"] = st.number_input("Additional fixed annual ownership tax", min_value=0.0, value=float(purchase["yearly_tax"]), step=100.0, key="purchase_yearly_tax")
                 if st.session_state.purchase_mode.startswith("Automatic"):
                     st.session_state.purchase_min_cash = st.number_input("Minimum cash threshold", min_value=0.0, value=float(st.session_state.purchase_min_cash), step=500.0, key="purchase_threshold")
                     st.session_state.purchase_reserve = st.number_input(
@@ -1999,7 +2292,31 @@ def main():
                 selected = st.selectbox("Rent expense to stop after purchase", rent_options, index=(rent_options.index(st.session_state.selected_rent_expense) if st.session_state.selected_rent_expense in rent_options else 0), key="purchase_rent")
                 st.session_state.selected_rent_expense = None if selected == rent_options[0] else selected
                 preview = PropertyPurchase(**purchase)
-                st.info(f"Configuration estimate: upfront cash **${preview.down_payment + preview.transaction_fees:,.0f}**, mortgage principal **${preview.mortgage_principal:,.0f}**, estimated payment **${property_purchase_payment(preview):,.0f}/month**. Automatic purchase is stochastic and may not occur. The configured closing cash is a point-in-time minimum, not a protected account.")
+                selected_profile = jurisdiction_profile_from_state(
+                    st.session_state.purchase_jurisdiction_profile
+                )
+                profile_estimate = (
+                    estimate_property_costs(selected_profile, preview.purchase_price)
+                    if selected_profile is not None else None
+                )
+                estimated_fees = (
+                    profile_estimate.acquisition_costs if profile_estimate else 0
+                )
+                estimated_monthly = (
+                    profile_estimate.monthly_operating_costs if profile_estimate else 0
+                )
+                estimated_tax = (
+                    profile_estimate.annual_property_tax if profile_estimate else 0
+                )
+                st.info(
+                    f"Configuration estimate: upfront cash **${preview.down_payment + preview.transaction_fees + estimated_fees:,.0f}**, "
+                    f"mortgage principal **${preview.mortgage_principal:,.0f}**, estimated "
+                    f"payment **${property_purchase_payment(preview):,.0f}/month**, ownership "
+                    f"cost **${preview.monthly_expenses + estimated_monthly:,.0f}/month + "
+                    f"${preview.yearly_tax + estimated_tax:,.0f}/year tax**. Automatic "
+                    "purchase is stochastic and may not occur. Profile estimates use the "
+                    "starting purchase price and do not predict future law or reassessment."
+                )
                 if (st.session_state.purchase_mode.startswith("Automatic")
                         and st.session_state.purchase_delay_enabled):
                     if st.session_state.purchase_delay_mode == "Fixed":
@@ -2210,6 +2527,7 @@ def main():
             linked_loan_name=item.get("linked_loan_name"),
             liability_share_percentage=float(item.get("liability_share_percentage", 100.0)),
             rental_income_name=item.get("rental_income_name"),
+            jurisdiction_profile_name=item.get("jurisdiction_profile_name"),
         ) for item in st.session_state.investments],
         incomes=[IncomeConfig(
             item["name"], item["income_type"], _whole_amount(item["monthly_amount"]),
@@ -2232,6 +2550,11 @@ def main():
         assumptions=FinancialAssumptions(**st.session_state.financial_assumptions),
         property_purchase=purchase_config,
         selected_rent_expense=st.session_state.selected_rent_expense,
+        jurisdiction_profiles=configured_jurisdiction_profiles(),
+        property_purchase_jurisdiction_profile=(
+            st.session_state.purchase_jurisdiction_profile
+            if purchase_config is not None else None
+        ),
     )
 
     scenario_fingerprint = json.dumps(asdict(config), sort_keys=True)
