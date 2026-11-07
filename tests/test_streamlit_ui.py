@@ -103,6 +103,31 @@ def test_ab_workspace_restores_each_scenario_rent_selection(monkeypatch, tmp_pat
     ).value == "Do not stop any expense"
 
 
+def test_ab_workspace_runs_paired_comparison_dashboard(tmp_path):
+    # Engine-only tests install a minimal numpy stub process-wide. Exercise the
+    # completed dataframe/Altair dashboard in a clean interpreter.
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+app.button(key='create_scenario_workspace').click().run(timeout=30)
+next(item for item in app.number_input if item.label == 'Number of simulations').set_value(2).run(timeout=30)
+next(item for item in app.button if item.label == '⇄ Compare A/B').click().run(timeout=30)
+assert not app.exception
+assert any(item.value == 'Paired A/B comparison' for item in app.subheader)
+assert any('B−A is calculated within each seed pair' in item.value for item in app.info)
+assert any('scheduled investment contributions' in item.value.lower() for item in app.caption)
+assert len(app.dataframe) >= 2
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_real_estate_panel_exposes_ownership_and_exact_links(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))

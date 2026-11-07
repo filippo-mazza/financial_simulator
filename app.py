@@ -294,6 +294,316 @@ class SimulationBatch:
     trajectories: list[SimulationTrajectory]
 
 
+@dataclass(frozen=True)
+class PairedScenarioComparison:
+    """Two batches run with the same horizon, trajectory count, and seeds."""
+
+    baseline_name: str
+    alternative_name: str
+    baseline_config: SimulationConfig
+    alternative_config: SimulationConfig
+    baseline_batch: SimulationBatch
+    alternative_batch: SimulationBatch
+    simulation_count: int
+    horizon_years: int
+    base_seed: int
+    warnings: tuple[str, ...]
+
+
+def _scenario_structure_signature(config):
+    """Describe draw-relevant structure without comparing financial amounts."""
+    def collection_signature(items, fields, flags=()):
+        return tuple(
+            (
+                *(getattr(item, field_name, None) for field_name in fields),
+                *(bool(getattr(item, field_name, None)) for field_name in flags),
+            )
+            for item in items
+        )
+
+    income_specs = config.incomes if config.incomes is not None else [IncomeConfig(
+        "Primary income", config.income_type, config.monthly_income,
+        config.tax_rate, config.bonus_pct,
+    )]
+    expense_specs = [
+        *(config.expenses if config.expenses is not None else [ExpenseConfig(
+            "Living expenses", config.expense_type, config.monthly_expense,
+        )]),
+        *config.additional_expenses,
+    ]
+    investment_specs = (
+        config.investments if config.investments is not None else [InvestmentConfig(
+            "Portfolio", config.investment_type, config.investment_initial,
+            config.investment_contribution,
+        )]
+    )
+    loan_specs = config.loans if config.loans is not None else [LoanConfig(
+        "Loan", config.loan_amount, config.loan_rate, config.loan_duration,
+        config.fixed_rate, config.loan_already_paid,
+    )]
+    purchase = config.property_purchase
+    if isinstance(purchase, AutomaticPurchasePolicy):
+        # Any automatic-purchase policy input can alter the closing month. Closing
+        # creates a new stochastic investment, so that timing affects later draws.
+        purchase_signature = ("automatic", asdict(purchase))
+    elif purchase is not None:
+        purchase_signature = ("scheduled", purchase.purchase_month)
+    else:
+        purchase_signature = None
+    return (
+        # A non-zero bonus adds an annual Gaussian draw. Freelance and salary
+        # stochastic behavior is already represented by income_type.
+        collection_signature(
+            income_specs, ("name", "income_type"), flags=("bonus_pct",),
+        ),
+        # Unexpected expenses consume draws; including all effective expenses
+        # also preserves their order and covers additional_expenses.
+        collection_signature(expense_specs, ("name", "expense_type")),
+        collection_signature(investment_specs, ("name", "investment_type")),
+        collection_signature(loan_specs, ("name",)),
+        tuple((item.name, item.school_start_age) for item in config.dependents),
+        purchase_signature,
+    )
+
+
+def run_paired_scenario_comparison(workspace, simulation_count):
+    """Run A and B with matched seeds and Baseline A's horizon.
+
+    A shared seed is reproducible common-random-number input. Structural changes
+    can consume draws in a different order, so this does not claim perfect shock
+    coupling when the scenario shapes differ.
+    """
+    if not isinstance(workspace, ScenarioWorkspace):
+        raise ValueError("Create an A/B scenario workspace before comparing")
+    baseline_variant = workspace.variant(BASELINE_ID)
+    alternative_variant = workspace.variant(ALTERNATIVE_ID)
+    baseline = baseline_variant.config
+    alternative = alternative_variant.config
+    horizon_years = baseline.years
+    base_seed = baseline.seed
+    warnings = []
+    if alternative.years != horizon_years:
+        warnings.append(
+            f"Alternative B's saved {alternative.years}-year horizon was overridden "
+            f"with Baseline A's {horizon_years}-year horizon for this comparison."
+        )
+    if alternative.seed != base_seed:
+        warnings.append(
+            "Alternative B's saved seed was overridden with Baseline A's seed so "
+            "trajectory numbers are paired."
+        )
+    if baseline.assumptions != alternative.assumptions:
+        warnings.append(
+            "Financial return, fee, or tax assumptions differ between A and B; "
+            "the displayed delta includes those assumption changes."
+        )
+    if _scenario_structure_signature(baseline) != _scenario_structure_signature(
+            alternative):
+        warnings.append(
+            "Scenario structure differs. Seeds are paired by run number, but added or "
+            "removed stochastic components may consume random draws in a different "
+            "order, so identical seeds do not guarantee identical underlying shocks."
+        )
+    baseline = replace(baseline, years=horizon_years, seed=base_seed)
+    alternative = replace(alternative, years=horizon_years, seed=base_seed)
+    baseline_batch = run_simulation_batch(baseline, simulation_count)
+    alternative_batch = run_simulation_batch(alternative, simulation_count)
+    baseline_seeds = [item.seed for item in baseline_batch.trajectories]
+    alternative_seeds = [item.seed for item in alternative_batch.trajectories]
+    if baseline_seeds != alternative_seeds:
+        raise RuntimeError("Paired scenario trajectory seeds do not match")
+    return PairedScenarioComparison(
+        baseline_variant.name, alternative_variant.name,
+        baseline, alternative, baseline_batch, alternative_batch,
+        simulation_count, horizon_years, base_seed, tuple(warnings),
+    )
+
+
+def _percentile(values, proportion):
+    ordered = sorted(values)
+    if not ordered:
+        raise ValueError("Cannot calculate a percentile of an empty collection")
+    position = (len(ordered) - 1) * proportion
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def paired_delta_quantiles(comparison, detail_name="net_worth"):
+    """Return monthly statistics of paired B-minus-A trajectory differences."""
+    if detail_name == "net_worth":
+        baseline_series = [
+            item.net_worth for item in comparison.baseline_batch.trajectories
+        ]
+        alternative_series = [
+            item.net_worth for item in comparison.alternative_batch.trajectories
+        ]
+    else:
+        baseline_series = [
+            item.details[detail_name]
+            for item in comparison.baseline_batch.trajectories
+        ]
+        alternative_series = [
+            item.details[detail_name]
+            for item in comparison.alternative_batch.trajectories
+        ]
+    rows = []
+    for month_index in range(comparison.horizon_years * 12):
+        deltas = [
+            alternative[month_index] - baseline[month_index]
+            for baseline, alternative in zip(baseline_series, alternative_series)
+        ]
+        rows.append({
+            "month": month_index + 1,
+            "mean": fmean(deltas),
+            "p10": _percentile(deltas, 0.1),
+            "median": _percentile(deltas, 0.5),
+            "p90": _percentile(deltas, 0.9),
+        })
+    return rows
+
+
+def _final_mapped_total(details, detail_name):
+    return sum(
+        values[-1] for values in details.get(detail_name, {}).values()
+        if values
+    )
+
+
+def comparison_balance_rows(comparison):
+    """Return non-additive final balance comparisons."""
+    baseline_net_worth, _, baseline = comparison.baseline_batch.average_result
+    alternative_net_worth, _, alternative = comparison.alternative_batch.average_result
+    values = (
+        ("Net worth", baseline_net_worth[-1], alternative_net_worth[-1]),
+        ("Available cash", baseline["bank_account"][-1], alternative["bank_account"][-1]),
+        ("Investment assets", baseline["investments"][-1], alternative["investments"][-1]),
+        ("Outstanding debt", _final_mapped_total(baseline, "loan_balances"),
+         _final_mapped_total(alternative, "loan_balances")),
+        ("Property equity", _final_mapped_total(baseline, "property_equity"),
+         _final_mapped_total(alternative, "property_equity")),
+    )
+    return [
+        {"Balance": name, "Baseline A": a_value, "Alternative B": b_value,
+         "B minus A": b_value - a_value}
+        for name, a_value, b_value in values
+    ]
+
+
+def _sum_mapped_flows(details, detail_name, predicate=lambda _name: True):
+    return sum(
+        sum(values) for name, values in details.get(detail_name, {}).items()
+        if predicate(name)
+    )
+
+
+def comparison_cash_flow_rows(comparison):
+    """Compare tracked flows without presenting them as an additive bridge."""
+    baseline = comparison.baseline_batch.average_result[2]
+    alternative = comparison.alternative_batch.average_result[2]
+
+    def totals(details, config):
+        configured_expenses = [
+            *(config.expenses if config.expenses is not None else [
+                ExpenseConfig("Living expenses", config.expense_type,
+                              config.monthly_expense)
+            ]),
+            *config.additional_expenses,
+        ]
+        housing_names = {
+            item.name for item in configured_expenses
+            if item.expense_type == "housing"
+        }
+        property_tax = _sum_mapped_flows(
+            details, "expense_values",
+            lambda name: "property tax (linked)" in name.lower(),
+        )
+        housing = _sum_mapped_flows(
+            details, "expense_values",
+            lambda name: (
+                name in housing_names
+                or "property expenses (linked)" in name.lower()
+            ),
+        )
+        all_expenses = _sum_mapped_flows(details, "expense_values")
+        return {
+            "Net income received": _sum_mapped_flows(details, "income_values"),
+            "Housing and property operating expenses": housing,
+            "Other household expenses": all_expenses - property_tax - housing,
+            "Property ownership tax": property_tax,
+            "Debt-service payments": _sum_mapped_flows(details, "loan_payments"),
+            "Automatic investment gross cash transfers": _sum_mapped_flows(
+                details, "automatic_contributions",
+            ),
+            "Automatic investment fees": _sum_mapped_flows(
+                details, "automatic_contribution_fees",
+            ),
+            "Property purchase fees": sum(details.get("purchase_fees", [])),
+        }
+
+    a_totals = totals(baseline, comparison.baseline_config)
+    b_totals = totals(alternative, comparison.alternative_config)
+    treatments = {
+        "Net income received": "Cash inflow (income tax already netted)",
+        "Housing and property operating expenses": "Cash outflow / cost",
+        "Other household expenses": "Cash outflow / cost",
+        "Property ownership tax": "Cash outflow / tax",
+        "Debt-service payments": "Mixed principal transfer and interest cost",
+        "Automatic investment gross cash transfers": (
+            "Cash transfer including the fee shown below, not an extra cost"
+        ),
+        "Automatic investment fees": "Memo: included in gross transfer / wealth cost",
+        "Property purchase fees": "Cash outflow / wealth cost",
+    }
+    return [
+        {
+            "Tracked flow": name,
+            "Treatment": treatments[name],
+            "Baseline A": a_totals[name],
+            "Alternative B": b_totals[name],
+            "B minus A": b_totals[name] - a_totals[name],
+        }
+        for name in treatments
+    ]
+
+
+def scenario_input_differences(comparison):
+    """Return leaf-level input differences between effective comparison configs."""
+    missing = object()
+
+    def flatten(value, path=""):
+        if isinstance(value, dict):
+            if not value:
+                return {path: {}}
+            rows = {}
+            for key in sorted(value):
+                rows.update(flatten(value[key], f"{path}.{key}" if path else key))
+            return rows
+        if isinstance(value, list):
+            if not value:
+                return {path: []}
+            rows = {}
+            for index, item in enumerate(value):
+                rows.update(flatten(item, f"{path}[{index}]"))
+            return rows
+        return {path: value}
+
+    baseline = flatten(asdict(comparison.baseline_config))
+    alternative = flatten(asdict(comparison.alternative_config))
+    rows = []
+    for path in sorted(set(baseline) | set(alternative)):
+        a_value = baseline.get(path, missing)
+        b_value = alternative.get(path, missing)
+        if a_value != b_value:
+            rows.append({
+                "Input": path,
+                "Baseline A": "(not present)" if a_value is missing else a_value,
+                "Alternative B": "(not present)" if b_value is missing else b_value,
+            })
+    return rows
+
+
 def aggregate_purchase_events(trajectories):
     """Return one midpoint marker for actual purchases in the averaged Overview."""
     purchases = []
@@ -1356,6 +1666,7 @@ def main():
     st.session_state.setdefault("selected_rent_expense", None)
     st.session_state.setdefault("scenario_workspace", None)
     st.session_state.setdefault("workspace_import_counter", 0)
+    st.session_state.setdefault("active_result_mode", "single")
     st.session_state.setdefault("purchase_fields", {
         "purchase_price": 250000.0, "down_payment_percentage": 20.0,
         "transaction_fees": 5000.0, "mortgage_interest_rate": 4.0,
@@ -1602,6 +1913,7 @@ def main():
         if workspace.active_id == ALTERNATIVE_ID:
             import_config(workspace.config_for(ALTERNATIVE_ID), run_after_load=False)
         st.session_state.pop("simulation_result", None)
+        st.session_state.pop("scenario_comparison_result", None)
 
     def import_scenario_workspace():
         uploaded = st.session_state.get(
@@ -1622,6 +1934,7 @@ def main():
         ):
             st.session_state.pop(key, None)
         import_config(imported_workspace.active_variant.config, run_after_load=False)
+        st.session_state.pop("scenario_comparison_result", None)
         st.session_state.workspace_import_counter += 1
         st.session_state.workspace_success_notice = "A/B scenario workspace imported."
 
@@ -2768,6 +3081,16 @@ def main():
             st.session_state,
             st.button("▶ Run simulations", type="primary", use_container_width=True),
         )
+        comparison_requested = False
+        if isinstance(st.session_state.get("scenario_workspace"), ScenarioWorkspace):
+            comparison_requested = st.button(
+                "⇄ Compare A/B",
+                use_container_width=True,
+                help=(
+                    "Run both saved variants with the same horizon, trajectory count, "
+                    "and effective seeds."
+                ),
+            )
 
     purchase_config = None
     if st.session_state.purchase_enabled:
@@ -2990,8 +3313,8 @@ def main():
                     ),
                 )
                 st.caption(
-                    "This story stores and edits configurations only. Paired-seed execution "
-                    "and side-by-side result deltas are implemented separately in issue #31."
+                    "Use **Compare A/B** on the main screen to run both configurations "
+                    "with matched trajectory seeds. Workspace JSON stores inputs only."
                 )
 
             uploaded_workspace = st.file_uploader(
@@ -3013,6 +3336,34 @@ def main():
             if workspace_error:
                 st.error(workspace_error)
 
+    workspace = st.session_state.scenario_workspace
+    comparison_fingerprint = None
+    if isinstance(workspace, ScenarioWorkspace):
+        comparison_fingerprint = json.dumps({
+            "simulation_count": int(simulation_count),
+            "baseline_name": workspace.variant(BASELINE_ID).name,
+            "alternative_name": workspace.variant(ALTERNATIVE_ID).name,
+            "baseline": asdict(workspace.config_for(BASELINE_ID)),
+            "alternative": asdict(workspace.config_for(ALTERNATIVE_ID)),
+        }, sort_keys=True)
+
+    if comparison_requested:
+        try:
+            with st.spinner(
+                    f"Running {simulation_count} paired simulations for A and B..."):
+                comparison = run_paired_scenario_comparison(
+                    workspace, int(simulation_count),
+                )
+        except (ValueError, TypeError, KeyError, InsufficientFundsException) as error:
+            st.session_state.pop("scenario_comparison_result", None)
+            st.error(f"These scenarios cannot be compared: {error}")
+            return
+        st.session_state.scenario_comparison_result = {
+            "fingerprint": comparison_fingerprint,
+            "comparison": comparison,
+        }
+        st.session_state.active_result_mode = "comparison"
+
     scenario_fingerprint = json.dumps(asdict(config), sort_keys=True)
     if run_requested:
         try:
@@ -3030,6 +3381,170 @@ def main():
             "result": batch.average_result,
             "trajectories": batch.trajectories,
         }
+        st.session_state.active_result_mode = "single"
+
+    if st.session_state.active_result_mode == "comparison":
+        comparison_record = st.session_state.get("scenario_comparison_result")
+        if comparison_record is None:
+            st.info("Click **Compare A/B** to run the paired scenario comparison.")
+            return
+        if comparison_record["fingerprint"] != comparison_fingerprint:
+            st.warning(
+                "The A/B inputs, names, or run count changed. Click **Compare A/B** "
+                "to refresh the paired results."
+            )
+            return
+        comparison = comparison_record["comparison"]
+        st.subheader("Paired A/B comparison")
+        st.info(
+            f"Arithmetic averages across {comparison.simulation_count} paired "
+            f"trajectory/trajectories over {comparison.horizon_years} years. "
+            f"Run n uses seed {comparison.base_seed} + n − 1 in both scenarios. "
+            "B−A is calculated within each seed pair before uncertainty summaries."
+        )
+        for warning in comparison.warnings:
+            st.warning(warning, icon="⚠️")
+
+        balance_rows = comparison_balance_rows(comparison)
+        balances_by_name = {row["Balance"]: row for row in balance_rows}
+        metric_columns = st.columns(3)
+        for column, balance_name in zip(
+                metric_columns, ("Net worth", "Available cash", "Property equity")):
+            row = balances_by_name[balance_name]
+            column.metric(
+                f"{balance_name} · B minus A",
+                _money(row["B minus A"]),
+                help="Alternative B minus Baseline A at the comparison horizon.",
+            )
+
+        st.markdown("**Final average balances**")
+        st.dataframe(
+            balance_rows, hide_index=True, use_container_width=True,
+            column_config={
+                "Baseline A": st.column_config.NumberColumn(format="$%.0f"),
+                "Alternative B": st.column_config.NumberColumn(format="$%.0f"),
+                "B minus A": st.column_config.NumberColumn(format="$%+.0f"),
+            },
+        )
+        st.caption(
+            "These are overlapping balances, not additive attribution: property equity "
+            "is part of net worth, and outstanding debt is already reflected in net worth."
+        )
+
+        baseline_result = comparison.baseline_batch.average_result
+        alternative_result = comparison.alternative_batch.average_result
+        comparison_chart_values = []
+        for month, (a_worth, b_worth, a_cash, b_cash) in enumerate(zip(
+                baseline_result[0], alternative_result[0],
+                baseline_result[2]["bank_account"],
+                alternative_result[2]["bank_account"]), start=1):
+            comparison_chart_values.extend((
+                {"month": month, "amount": a_worth,
+                 "series": f"{comparison.baseline_name} · net worth"},
+                {"month": month, "amount": b_worth,
+                 "series": f"{comparison.alternative_name} · net worth"},
+                {"month": month, "amount": a_cash,
+                 "series": f"{comparison.baseline_name} · cash"},
+                {"month": month, "amount": b_cash,
+                 "series": f"{comparison.alternative_name} · cash"},
+            ))
+        comparison_chart = alt.Chart(
+            alt.Data(values=comparison_chart_values)
+        ).mark_line(strokeWidth=2.3).encode(
+            x=alt.X("month:Q", title="Month"),
+            y=alt.Y("amount:Q", title="Amount", axis=alt.Axis(format="$,.0f")),
+            color=alt.Color(
+                "series:N", title="Scenario and balance",
+                legend=alt.Legend(orient="top", direction="horizontal"),
+            ),
+            tooltip=[
+                alt.Tooltip("month:Q", title="Month", format=".0f"),
+                alt.Tooltip("series:N", title="Series"),
+                alt.Tooltip("amount:Q", title="Amount", format="$,.0f"),
+            ],
+        ).properties(height=380, title="Average net worth and available cash")
+        st.altair_chart(
+            comparison_chart, use_container_width=True,
+            key="paired_scenario_balances",
+        )
+
+        delta_rows = paired_delta_quantiles(comparison)
+        delta_data = alt.Data(values=delta_rows)
+        delta_band = alt.Chart(delta_data).mark_area(
+            color="#8b5cf6", opacity=0.18,
+        ).encode(
+            x=alt.X("month:Q", title="Month"),
+            y=alt.Y("p10:Q", title="Net-worth B − A", axis=alt.Axis(format="$,.0f")),
+            y2="p90:Q",
+            tooltip=[
+                alt.Tooltip("month:Q", title="Month", format=".0f"),
+                alt.Tooltip("p10:Q", title="10th percentile", format="$,.0f"),
+                alt.Tooltip("median:Q", title="Median", format="$,.0f"),
+                alt.Tooltip("p90:Q", title="90th percentile", format="$,.0f"),
+                alt.Tooltip("mean:Q", title="Mean", format="$,.0f"),
+            ],
+        )
+        delta_lines = alt.Chart(delta_data).transform_fold(
+            ["mean", "median"], as_=["statistic", "amount"],
+        ).mark_line(strokeWidth=2.2).encode(
+            x="month:Q",
+            y=alt.Y("amount:Q", title="Net-worth B − A"),
+            color=alt.Color(
+                "statistic:N", title="Paired difference",
+                scale=alt.Scale(
+                    domain=["mean", "median"], range=["#7c3aed", "#0e7490"],
+                ),
+            ),
+        )
+        st.altair_chart(
+            (delta_band + delta_lines).properties(
+                height=320,
+                title="Uncertainty of the paired net-worth difference (B − A)",
+            ),
+            use_container_width=True,
+            key="paired_scenario_delta",
+        )
+        final_delta = delta_rows[-1]
+        st.caption(
+            f"At month {final_delta['month']}, paired B−A net worth: mean "
+            f"{_money(final_delta['mean'])}, median {_money(final_delta['median'])}, "
+            f"10th–90th percentile {_money(final_delta['p10'])} to "
+            f"{_money(final_delta['p90'])}. With few runs these are descriptive "
+            "sample quantiles, not stable tail-risk estimates."
+        )
+
+        with st.expander("Computed cash-flow comparison", expanded=True):
+            st.dataframe(
+                comparison_cash_flow_rows(comparison),
+                hide_index=True, use_container_width=True,
+                column_config={
+                    "Baseline A": st.column_config.NumberColumn(format="$%.0f"),
+                    "Alternative B": st.column_config.NumberColumn(format="$%.0f"),
+                    "B minus A": st.column_config.NumberColumn(format="$%+.0f"),
+                },
+            )
+            st.caption(
+                "Tracked flows are not summed into a causal bridge. Debt service mixes "
+                "principal and interest. Automatic contributions are gross transfers and "
+                "their fee row is a memo already contained in that gross amount. Income "
+                "tax is netted into income and cannot be split reliably from bonuses or "
+                "variable income in current outputs. Down payments, scheduled investment "
+                "contributions, bank fees, and investment returns are not separately "
+                "auditable until the transaction ledger in #54."
+            )
+
+        with st.expander("Input differences"):
+            differences = scenario_input_differences(comparison)
+            if differences:
+                st.dataframe(differences, hide_index=True, use_container_width=True)
+            else:
+                st.success("The effective A and B inputs are identical.")
+        st.caption(
+            "Observed differences are illustrative model outcomes, not a recommendation "
+            "that either scenario is universally better. Stored historical-run comparison "
+            "is a separate future workflow in issue #124."
+        )
+        return
 
     stored_result = st.session_state.get("simulation_result")
     if stored_result is None:

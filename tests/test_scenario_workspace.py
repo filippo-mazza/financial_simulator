@@ -5,15 +5,21 @@ import json
 import pytest
 
 from app import (
-    IncomeConfig,
+    ExpenseConfig, FinancialAssumptions, IncomeConfig,
     InvestmentConfig,
     SimulationConfig,
+    comparison_balance_rows,
+    comparison_cash_flow_rows,
     create_scenario_workspace_export,
     create_simulation_export,
     read_scenario_workspace_export,
     read_simulation_export,
+    paired_delta_quantiles,
+    run_paired_scenario_comparison,
     run_simulation,
+    scenario_input_differences,
 )
+from property_purchase import PropertyPurchase
 from scenario_workspace import (
     ALTERNATIVE_ID,
     BASELINE_ID,
@@ -126,3 +132,156 @@ def test_workspace_reader_rejects_wrong_shape_without_affecting_single_exports()
     workspace_document["variants"].pop()
     with pytest.raises(ValueError, match="exactly two"):
         read_scenario_workspace_export(json.dumps(workspace_document))
+
+
+def test_paired_comparison_of_identical_variants_has_zero_differences():
+    workspace = ScenarioWorkspace.from_config(_config())
+
+    comparison = run_paired_scenario_comparison(workspace, 3)
+
+    assert [item.seed for item in comparison.baseline_batch.trajectories] == [
+        item.seed for item in comparison.alternative_batch.trajectories
+    ] == [17, 18, 19]
+    assert comparison.warnings == ()
+    assert all(
+        row["B minus A"] == 0 for row in comparison_balance_rows(comparison)
+    )
+    assert all(
+        row["mean"] == row["p10"] == row["median"] == row["p90"] == 0
+        for row in paired_delta_quantiles(comparison)
+    )
+    assert all(
+        row["B minus A"] == 0 for row in comparison_cash_flow_rows(comparison)
+    )
+    assert scenario_input_differences(comparison) == []
+
+
+def test_paired_comparison_reports_changed_income_and_input_difference():
+    workspace = ScenarioWorkspace.from_config(_config())
+    alternative = workspace.config_for(ALTERNATIVE_ID)
+    alternative.incomes[0].monthly_amount = 3_500
+    workspace = workspace.save(ALTERNATIVE_ID, alternative)
+
+    comparison = run_paired_scenario_comparison(workspace, 2)
+    income_row = next(
+        row for row in comparison_cash_flow_rows(comparison)
+        if row["Tracked flow"] == "Net income received"
+    )
+
+    assert income_row["B minus A"] > 0
+    assert comparison_balance_rows(comparison)[0]["B minus A"] > 0
+    assert any(
+        row["Input"].endswith("incomes[0].monthly_amount")
+        for row in scenario_input_differences(comparison)
+    )
+
+
+def test_comparison_warns_when_bonus_changes_draws():
+    workspace = ScenarioWorkspace.from_config(_config())
+    alternative = workspace.config_for(ALTERNATIVE_ID)
+    alternative.incomes[0].bonus_pct = 10
+    workspace = workspace.save(ALTERNATIVE_ID, alternative)
+
+    comparison = run_paired_scenario_comparison(workspace, 1)
+
+    assert any("structure differs" in warning.lower() for warning in comparison.warnings)
+
+
+def test_comparison_warns_when_additional_unexpected_expense_changes_draws():
+    workspace = ScenarioWorkspace.from_config(_config())
+    alternative = workspace.config_for(ALTERNATIVE_ID)
+    alternative.additional_expenses.append(
+        ExpenseConfig("Emergencies", "unexpected", 0)
+    )
+    workspace = workspace.save(ALTERNATIVE_ID, alternative)
+
+    comparison = run_paired_scenario_comparison(workspace, 1)
+
+    assert any("structure differs" in warning.lower() for warning in comparison.warnings)
+
+
+def test_input_differences_preserve_empty_none_and_missing_values():
+    baseline = SimulationConfig(
+        years=1, investments=None, incomes=[], expenses=[], loans=[],
+    )
+    workspace = ScenarioWorkspace.from_config(baseline)
+    alternative = workspace.config_for(ALTERNATIVE_ID)
+    alternative.investments = []
+    workspace = workspace.save(ALTERNATIVE_ID, alternative)
+
+    comparison = run_paired_scenario_comparison(workspace, 1)
+    differences = scenario_input_differences(comparison)
+
+    assert {
+        "Input": "investments", "Baseline A": None, "Alternative B": [],
+    } in differences
+
+    baseline = replace(baseline, investments=[
+        InvestmentConfig("Savings", "safe", 1_000, 0, linked_loan_name=None),
+    ])
+    workspace = ScenarioWorkspace.from_config(baseline)
+    alternative = workspace.config_for(ALTERNATIVE_ID)
+    alternative.investments = []
+    workspace = workspace.save(ALTERNATIVE_ID, alternative)
+
+    differences = scenario_input_differences(
+        run_paired_scenario_comparison(workspace, 1)
+    )
+    assert {
+        "Input": "investments[0].linked_loan_name",
+        "Baseline A": None,
+        "Alternative B": "(not present)",
+    } in differences
+
+
+def test_paired_comparison_handles_purchase_and_no_purchase_without_overlap():
+    assumptions = FinancialAssumptions()
+    means = dict.fromkeys(assumptions.investment_return_means, 0)
+    deviations = dict.fromkeys(assumptions.investment_return_std_devs, 0)
+    controlled = FinancialAssumptions(
+        investment_return_means=means,
+        investment_return_std_devs=deviations,
+        stock_dividend_rate=0,
+        contribution_fee=0,
+        income_tax_rates=dict(assumptions.income_tax_rates),
+    )
+    baseline = SimulationConfig(
+        years=2, seed=7, initial_cash=30_000, yearly_fee=0,
+        investments=[], incomes=[], expenses=[], loans=[], assumptions=controlled,
+    )
+    workspace = ScenarioWorkspace.from_config(baseline)
+    alternative = workspace.config_for(ALTERNATIVE_ID)
+    alternative.property_purchase = PropertyPurchase(
+        100_000, 20, mortgage_interest_rate=0, purchase_month=0,
+        yearly_tax=1_200,
+    )
+    workspace = workspace.save(ALTERNATIVE_ID, alternative)
+
+    comparison = run_paired_scenario_comparison(workspace, 2)
+    balances = {row["Balance"]: row for row in comparison_balance_rows(comparison)}
+    tax = next(
+        row for row in comparison_cash_flow_rows(comparison)
+        if row["Tracked flow"] == "Property ownership tax"
+    )
+
+    assert balances["Property equity"]["Alternative B"] > 0
+    assert balances["Outstanding debt"]["Alternative B"] > 0
+    assert tax["B minus A"] == 1_200
+    assert any("structure differs" in warning.lower() for warning in comparison.warnings)
+
+
+def test_comparison_uses_baseline_horizon_seed_and_warns_on_assumptions():
+    workspace = ScenarioWorkspace.from_config(_config())
+    alternative = workspace.config_for(ALTERNATIVE_ID)
+    alternative.years = 2
+    alternative.seed = 99
+    alternative.assumptions.contribution_fee = 25
+    workspace = workspace.save(ALTERNATIVE_ID, alternative)
+
+    comparison = run_paired_scenario_comparison(workspace, 1)
+
+    assert comparison.horizon_years == 1
+    assert comparison.base_seed == 17
+    assert comparison.alternative_config.years == 1
+    assert comparison.alternative_config.seed == 17
+    assert len(comparison.warnings) == 3
