@@ -39,7 +39,9 @@ def test_getting_started_guidance_is_hidden_after_running_simulations(
     script = f"""
 from streamlit.testing.v1 import AppTest
 app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
-assert any("Start here" in item.value for item in app.info)
+guidance = next(item.value for item in app.info if "Start here" in item.value)
+assert "not financial advice" in guidance
+assert "qualified professional" in guidance
 next(item for item in app.number_input if item.label == "Number of simulations").set_value(1).run(timeout=30)
 next(item for item in app.button if item.label == "▶ Run simulations").click().run(timeout=60)
 assert not app.exception
