@@ -675,7 +675,13 @@ def build_sensitivity_parameters(config, limit=MAX_SENSITIVITY_PARAMETERS):
                 if isinstance(candidate.property_purchase, AutomaticPurchasePolicy)
                 else candidate.property_purchase
             )
-            template.mortgage_interest_rate = value
+            updated_template = replace(template, mortgage_interest_rate=value)
+            if isinstance(candidate.property_purchase, AutomaticPurchasePolicy):
+                candidate.property_purchase = replace(
+                    candidate.property_purchase, purchase=updated_template,
+                )
+            else:
+                candidate.property_purchase = updated_template
         parameters.append(SensitivityParameter(
             "mortgage_rate", "Mortgage interest rate", "±1 percentage point",
             low_config, high_config,
@@ -710,6 +716,26 @@ def _sensitivity_summary(values):
     }
 
 
+def _sensitivity_values_for_config(config, simulation_count, metric):
+    """Return metric samples, counting insolvent paths for shortfall analysis."""
+    if metric != "cash_shortfall_probability":
+        batch = run_simulation_batch(deepcopy(config), simulation_count)
+        return _sensitivity_trajectory_values(batch, metric)
+    values = []
+    for offset in range(simulation_count):
+        candidate = deepcopy(config)
+        candidate.seed = config.seed + offset
+        try:
+            result = run_simulation(candidate)
+        except InsufficientFundsException:
+            # The engine stops before recording a negative balance. For this
+            # metric, that failed trajectory is itself evidence of shortfall.
+            values.append(1.0)
+            continue
+        values.append(float(min(result[2].get("bank_account", [0])) < 0))
+    return values
+
+
 def run_sensitivity_analysis(config, simulation_count, metric="final_net_worth"):
     """Run bounded one-factor variations with common seeds and rank impacts."""
     if metric not in SENSITIVITY_METRICS:
@@ -718,18 +744,17 @@ def run_sensitivity_analysis(config, simulation_count, metric="final_net_worth")
         raise ValueError(
             f"Sensitivity simulation count must be between 1 and {MAX_SENSITIVITY_SIMULATIONS}"
         )
-    baseline_batch = run_simulation_batch(deepcopy(config), simulation_count)
-    baseline_values = _sensitivity_trajectory_values(baseline_batch, metric)
+    baseline_values = _sensitivity_values_for_config(
+        config, simulation_count, metric,
+    )
     rows = []
     for parameter in build_sensitivity_parameters(config):
-        low_batch = run_simulation_batch(parameter.low_config, simulation_count)
-        high_batch = run_simulation_batch(parameter.high_config, simulation_count)
-        low_summary = _sensitivity_summary(
-            _sensitivity_trajectory_values(low_batch, metric)
-        )
-        high_summary = _sensitivity_summary(
-            _sensitivity_trajectory_values(high_batch, metric)
-        )
+        low_summary = _sensitivity_summary(_sensitivity_values_for_config(
+            parameter.low_config, simulation_count, metric,
+        ))
+        high_summary = _sensitivity_summary(_sensitivity_values_for_config(
+            parameter.high_config, simulation_count, metric,
+        ))
         baseline_summary = _sensitivity_summary(baseline_values)
         deltas = [
             abs(value - baseline_summary["mean"])
@@ -4396,6 +4421,10 @@ def main():
                 else:
                     display_rows = []
                     chart_rows = []
+                    parameter_order = [
+                        row["Parameter"] for row in sensitivity_result["rows"]
+                    ]
+                    baseline_chart_value = sensitivity_result["baseline"]["mean"]
                     for row in sensitivity_result["rows"]:
                         metric = sensitivity_result["metric"]
                         display_rows.append({
@@ -4407,34 +4436,48 @@ def main():
                             "High 10th–90th": row["High 10th–90th"],
                             "Impact": _format_sensitivity_metric(metric, row["Impact"]),
                         })
-                        if row["Low"] is not None:
+                        if baseline_chart_value is not None and row["Low"] is not None:
                             chart_rows.append({
                                 "Parameter": row["Parameter"],
                                 "Variant": "Low",
-                                "Outcome": row["Low"],
+                                "Change": row["Low"] - baseline_chart_value,
                             })
-                        if row["High"] is not None:
+                        if baseline_chart_value is not None and row["High"] is not None:
                             chart_rows.append({
                                 "Parameter": row["Parameter"],
                                 "Variant": "High",
-                                "Outcome": row["High"],
+                                "Change": row["High"] - baseline_chart_value,
                             })
-                    st.altair_chart(
-                        alt.Chart(alt.Data(values=chart_rows)).mark_bar().encode(
-                            x=alt.X(
-                                "Outcome:Q", title=sensitivity_result["metric_label"],
-                                axis=alt.Axis(format=".1%" if sensitivity_result["metric"] == "cash_shortfall_probability" else "$,.0f"),
-                            ),
-                            y=alt.Y("Parameter:N", sort="-x", title=None),
-                            color=alt.Color("Variant:N", title="Variation"),
-                            tooltip=[
-                                alt.Tooltip("Parameter:N"),
-                                alt.Tooltip("Variant:N"),
-                                alt.Tooltip("Outcome:Q", format=".2f"),
-                            ],
-                        ).properties(height=max(220, 28 * len(display_rows)), title="Sensitivity tornado view"),
-                        use_container_width=True, key="sensitivity_tornado",
+                    change_axis_format = (
+                        ".1%" if sensitivity_result["metric"] == "cash_shortfall_probability"
+                        else (".1f" if sensitivity_result["metric"] == "purchase_timing" else "$,.0f")
                     )
+                    change_chart = alt.Chart(alt.Data(values=chart_rows)).mark_bar().encode(
+                        x=alt.X(
+                            "Change:Q", title=f"Change from baseline · {sensitivity_result['metric_label']}",
+                            axis=alt.Axis(format=change_axis_format),
+                        ),
+                        y=alt.Y(
+                            "Parameter:N", sort=parameter_order, title=None,
+                        ),
+                        color=alt.Color("Variant:N", title="Variation"),
+                        tooltip=[
+                            alt.Tooltip("Parameter:N"),
+                            alt.Tooltip("Variant:N"),
+                            alt.Tooltip("Change:Q", format=change_axis_format),
+                        ],
+                    )
+                    zero_rule = alt.Chart(alt.Data(values=[{"baseline": 0}])).mark_rule(
+                        color="#4b5563",
+                    ).encode(x="baseline:Q")
+                    if chart_rows:
+                        st.altair_chart(
+                            (change_chart + zero_rule).properties(
+                                height=max(220, 28 * len(display_rows)),
+                                title="Sensitivity tornado view (change from baseline)",
+                            ),
+                            use_container_width=True, key="sensitivity_tornado",
+                        )
                     st.dataframe(display_rows, hide_index=True, use_container_width=True)
                     st.caption(
                         f"Ranked by the largest absolute change from baseline across low/high "
