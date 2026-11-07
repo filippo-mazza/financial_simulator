@@ -4671,6 +4671,10 @@ def main():
     columns[2].metric(f"{label_prefix}final investments", _money(details["investments"][-1]))
     columns[3].metric("Loans repaid", len(repayment_dates))
 
+    single_export_download_name = build_export_filename(
+        st.session_state.get("single_export_filename", single_export_filename),
+        suggested_scenario_name,
+    )
     single_export_placeholder.download_button(
         "Export single-scenario JSON",
         data=create_simulation_export(
@@ -4678,10 +4682,8 @@ def main():
             simulation_count=int(simulation_count),
             trajectories=trajectories,
         ),
-        file_name=build_export_filename(
-            single_export_filename,
-            suggested_scenario_name,
-        ),
+        file_name=single_export_download_name,
+        key="single_scenario_export_download",
         mime="application/json",
         help="Download the scenario inputs and month-by-month results as JSON.",
     )
