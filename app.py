@@ -1062,48 +1062,44 @@ def _comparison_change_labels(comparison, differences):
 
 
 def comparison_explanation(comparison):
-    """Describe the modeled A/B result and its observable input/flow differences."""
+    """Return a concise plain-language summary of the modeled A/B result."""
     balance_rows = comparison_balance_rows(comparison)
     net_worth = next(row for row in balance_rows if row["Balance"] == "Net worth")
     delta = net_worth["B minus A"]
-    differences = scenario_input_differences(comparison)
-    labels = _comparison_change_labels(comparison, differences)
+    alternative_name = comparison.alternative_name.strip() or "Alternative B"
+    scenario_label = (
+        "Alternative B"
+        if alternative_name.lower() in {"alternative", "alternative b"}
+        else f"{alternative_name} (B)"
+    )
     if abs(delta) < 0.5:
-        outcome = (
-            f"Alternative B ({comparison.alternative_name}) finishes at approximately "
-            f"the same average net worth as Baseline A ({_money(net_worth['Alternative B'])})."
+        return (
+            f"{scenario_label} finishes with approximately the same average net worth "
+            "as the baseline scenario (details below)."
         )
-    else:
-        direction = "higher" if delta > 0 else "lower"
-        outcome = (
-            f"Alternative B ({comparison.alternative_name}) finishes with average net worth "
-            f"{_money(abs(delta))} {direction} than Baseline A "
-            f"({_money(net_worth['Alternative B'])} vs {_money(net_worth['Baseline A'])})."
-        )
-    if labels:
-        displayed = labels[:3]
-        if len(labels) > 3:
-            displayed.append(f"{len(labels) - 3} other changed input(s)")
-        changes = "The compared change(s) are " + ", ".join(displayed) + "."
-    else:
-        changes = "The effective A and B inputs are identical."
-    flow_differences = sorted(
-        (row for row in comparison_cash_flow_rows(comparison)
-         if abs(row["B minus A"]) >= 0.5),
-        key=lambda row: abs(row["B minus A"]), reverse=True,
-    )[:2]
-    if flow_differences:
-        drivers = " The largest tracked B−A flow differences are " + "; ".join(
-            f"{row['Tracked flow']} ({row['B minus A']:+,.0f})"
-            for row in flow_differences
-        ) + "."
-    else:
-        drivers = " No tracked cash-flow category differs materially between A and B."
+    direction = "higher" if delta > 0 else "lower"
     return (
-        f"{outcome} {changes}{drivers} This is an average modeled result from "
-        f"{comparison.simulation_count} paired simulation(s), not financial advice "
-        "or a guaranteed outcome; the listed flows are indicators, not a causal "
-        "attribution bridge."
+        f"{scenario_label} finishes with an average net worth of about "
+        f"{_compact_comparison_money(delta)} {direction} than the baseline scenario "
+        "(details below)."
+    )
+
+
+def _compact_comparison_money(value):
+    """Format a comparison delta compactly for the headline summary."""
+    value = abs(value)
+    if value >= 1_000_000:
+        return f"${value / 1_000_000:.1f}m"
+    if value >= 1_000:
+        return f"${value / 1_000:.0f}k"
+    return f"${value:,.0f}"
+
+
+def comparison_explanation_disclaimer():
+    """Return the shared limitation note for A/B comparison results."""
+    return (
+        "Modeled averages are estimates, not financial advice or guaranteed outcomes. "
+        "Use the tables and charts below to inspect the underlying differences."
     )
 
 
@@ -4168,6 +4164,7 @@ def main():
             "B−A is calculated within each seed pair before uncertainty summaries."
         )
         st.info(comparison_explanation(comparison), icon="ℹ️")
+        st.caption(comparison_explanation_disclaimer())
         for warning in comparison.warnings:
             st.warning(warning, icon="⚠️")
 
