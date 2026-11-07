@@ -2303,6 +2303,15 @@ def main():
     def item_key(item):
         return item["_id"]
 
+    def item_context(item, collection, index):
+        """Return a stable, human-readable context for repeated UI controls."""
+        name = str(item.get("name", "")).strip()
+        return f"{collection.title()} {index + 1}" + (f" — {name}" if name else "")
+
+    def field_label(context, label):
+        """Prefix repeated field labels so browser agents can identify the target."""
+        return f"{context}: {label}"
+
     def configured_jurisdiction_profiles():
         return [
             PropertyJurisdictionProfile(**{
@@ -2774,9 +2783,10 @@ def main():
             st.rerun()
         for index, profile in enumerate(st.session_state.jurisdiction_profiles):
             profile_key = profile["_id"]
+            profile_context = f"Jurisdiction profile {index + 1}"
             with st.container(border=True):
                 profile["name"] = st.text_input(
-                    "Profile name", profile["name"],
+                    field_label(profile_context, "Profile name"), profile["name"],
                     key=f"jurisdiction_name_{profile_key}",
                 )
                 if profile.get("profile_id"):
@@ -2803,7 +2813,7 @@ def main():
                     before = float(profile.get(field, 0.0))
                     basis = profile.get(basis_field, "user")
                     value = st.number_input(
-                        f"{label} · {_BASIS_LABELS[basis]}",
+                        field_label(profile_context, f"{label} · {_BASIS_LABELS[basis]}"),
                         min_value=0.0, max_value=max_value, value=before,
                         key=f"jurisdiction_{key}_{profile_key}",
                     )
@@ -2823,7 +2833,8 @@ def main():
                     )
                     if component["method"] == "fixed":
                         amount = st.number_input(
-                            "Fixed amount ($)", min_value=0.0, max_value=1e9,
+                            field_label(profile_context, f"{component['label']} — Fixed amount ($)"),
+                            min_value=0.0, max_value=1e9,
                             value=float(component["amount"]),
                             key=f"jurisdiction_component_amount_{ckey}",
                         )
@@ -2835,12 +2846,13 @@ def main():
                     if component.get("note"):
                         st.caption(component["note"])
                     use_override = st.checkbox(
-                        "Override with my own flat % of the tax base",
+                        field_label(profile_context, f"{component['label']} — Override with my own flat % of the tax base"),
                         value=overridden, key=f"jurisdiction_component_toggle_{ckey}",
                     )
                     if use_override:
                         component["override_percentage"] = st.number_input(
-                            "Own rate (% of base)", min_value=0.0, max_value=100.0,
+                            field_label(profile_context, f"{component['label']} — Own rate (% of base)"),
+                            min_value=0.0, max_value=100.0,
                             value=float(component.get("override_percentage") or 0.0),
                             key=f"jurisdiction_component_override_{ckey}",
                         )
@@ -2887,7 +2899,10 @@ def main():
                     "Rental operating costs (% of gross monthly rent)",
                     "rental_expense_percentage", "rental_expense_basis", "rental",
                 )
-                if st.button("Remove profile", key=f"remove_jurisdiction_{profile_key}"):
+                if st.button(
+                    f"Remove {profile_context}", key=f"remove_jurisdiction_{profile_key}",
+                    help="Remove this jurisdiction profile from the scenario.",
+                ):
                     remove_item(st.session_state.jurisdiction_profiles, index)
                     st.rerun()
 
@@ -2903,6 +2918,7 @@ def main():
         if st.button("＋ Add investment", use_container_width=True):
             add_investment(add_type)
         for index, item in enumerate(st.session_state.investments):
+            context = item_context(item, "investment", index)
             with st.container(border=True):
                 if not card_is_open("investment", item):
                     if item["investment_type"] == "real_estate":
@@ -2941,25 +2957,26 @@ def main():
                         )
                     continue
                 item["name"] = st.text_input(
-                    "Name", item["name"], key=f"investment_name_{item_key(item)}"
+                    field_label(context, "Name"), item["name"],
+                    key=f"investment_name_{item_key(item)}",
                 )
                 item["investment_type"] = st.selectbox(
-                    "Type", investment_types,
+                    field_label(context, "Investment type"), investment_types,
                     index=investment_types.index(item["investment_type"]),
                     key=f"investment_type_{item_key(item)}",
                 )
                 item["initial_amount"] = st.number_input(
                     (
-                        "Current full property value"
+                        field_label(context, "Current full property value ($)")
                         if item["investment_type"] == "real_estate"
-                        else "Initial amount"
+                        else field_label(context, "Initial amount ($)")
                     ),
                     min_value=0.0, value=float(item["initial_amount"]),
                     step=100.0, format="%.0f", key=f"investment_initial_{item_key(item)}",
                 )
                 if item["investment_type"] == "real_estate":
                     item["ownership_percentage"] = st.number_input(
-                        "Ownership share (%)", min_value=0.01, max_value=100.0,
+                        field_label(context, "Ownership share (%)"), min_value=0.01, max_value=100.0,
                         value=float(item.get("ownership_percentage", 100.0)),
                         step=1.0, key=f"investment_ownership_{item_key(item)}",
                         help=(
@@ -2975,7 +2992,7 @@ def main():
                         if item.get("linked_loan_name") in loan_options else None
                     )
                     item["linked_loan_name"] = st.selectbox(
-                        "Mortgage / loan linked to this property",
+                        field_label(context, "Mortgage / loan linked to this property"),
                         loan_options,
                         index=loan_options.index(current_loan),
                         format_func=lambda value: "No linked loan" if value is None else value,
@@ -2986,7 +3003,7 @@ def main():
                         ),
                     )
                     item["liability_share_percentage"] = st.number_input(
-                        "Your share of the linked loan (%)", min_value=0.01,
+                        field_label(context, "Your share of the linked loan (%)"), min_value=0.01,
                         max_value=100.0,
                         value=float(item.get("liability_share_percentage", 100.0)),
                         step=1.0, key=f"investment_liability_share_{item_key(item)}",
@@ -3005,7 +3022,7 @@ def main():
                         if item.get("rental_income_name") in rent_options else None
                     )
                     item["rental_income_name"] = st.selectbox(
-                        "Rental income linked to this property",
+                        field_label(context, "Rental income linked to this property"),
                         rent_options,
                         index=rent_options.index(current_rent),
                         format_func=lambda value: (
@@ -3029,7 +3046,7 @@ def main():
                         else None
                     )
                     item["jurisdiction_profile_name"] = st.selectbox(
-                        "Property jurisdiction estimate profile",
+                        field_label(context, "Property jurisdiction estimate profile"),
                         profile_options,
                         index=profile_options.index(current_profile),
                         format_func=lambda value: (
@@ -3054,14 +3071,14 @@ def main():
                         if selected is not None and selected.unsupported_cases:
                             st.warning(f"Not covered: {selected.unsupported_cases}")
                     item["monthly_expenses"] = st.number_input(
-                        "Additional fixed monthly property expenses (your share)",
+                        field_label(context, "Additional fixed monthly property expenses ($, your share)"),
                         min_value=0.0,
                         value=float(item["monthly_expenses"]), step=50.0, format="%.0f",
                         key=f"investment_expenses_{item_key(item)}",
                         help="Maintenance, insurance, management, and similar recurring costs.",
                     )
                     item["yearly_tax"] = st.number_input(
-                        "Additional fixed yearly property tax (your share)", min_value=0.0,
+                        field_label(context, "Additional fixed yearly property tax ($, your share)"), min_value=0.0,
                         value=float(item["yearly_tax"]), step=100.0, format="%.0f",
                         key=f"investment_tax_{item_key(item)}",
                     )
@@ -3077,13 +3094,13 @@ def main():
                     item["rental_income_name"] = None
                     item["jurisdiction_profile_name"] = None
                     item["monthly_contribution"] = st.number_input(
-                        "Monthly contribution", min_value=0.0,
+                        field_label(context, "Monthly contribution ($)"), min_value=0.0,
                         value=float(item["monthly_contribution"]), step=50.0,
                         format="%.0f", key=f"investment_contribution_{item_key(item)}",
                     )
                     if item["investment_type"] in AUTO_INVEST_TYPES:
                         item["auto_invest_enabled"] = st.checkbox(
-                            "Enable automatic cash-sweep contributions",
+                            field_label(context, "Enable automatic cash-sweep contributions"),
                             value=bool(item["auto_invest_enabled"]),
                             key=f"investment_auto_enabled_{item_key(item)}",
                             help=(
@@ -3092,21 +3109,21 @@ def main():
                             ),
                         )
                         item["auto_invest_min_cash"] = st.number_input(
-                            "Automatic contribution cash threshold", min_value=0.0,
+                            field_label(context, "Automatic contribution cash threshold ($)"), min_value=0.0,
                             value=float(item["auto_invest_min_cash"]), step=500.0,
                             format="%.0f", key=f"investment_auto_cash_{item_key(item)}",
                             disabled=not item["auto_invest_enabled"],
                             help="A sweep is considered only when cash is above this amount.",
                         )
                         item["auto_invest_percentage"] = st.number_input(
-                            "Automatic contribution (% of current cash)",
+                            field_label(context, "Automatic contribution (% of current cash)"),
                             min_value=0.1, max_value=100.0,
                             value=float(item["auto_invest_percentage"]), step=1.0,
                             key=f"investment_auto_pct_{item_key(item)}",
                             disabled=not item["auto_invest_enabled"],
                         )
                         item["auto_invest_max_per_year"] = st.number_input(
-                            "Maximum automatic contributions per year",
+                            field_label(context, "Maximum automatic contributions per year"),
                             min_value=1, max_value=12,
                             value=int(item["auto_invest_max_per_year"]), step=1,
                             key=f"investment_auto_max_{item_key(item)}",
@@ -3117,7 +3134,10 @@ def main():
                             "of cumulative net income. Each transaction has the modeled "
                             "$50 investment fee."
                         )
-                if st.button("Remove investment", key=f"remove_investment_{item_key(item)}"):
+                if st.button(
+                    f"Remove {context}", key=f"remove_investment_{item_key(item)}",
+                    help="Remove this investment from the scenario.",
+                ):
                     remove_item(st.session_state.investments, index)
                     st.rerun()
 
@@ -3129,30 +3149,39 @@ def main():
         if st.button("＋ Add income", use_container_width=True):
             add_income(income_to_add)
         for index, item in enumerate(st.session_state.incomes):
+            context = item_context(item, "income", index)
             with st.container(border=True):
                 if not card_is_open("income", item):
                     st.caption(f"{item['income_type']} · ${item['monthly_amount']:,.0f}/month")
                     continue
                 item["name"] = st.text_input(
-                    "Name", item["name"], key=f"income_name_{item_key(item)}"
+                    field_label(context, "Name"), item["name"],
+                    key=f"income_name_{item_key(item)}"
                 )
                 item["income_type"] = st.selectbox(
-                    "Type", income_types, index=income_types.index(item["income_type"]),
+                    field_label(context, "Income type"), income_types,
+                    index=income_types.index(item["income_type"]),
                     key=f"income_type_{item_key(item)}",
                 )
                 item["monthly_amount"] = st.number_input(
-                    "Monthly amount", min_value=0.0, value=float(item["monthly_amount"]),
+                    field_label(context, "Monthly amount ($)"), min_value=0.0,
+                    value=float(item["monthly_amount"]),
                     step=100.0, format="%.0f", key=f"income_amount_{item_key(item)}",
                 )
                 item["tax_rate"] = st.number_input(
-                    "Custom tax rate", 0.0, 100.0, value=float(item["tax_rate"]),
+                    field_label(context, "Custom tax rate (%)"), 0.0, 100.0,
+                    value=float(item["tax_rate"]),
                     key=f"income_tax_{item_key(item)}",
                 )
                 item["bonus_pct"] = st.number_input(
-                    "Bonus cap (%)", 0.0, 100.0, value=float(item["bonus_pct"]),
+                    field_label(context, "Bonus cap (%)"), 0.0, 100.0,
+                    value=float(item["bonus_pct"]),
                     key=f"income_bonus_{item_key(item)}",
                 )
-                if st.button("Remove income", key=f"remove_income_{item_key(item)}"):
+                if st.button(
+                    f"Remove {context}", key=f"remove_income_{item_key(item)}",
+                    help="Remove this income source from the scenario.",
+                ):
                     remove_item(st.session_state.incomes, index)
                     st.rerun()
 
@@ -3164,23 +3193,29 @@ def main():
         if st.button("＋ Add expense", use_container_width=True):
             add_expense()
         for index, item in enumerate(st.session_state.expenses):
+            context = item_context(item, "expense", index)
             with st.container(border=True):
                 if not card_is_open("expense", item):
                     st.caption(f"{item['expense_type']} · ${item['monthly_amount']:,.0f}/month")
                     continue
                 item["name"] = st.text_input(
-                    "Name", item["name"], key=f"expense_name_{item_key(item)}"
+                    field_label(context, "Name"), item["name"],
+                    key=f"expense_name_{item_key(item)}"
                 )
                 item["expense_type"] = st.selectbox(
-                    "Type", expense_types,
+                    field_label(context, "Expense type"), expense_types,
                     index=expense_types.index(item["expense_type"]),
                     key=f"expense_type_{item_key(item)}",
                 )
                 item["monthly_amount"] = st.number_input(
-                    "Monthly amount", min_value=0.0, value=float(item["monthly_amount"]),
+                    field_label(context, "Monthly amount ($)"), min_value=0.0,
+                    value=float(item["monthly_amount"]),
                     step=25.0, format="%.0f", key=f"expense_amount_{item_key(item)}",
                 )
-                if st.button("Remove expense", key=f"remove_expense_{item_key(item)}"):
+                if st.button(
+                    f"Remove {context}", key=f"remove_expense_{item_key(item)}",
+                    help="Remove this expense from the scenario.",
+                ):
                     remove_item(st.session_state.expenses, index)
                     st.rerun()
 
@@ -3203,6 +3238,7 @@ def main():
         if st.button("＋ Add loan", use_container_width=True):
             add_loan()
         for index, item in enumerate(st.session_state.loans):
+            context = item_context(item, "loan", index)
             with st.container(border=True):
                 if not card_is_open("loan", item):
                     st.caption(
@@ -3211,29 +3247,37 @@ def main():
                     )
                     continue
                 item["name"] = st.text_input(
-                    "Name", item["name"], key=f"loan_name_{item_key(item)}"
+                    field_label(context, "Name"), item["name"],
+                    key=f"loan_name_{item_key(item)}"
                 )
                 item["amount"] = st.number_input(
-                    "Amount", min_value=0.0, value=float(item["amount"]), step=1000.0,
+                    field_label(context, "Principal amount ($)"), min_value=0.0,
+                    value=float(item["amount"]), step=1000.0,
                     format="%.0f", key=f"loan_amount_{item_key(item)}",
                 )
                 item["interest_rate"] = st.number_input(
-                    "Interest rate (%)", min_value=0.0, value=float(item["interest_rate"]),
+                    field_label(context, "Interest rate (%)"), min_value=0.0,
+                    value=float(item["interest_rate"]),
                     step=0.1, key=f"loan_rate_{item_key(item)}",
                 )
                 item["duration_years"] = st.number_input(
-                    "Duration (years)", min_value=1, value=int(item["duration_years"]),
+                    field_label(context, "Duration (years)"), min_value=1,
+                    value=int(item["duration_years"]),
                     key=f"loan_duration_{item_key(item)}",
                 )
                 item["fixed_rate"] = st.checkbox(
-                    "Fixed rate", value=item["fixed_rate"],
+                    field_label(context, "Fixed rate"), value=item["fixed_rate"],
                     key=f"loan_fixed_{item_key(item)}",
                 )
                 item["already_paid"] = st.number_input(
-                    "Already paid", min_value=0.0, value=float(item["already_paid"]),
+                    field_label(context, "Already paid ($)"), min_value=0.0,
+                    value=float(item["already_paid"]),
                     step=100.0, format="%.0f", key=f"loan_paid_{item_key(item)}",
                 )
-                if st.button("Remove loan", key=f"remove_loan_{item_key(item)}"):
+                if st.button(
+                    f"Remove {context}", key=f"remove_loan_{item_key(item)}",
+                    help="Remove this loan from the scenario.",
+                ):
                     remove_item(st.session_state.loans, index)
                     st.rerun()
 
@@ -3242,6 +3286,7 @@ def main():
         if st.button("＋ Add daughter / child", use_container_width=True):
             add_dependent()
         for index, item in enumerate(st.session_state.dependents):
+            context = item_context(item, "child", index)
             with st.container(border=True):
                 if not card_is_open("dependent", item):
                     st.caption(
@@ -3249,14 +3294,16 @@ def main():
                     )
                     continue
                 item["name"] = st.text_input(
-                    "Name", item["name"], key=f"dependent_name_{item_key(item)}"
+                    field_label(context, "Name"), item["name"],
+                    key=f"dependent_name_{item_key(item)}"
                 )
                 item["age"] = st.number_input(
-                    "Current age", min_value=0, max_value=25,
+                    field_label(context, "Current age (years)"), min_value=0, max_value=25,
                     value=int(item.get("age", 0)), key=f"dependent_age_{item_key(item)}",
                 )
                 item["monthly_cost"] = st.number_input(
-                    "Other monthly child cost", min_value=0.0, value=float(item["monthly_cost"]),
+                    field_label(context, "Other monthly child cost ($)"), min_value=0.0,
+                    value=float(item["monthly_cost"]),
                     step=25.0, format="%.0f", key=f"dependent_cost_{item_key(item)}",
                 )
                 if item.get("childcare_monthly_cost") is None:
@@ -3266,7 +3313,8 @@ def main():
                     )
                 else:
                     item["childcare_monthly_cost"] = st.number_input(
-                        "Childcare monthly cost (until school)", min_value=0.0,
+                        field_label(context, "Childcare monthly cost until school ($)"),
+                        min_value=0.0,
                         value=float(item["childcare_monthly_cost"]), step=25.0,
                         format="%.0f", key=f"dependent_childcare_{item_key(item)}",
                         help=(
@@ -3275,19 +3323,22 @@ def main():
                         ),
                     )
                 automatic_costs = st.checkbox(
-                    "Add school cost from age 6*",
+                    field_label(context, "Add school cost from age 6*"),
                     value=item.get("school_start_age") is not None,
                     key=f"dependent_school_toggle_{item_key(item)}",
                 )
                 item["school_start_age"] = 6 if automatic_costs else None
                 item["school_monthly_cost"] = st.number_input(
-                    "School monthly cost*", min_value=0.0,
+                    field_label(context, "School monthly cost ($)*"), min_value=0.0,
                     value=float(item.get("school_monthly_cost", 250.0)), step=25.0,
                     format="%.0f", key=f"dependent_school_cost_{item_key(item)}",
                     disabled=not automatic_costs,
                 )
                 st.caption("* Illustrative assumption; adjust or disable for your situation.")
-                if st.button("Remove child", key=f"remove_dependent_{item_key(item)}"):
+                if st.button(
+                    f"Remove {context}", key=f"remove_dependent_{item_key(item)}",
+                    help="Remove this child from the scenario.",
+                ):
                     remove_item(st.session_state.dependents, index)
                     st.rerun()
 
@@ -3346,7 +3397,7 @@ def main():
                     key=f"curveball_customize_{preset['key']}",
                 ):
                     existing["probability"] = st.number_input(
-                        "Probability per trajectory (%)", min_value=0.0,
+                        f"{preset['name']} — Probability per trajectory (%)", min_value=0.0,
                         max_value=100.0, value=float(existing["probability"]),
                         step=5.0, key=f"curveball_probability_{preset['key']}",
                     )
@@ -3356,7 +3407,7 @@ def main():
                     target = existing.get("affected_income_name")
                     target_label = target if target in income_options else "All incomes"
                     selected_target = st.selectbox(
-                        "Affected income", income_options,
+                        f"{preset['name']} — Affected income", income_options,
                         index=income_options.index(target_label),
                         key=f"curveball_income_{preset['key']}",
                     )
@@ -3365,29 +3416,32 @@ def main():
                     )
                     start_left, start_right = st.columns(2)
                     existing["start_month_min"] = start_left.number_input(
-                        "Earliest start month", min_value=1, max_value=max_month,
+                        f"{preset['name']} — Earliest start month", min_value=1,
+                        max_value=max_month,
                         value=min(max_month, int(existing["start_month_min"])),
                         step=1, key=f"curveball_start_min_{preset['key']}",
                     )
                     existing["start_month_max"] = start_right.number_input(
-                        "Latest start month", min_value=1, max_value=max_month,
+                        f"{preset['name']} — Latest start month", min_value=1,
+                        max_value=max_month,
                         value=min(max_month, int(existing["start_month_max"])),
                         step=1, key=f"curveball_start_max_{preset['key']}",
                     )
                     if existing["start_month_max"] < existing["start_month_min"]:
                         existing["start_month_max"] = existing["start_month_min"]
                     existing["duration_months"] = st.number_input(
-                        "Income-reduction duration (months)", min_value=1,
+                        f"{preset['name']} — Income-reduction duration (months)", min_value=1,
                         value=int(existing["duration_months"]), step=1,
                         key=f"curveball_duration_{preset['key']}",
                     )
                     existing["income_reduction_pct"] = st.number_input(
-                        "Income reduction (%)", min_value=0.0, max_value=100.0,
+                        f"{preset['name']} — Income reduction (%)", min_value=0.0,
+                        max_value=100.0,
                         value=float(existing["income_reduction_pct"]), step=5.0,
                         key=f"curveball_reduction_{preset['key']}",
                     )
                     existing["recovery_months"] = st.number_input(
-                        "Recovery period (months)", min_value=0,
+                        f"{preset['name']} — Recovery period (months)", min_value=0,
                         value=int(existing["recovery_months"]), step=1,
                         key=f"curveball_recovery_{preset['key']}",
                     )
