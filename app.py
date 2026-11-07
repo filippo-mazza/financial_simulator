@@ -2178,6 +2178,9 @@ def main():
             "The other scenario is stored as an independent configuration snapshot."
         )
     workspace_notice = st.session_state.pop("workspace_success_notice", None)
+    import_notice = st.session_state.pop("import_success_notice", None)
+    if import_notice:
+        st.toast(import_notice, icon="✅", duration=5)
     for import_warning in st.session_state.pop("import_warnings", []):
         st.warning(import_warning)
 
@@ -2541,6 +2544,59 @@ def main():
         st.session_state.import_success_notice = (
             f"Scenario imported from {uploaded.name}."
         )
+        st.session_state["sidebar_import"] = False
+
+    def import_multiple_scenarios():
+        uploaded_files = st.session_state.get(
+            "scenario_import_file_"
+            f"{st.session_state.get('import_uploader_counter', 0)}"
+        ) or []
+        if len(uploaded_files) != 2:
+            st.session_state.import_error = (
+                "Select exactly two scenario files to create an A/B workspace."
+            )
+            return
+        imported_configs = []
+        import_warnings = []
+        try:
+            for uploaded in uploaded_files:
+                imported, warnings = read_simulation_export(
+                    uploaded.getvalue(), include_warnings=True,
+                )
+                imported_configs.append((uploaded.name, imported))
+                import_warnings.extend(warnings)
+        except ValueError as error:
+            st.session_state.import_error = str(error)
+            return
+
+        scenario_names = [
+            uploaded_name.rsplit(".", 1)[0].strip()
+            or f"Scenario {index + 1}"
+            for index, (uploaded_name, _) in enumerate(imported_configs)
+        ]
+        if scenario_names[0] == scenario_names[1]:
+            scenario_names[0] = f"{scenario_names[0]} A"
+            scenario_names[1] = f"{scenario_names[1]} B"
+        workspace = ScenarioWorkspace((
+            ScenarioVariant(BASELINE_ID, scenario_names[0], imported_configs[0][1]),
+            ScenarioVariant(ALTERNATIVE_ID, scenario_names[1], imported_configs[1][1]),
+        ))
+        st.session_state.scenario_workspace = workspace
+        for key in (
+            "scenario_baseline_name", "scenario_alternative_name",
+            "scenario_variant_selector",
+        ):
+            st.session_state.pop(key, None)
+        import_config(workspace.config_for(BASELINE_ID), run_after_load=False)
+        st.session_state.pop("scenario_comparison_result", None)
+        st.session_state.import_warnings = import_warnings
+        st.session_state.import_uploader_counter = (
+            st.session_state.get("import_uploader_counter", 0) + 1
+        )
+        st.session_state.import_success_notice = (
+            "Imported two scenarios into an A/B workspace."
+        )
+        st.session_state["sidebar_import"] = False
 
     def card_is_open(collection, item):
         active = st.session_state.get("active_card")
@@ -3945,22 +4001,32 @@ def main():
     with scenario_controls_placeholder.container():
         with st.expander("Scenario import/export", key="sidebar_import"):
             st.markdown("**Single-scenario JSON**")
+            import_multiple_scenarios_enabled = st.checkbox(
+                "Import multiple scenarios",
+                key="import_multiple_scenarios",
+                help="Upload exactly two single-scenario JSON files to create an A/B workspace.",
+            )
             uploaded_export = st.file_uploader(
                 "Import single-scenario JSON", type="json",
                 help="Select a single-scenario JSON file exported by this simulator.",
                 key=f"scenario_import_file_{st.session_state.get('import_uploader_counter', 0)}",
+                accept_multiple_files=import_multiple_scenarios_enabled,
+                on_change=(
+                    None if import_multiple_scenarios_enabled
+                    else import_single_scenario
+                ),
             )
-            import_notice = st.session_state.pop("import_success_notice", None)
-            if import_notice:
-                st.success(import_notice)
             import_error = st.session_state.pop("import_error", None)
             if import_error:
                 st.error(import_error)
-            st.button(
-                "Import parameters", disabled=uploaded_export is None,
-                use_container_width=True,
-                on_click=import_single_scenario,
-            )
+            if import_multiple_scenarios_enabled:
+                st.button(
+                    "Import two scenarios",
+                    disabled=not uploaded_export,
+                    key="import_multiple_scenarios_button",
+                    use_container_width=True,
+                    on_click=import_multiple_scenarios,
+                )
 
             workspace = st.session_state.scenario_workspace
             suggested_scenario_name = (
