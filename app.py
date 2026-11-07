@@ -4115,7 +4115,10 @@ def main():
             "and run again to see how the projection changes.\n"
             "- **Compare or share:** use **Create Baseline A and Alternative B** "
             "in the sidebar to compare two versions, or open **Scenario "
-            "import/export** to load or save JSON scenarios."
+            "import/export** to load or save JSON scenarios.\n\n"
+            "**Important:** This simulator provides illustrative projections for "
+            "planning and education only. It is not financial advice, a guarantee, "
+            "or a substitute for advice from a qualified professional."
         )
 
     purchase_config = None
