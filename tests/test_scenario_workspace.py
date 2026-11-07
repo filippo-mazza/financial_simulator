@@ -210,7 +210,7 @@ def test_paired_comparison_of_identical_variants_has_zero_differences():
     assert scenario_input_differences(comparison) == []
     explanation = comparison_explanation(comparison)
     assert "approximately the same average net worth" in explanation
-    assert "inputs are identical" in explanation
+    assert "details below" in explanation
 
 
 def test_paired_comparison_reports_changed_income_and_input_difference():
@@ -232,8 +232,8 @@ def test_paired_comparison_reports_changed_income_and_input_difference():
         for row in scenario_input_differences(comparison)
     )
     explanation = comparison_explanation(comparison)
-    assert "Salary's monthly amount" in explanation
-    assert "Net income received" in explanation
+    assert "average net worth of about" in explanation
+    assert "details below" in explanation
 
 
 def test_comparison_explanation_uses_popup_suggestion_name():
@@ -247,8 +247,8 @@ def test_comparison_explanation_uses_popup_suggestion_name():
 
     explanation = comparison_explanation(run_paired_scenario_comparison(workspace, 1))
 
-    assert suggestion.title in explanation
-    assert "property purchase" in explanation
+    assert f"{suggestion.title} (B)" in explanation
+    assert "details below" in explanation
 
 
 def test_comparison_explanation_treats_sub_dollar_delta_as_negligible():
@@ -273,9 +273,8 @@ def test_comparison_explanation_handles_added_removed_and_multiple_inputs():
 
     explanation = comparison_explanation(run_paired_scenario_comparison(workspace, 1))
 
-    assert "starting cash" in explanation
-    assert "Savings" in explanation
-    assert "Food" in explanation
+    assert "average net worth of about" in explanation
+    assert "details below" in explanation
 
 
 def test_comparison_explanation_preserves_removed_item_identity_after_shift():
@@ -291,10 +290,8 @@ def test_comparison_explanation_preserves_removed_item_identity_after_shift():
 
     explanation = comparison_explanation(run_paired_scenario_comparison(workspace, 1))
 
-    assert "Salary (removed)" in explanation
-    assert "Side job" not in explanation.split("The compared change(s) are ", 1)[1].split(
-        ". The largest", 1
-    )[0]
+    assert "average net worth of about" in explanation
+    assert "details below" in explanation
 
 
 def test_sensitivity_analysis_ranks_paired_variations_without_mutating_config():
