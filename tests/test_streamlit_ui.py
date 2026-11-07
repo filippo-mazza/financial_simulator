@@ -460,7 +460,7 @@ def test_import_notice_is_shown_once_and_uploader_key_resets(monkeypatch, tmp_pa
     app.run(timeout=30)
 
     assert not app.exception
-    assert [s.value for s in app.success] == ["Scenario imported from a.json."]
+    assert not app.success
     assert "import_success_notice" not in app.session_state
 
     app.run(timeout=30)
@@ -484,14 +484,19 @@ assert {{item.label for item in panel.file_uploader}} == {{
         "Import single-scenario JSON",
         "Import A/B workspace JSON",
     }}
+assert {{item.label for item in panel.checkbox}} == {{
+    "Import multiple scenarios",
+    }}
 assert "Single-scenario export filename" in {{
-        item.label for item in panel.text_input
-    }}
+    item.label for item in panel.text_input
+}}
 assert {{item.label for item in panel.button}} >= {{
-        "Import parameters",
-        "Import A/B workspace",
-        "Create Baseline A and Alternative B",
-    }}
+    "Import A/B workspace",
+    "Create Baseline A and Alternative B",
+}}
+assert "Import two scenarios" not in {{
+    item.label for item in panel.button
+}}
 app.sidebar.button(key='create_scenario_workspace').click().run(timeout=30)
 next(item for item in app.number_input if item.label == 'Number of simulations').set_value(1).run(timeout=30)
 next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=60)
@@ -520,14 +525,9 @@ def test_scenario_json_import_errors_keep_uploads_and_explain_failure(
         monkeypatch, tmp_path):
     app = _fresh_app(monkeypatch, tmp_path)
     panel = _expander(app.sidebar, "sidebar_import")
-
     panel.file_uploader(key="scenario_import_file_0").upload(
         "invalid-scenario.json", b"{", "application/json",
     ).run(timeout=30)
-    next(
-        item for item in _expander(app.sidebar, "sidebar_import").button
-        if item.label == "Import parameters"
-    ).click().run(timeout=30)
 
     assert not app.exception
     assert app.session_state.get("import_uploader_counter", 0) == 0
@@ -566,12 +566,56 @@ app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
 app.sidebar.file_uploader(key='scenario_import_file_0').upload(
     'older-scenario.json', payload, 'application/json',
 ).run(timeout=30)
-panel = next(item for item in app.sidebar.expander if item.key == 'sidebar_import')
-next(item for item in panel.button if item.label == 'Import parameters').click().run(timeout=60)
 assert not app.exception
 assert app.session_state['scenario_years'] == 1
-assert app.session_state.get('import_success_notice') is None
+assert app.session_state['import_uploader_counter'] == 1
+assert app.session_state.get('sidebar_import') is False
+assert any('older-scenario.json' in item.value for item in app.toast)
 assert not any('cannot be modified after the widget' in item.value for item in app.exception)
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_multiple_scenario_import_creates_ab_workspace(tmp_path):
+    script = f"""
+from app import SimulationConfig, create_simulation_export, run_simulation
+from streamlit.testing.v1 import AppTest
+
+def export(years, initial_cash):
+    config = SimulationConfig(
+        years=years, initial_cash=initial_cash, seed=7,
+        investments=[], incomes=[], expenses=[], loans=[],
+    )
+    results = run_simulation(config)
+    return create_simulation_export(config, *results)
+
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+app.sidebar.checkbox(key='import_multiple_scenarios').set_value(True).run(timeout=30)
+uploader = app.sidebar.file_uploader(key='scenario_import_file_0')
+assert uploader.accept_multiple_files
+uploader.set_value([
+    ('baseline.json', export(1, 1000).encode(), 'application/json'),
+    ('alternative.json', export(2, 2000).encode(), 'application/json'),
+]).run(timeout=30)
+assert not app.exception
+assert app.session_state['scenario_workspace'] is None
+app.button(key='import_multiple_scenarios_button').click().run(timeout=30)
+assert not app.exception
+workspace = app.session_state['scenario_workspace']
+assert workspace.variant('baseline').name == 'baseline'
+assert workspace.variant('alternative').name == 'alternative'
+assert workspace.config_for('baseline').years == 1
+assert workspace.config_for('alternative').years == 2
+assert app.session_state['scenario_initial_cash'] == 1000
+assert app.session_state['sidebar_import'] is False
+assert any('Imported two scenarios' in item.value for item in app.toast)
 """
     environment = dict(os.environ)
     environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
