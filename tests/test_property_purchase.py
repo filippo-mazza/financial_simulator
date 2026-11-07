@@ -55,6 +55,57 @@ def test_purchase_is_recorded_after_month_zero_and_mortgage_starts_next_month():
     assert repayment_dates == {}
 
 
+def test_purchase_maintenance_uses_original_price_and_tax_is_annual():
+    config = SimulationConfig(
+        years=3, initial_cash=200_000, investments=[], incomes=[], expenses=[], loans=[],
+        property_purchase=PropertyPurchase(
+            100_000, 0, purchase_month=0, yearly_tax=1_200,
+            annual_maintenance_percentage=1.0,
+        ),
+    )
+
+    net_worth, _, details = run_simulation(config)
+
+    linked_costs = details["expense_values"]["Purchased property — property expenses (linked)"]
+    linked_tax = details["expense_values"]["Purchased property — property tax (linked)"]
+    assert linked_costs[0] == 0
+    assert linked_costs[1:13] == [100_000 / 100 / 12] * 12
+    assert linked_costs[13] > linked_costs[1]
+    assert linked_tax[:12] == [0] * 12
+    assert linked_tax[12] == 1_200
+    assert linked_tax[13:24] == [0] * 11
+    assert linked_tax[24] > 1_200
+    assert details["bank_account"][1] < details["bank_account"][0]
+
+
+def test_maintenance_is_not_charged_when_automatic_purchase_does_not_close():
+    policy = AutomaticPurchasePolicy(
+        PropertyPurchase(100_000, 20, annual_maintenance_percentage=1.0),
+        minimum_available_cash=50_000, minimum_cash_reserve=0,
+    )
+
+    _, _, details = run_simulation(SimulationConfig(
+        years=1, initial_cash=10_000, investments=[], incomes=[], expenses=[], loans=[],
+        property_purchase=policy,
+    ))
+
+    assert details["purchase_outcome"]["purchased"] is False
+    assert not any("property expenses" in name for name in details["expense_values"])
+
+
+def test_legacy_purchase_export_defaults_maintenance_to_zero():
+    config = SimulationConfig(
+        initial_cash=100_000,
+        property_purchase=PropertyPurchase(100_000, 20),
+    )
+    document = create_simulation_export(config, *run_simulation(config))
+    document = document.replace('"annual_maintenance_percentage": 0.0,', '')
+
+    restored = read_simulation_export(document)
+
+    assert restored.property_purchase.annual_maintenance_percentage == 0.0
+
+
 def test_invalid_or_unaffordable_purchase_does_not_mutate_components():
     account = BankAccount(10_000)
     investments = []

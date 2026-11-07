@@ -1970,7 +1970,9 @@ def main():
         "mortgage_duration_years": 25, "purchase_month": 0,
         "property_name": "Purchased property", "mortgage_name": "Property mortgage",
         "fixed_rate": False, "monthly_expenses": 0.0, "yearly_tax": 0.0,
+        "annual_maintenance_percentage": 0.0,
     })
+    st.session_state.purchase_fields.setdefault("annual_maintenance_percentage", 0.0)
     for collection_name in ("investments", "incomes", "expenses", "loans", "dependents"):
         for item in st.session_state[collection_name]:
             item.setdefault("_id", uuid.uuid4().hex)
@@ -3165,6 +3167,17 @@ def main():
                 purchase["fixed_rate"] = st.checkbox("Fixed-rate mortgage", value=bool(purchase["fixed_rate"]), key="purchase_fixed")
                 purchase["monthly_expenses"] = st.number_input("Additional fixed monthly ownership costs", min_value=0.0, value=float(purchase["monthly_expenses"]), step=25.0, key="purchase_monthly_cost")
                 purchase["yearly_tax"] = st.number_input("Additional fixed annual ownership tax", min_value=0.0, value=float(purchase["yearly_tax"]), step=100.0, key="purchase_yearly_tax")
+                purchase["annual_maintenance_percentage"] = st.number_input(
+                    "Annual maintenance / upkeep (% of original purchase price)",
+                    min_value=0.0, max_value=100.0,
+                    value=float(purchase.get("annual_maintenance_percentage", 0.0)),
+                    step=0.1, key="purchase_maintenance_percentage",
+                    help=(
+                        "Planning allowance charged monthly after closing. It is based "
+                        "on the original purchase price and does not compound with "
+                        "property appreciation."
+                    ),
+                )
                 if st.session_state.purchase_mode.startswith("Automatic"):
                     st.session_state.purchase_min_cash = st.number_input("Minimum cash threshold", min_value=0.0, value=float(st.session_state.purchase_min_cash), step=500.0, key="purchase_threshold")
                     st.session_state.purchase_reserve = st.number_input(
@@ -3370,7 +3383,7 @@ def main():
                     f"Configuration estimate: upfront cash **${preview.down_payment + preview.transaction_fees + estimated_fees:,.0f}**, "
                     f"mortgage principal **${preview.mortgage_principal:,.0f}**, estimated "
                     f"payment **${property_purchase_payment(preview):,.0f}/month**, ownership "
-                    f"cost **${preview.monthly_expenses + estimated_monthly:,.0f}/month + "
+                    f"cost **${preview.effective_monthly_expenses + estimated_monthly:,.0f}/month + "
                     f"${preview.yearly_tax + estimated_tax:,.0f}/year tax**. Automatic "
                     "purchase is stochastic and may not occur. Profile estimates use the "
                     "starting purchase price and do not predict future law or reassessment."
