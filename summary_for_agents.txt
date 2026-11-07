@@ -321,8 +321,22 @@ so results cannot leak between scenarios. create_scenario_workspace_export()
 writes a separate parameters-only `financial-simulator-scenario-workspace`
 schema; each embedded scenario uses the established single-scenario parameter
 document and reader. Existing single-scenario JSON is unchanged. This slice does
-not run paired scenarios or calculate deltas; issue #31 owns paired seeds and the
-comparison dashboard.
+not persist results.
+
+run_paired_scenario_comparison() uses Baseline A's horizon and base seed for both
+variants and calls the existing run_simulation_batch() twice. Trajectory n has
+the same effective seed in A and B. Structural differences trigger an explicit
+warning because draw consumption can diverge despite equal seeds. The dashboard
+shows aligned average net-worth/cash balances, non-additive final balance rows,
+and monthly mean/median/P10/P90 statistics calculated from within-seed B-minus-A
+differences. comparison_cash_flow_rows() reports only tracked computed flows and
+separates housing, other expenses, property tax, debt service, gross automatic
+transfers/fee memo, and purchase fees. It never sums them into net-worth
+attribution: principal/interest, actual income tax, down payments, scheduled
+contributions, bank fees, and investment returns need the future ledger (#54).
+Paired comparison results are session-local and invalidated by a fingerprint of
+both configs, names, and the run count. Historical snapshots (#124) are not
+treated as paired comparisons.
 
 Monthly export rows contain a property_positions mapping with market value,
 owned value, attributable debt, equity, rental income, and operating costs.

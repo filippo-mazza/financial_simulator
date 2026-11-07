@@ -127,11 +127,26 @@ then loads an independent defensive copy, while clearing the previous scenario's
 result. Resetting B copies the current saved A inputs again. Under
 **A/B workspace JSON** in the sidebar, **Export A/B workspace JSON** saves both
 names and input configurations without results, alongside the single-scenario result export
-rather than replacing it. This first workspace
-slice is configuration management only: paired-seed execution, side-by-side
-charts, and financial deltas belong to issue #31. Until then, run and export each
-active scenario separately and do not interpret two unpaired runs as a controlled
-comparison.
+rather than replacing it.
+
+With a workspace active, **Compare A/B** runs both saved configurations over
+Baseline A's horizon with the same trajectory count and effective seeds. It
+shows time-aligned average net worth and cash, final balance deltas, and the
+mean/median plus 10th–90th sample range of the within-seed **B minus A** net-worth
+difference. If scenario structure differs, the UI warns that equal seeds may
+consume random draws in a different order and therefore do not guarantee perfect
+common-shock coupling. Changed horizons, seeds, and financial assumptions are
+also disclosed.
+
+The cash-flow drill-down uses only computed monthly results: net income,
+housing/other expenses, property tax, debt service, automatic investment gross
+transfers and fees, and purchase fees. It is not an additive explanation of net
+worth. Principal versus interest, income tax versus bonuses/variable income,
+down payments, regular investment contributions, bank fees, and investment
+returns require the future auditable transaction ledger (#54). Investment,
+debt, and property-equity rows are overlapping observed balances, not causal
+contributions or a recommendation. A/B exports still contain inputs only; paired
+results remain session-local and are recomputed after input changes.
 
 ### Screenshots
 
