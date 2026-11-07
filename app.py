@@ -2587,15 +2587,20 @@ def main():
         )
         for item, dependent in zip(st.session_state.dependents, imported.dependents):
             item["childcare_monthly_cost"] = dependent.childcare_monthly_cost
-        existing_curveball_ids = {
-            item.get("name"): item.get("_id")
-            for item in st.session_state.curveballs
-        }
-        st.session_state.curveballs = [
-            {**asdict(item), "probability": item.probability * 100,
-             "_id": existing_curveball_ids.get(item.name) or uuid.uuid4().hex}
-            for item in imported.curveballs
-        ]
+        existing_curveball_ids = {}
+        for item in st.session_state.curveballs:
+            existing_curveball_ids.setdefault(item.get("name"), []).append(
+                item.get("_id")
+            )
+        imported_curveballs = []
+        for item in imported.curveballs:
+            matching_ids = existing_curveball_ids.get(item.name, [])
+            item_id = matching_ids.pop(0) if matching_ids else uuid.uuid4().hex
+            imported_curveballs.append({
+                **asdict(item), "probability": item.probability * 100,
+                "_id": item_id,
+            })
+        st.session_state.curveballs = imported_curveballs
         st.session_state.pop("simulation_result", None)
         if run_after_load:
             st.session_state.run_after_import = True

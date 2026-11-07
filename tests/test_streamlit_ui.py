@@ -334,6 +334,54 @@ def test_scenario_import_preserves_expansion_for_matching_items(monkeypatch, tmp
     assert _curveball_card_button(app, "Temporary job loss").label.startswith("▾ ")
 
 
+def test_scenario_import_assigns_unique_ids_to_duplicate_curveballs(
+        monkeypatch, tmp_path):
+    script = f"""
+from app import (
+    CurveballConfig, SimulationConfig, create_simulation_export, run_simulation,
+)
+from streamlit.testing.v1 import AppTest
+
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+app.session_state['curveballs'] = [{{
+    'name': 'Imported custom event', 'enabled': True, 'probability': 25.0,
+    'start_month_min': 1, 'start_month_max': 120, 'duration_months': 3,
+    'affected_income_name': None, 'income_reduction_pct': 100.0,
+    'recovery_months': 3, '_id': 'existing-curveball',
+}}]
+app.run(timeout=30)
+
+config = SimulationConfig(
+    years=1, seed=7, investments=[], incomes=[], expenses=[], loans=[],
+    curveballs=[
+        CurveballConfig('Imported custom event', True, 0.25, 1, 12, 3),
+        CurveballConfig('Imported custom event', True, 0.25, 1, 12, 3),
+    ],
+)
+payload = create_simulation_export(config, *run_simulation(config)).encode()
+app.sidebar.file_uploader(key='scenario_import_file_0').upload(
+    'duplicate-curveballs.json', payload, 'application/json',
+).run(timeout=60)
+
+assert not app.exception
+curveballs = app.session_state['curveballs']
+ids = [item['_id'] for item in curveballs]
+assert ids[0] == 'existing-curveball'
+assert len(set(ids)) == 2
+remove_buttons = [button for button in app.button if button.label == 'Remove']
+assert len(remove_buttons) == 2
+assert len({{button.key for button in remove_buttons}}) == 2
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=90,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_streamlit_minimum_supports_persistent_keyed_expanders():
     assert "streamlit>=1.56,<2" in REQUIREMENTS_PATH.read_text()
 
