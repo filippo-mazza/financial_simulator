@@ -102,6 +102,37 @@ class CurveballConfig:
     recovery_months: int = 0
 
 
+PREDEFINED_CURVEBALLS = (
+    {
+        "key": "temporary_job_loss",
+        "name": "Temporary job loss",
+        "description": "20% chance of no income for 6 months, then 6 months of recovery.",
+        "probability_pct": 20.0,
+        "duration_months": 6,
+        "income_reduction_pct": 100.0,
+        "recovery_months": 6,
+    },
+    {
+        "key": "reduced_working_hours",
+        "name": "Reduced working hours",
+        "description": "30% chance of a 40% income reduction for 6 months, then recovery.",
+        "probability_pct": 30.0,
+        "duration_months": 6,
+        "income_reduction_pct": 40.0,
+        "recovery_months": 6,
+    },
+    {
+        "key": "extended_illness",
+        "name": "Extended illness leave",
+        "description": "15% chance of a 60% income reduction for 3 months, then recovery.",
+        "probability_pct": 15.0,
+        "duration_months": 3,
+        "income_reduction_pct": 60.0,
+        "recovery_months": 3,
+    },
+)
+
+
 @dataclass
 class InvestmentConfig:
     name: str
@@ -2414,6 +2445,8 @@ def main():
             "purchase_cadastral_income_input", "purchase_assessed_value_input",
         ):
             st.session_state.pop(key, None)
+        for preset in PREDEFINED_CURVEBALLS:
+            st.session_state.pop(f"curveball_preset_{preset['key']}", None)
         st.session_state.selected_rent_expense = imported.selected_rent_expense
         for key in list(st.session_state):
             if key.startswith("assumption_"):
@@ -3197,79 +3230,51 @@ def main():
 
     def render_curveballs():
         st.caption(
-            "Optional adverse events are sampled independently per trajectory. "
-            "Disabled events consume no random draws and never trigger."
+            "Choose from a few predefined adverse events. Selected events are "
+            "sampled independently per trajectory; unselected events consume no "
+            "random draws."
         )
-        if st.button("＋ Add curveball", use_container_width=True):
-            add_curveball()
-        income_options = ["All incomes"] + [item["name"] for item in st.session_state.incomes]
         max_month = max(1, int(st.session_state.get("scenario_years", 10)) * 12)
-        for index, item in enumerate(st.session_state.curveballs):
-            with st.container(border=True):
-                if not card_is_open("curveball", item):
-                    state = "on" if item.get("enabled") else "off"
-                    st.caption(
-                        f"{state} · {item.get('probability', 0):.0f}% chance · "
-                        f"{item.get('duration_months', 0)} months"
-                    )
-                    continue
-                item["name"] = st.text_input(
-                    "Name", item["name"], key=f"curveball_name_{item_key(item)}"
-                )
-                item["enabled"] = st.checkbox(
-                    "Enabled", value=bool(item.get("enabled", False)),
-                    key=f"curveball_enabled_{item_key(item)}",
-                )
-                item["probability"] = st.number_input(
-                    "Probability per trajectory (%)", min_value=0.0, max_value=100.0,
-                    value=float(item.get("probability", 0.0)), step=5.0,
-                    key=f"curveball_probability_{item_key(item)}",
-                )
-                current_target = item.get("affected_income_name")
-                target_label = (
-                    current_target if current_target in income_options else "All incomes"
-                )
-                selected_target = st.selectbox(
-                    "Affected income", income_options,
-                    index=income_options.index(target_label),
-                    key=f"curveball_income_{item_key(item)}",
-                )
-                item["affected_income_name"] = (
-                    None if selected_target == "All incomes" else selected_target
-                )
-                start_left, start_right = st.columns(2)
-                item["start_month_min"] = start_left.number_input(
-                    "Earliest start month", min_value=1, max_value=max_month,
-                    value=min(max_month, int(item.get("start_month_min", 1))), step=1,
-                    key=f"curveball_start_min_{item_key(item)}",
-                )
-                item["start_month_max"] = start_right.number_input(
-                    "Latest start month", min_value=1, max_value=max_month,
-                    value=min(max_month, int(item.get("start_month_max", max_month))), step=1,
-                    key=f"curveball_start_max_{item_key(item)}",
-                )
-                item["duration_months"] = st.number_input(
-                    "Income-reduction duration (months)", min_value=1,
-                    value=int(item.get("duration_months", 3)), step=1,
-                    key=f"curveball_duration_{item_key(item)}",
-                )
-                item["income_reduction_pct"] = st.number_input(
-                    "Income reduction (%)", min_value=0.0, max_value=100.0,
-                    value=float(item.get("income_reduction_pct", 100.0)), step=5.0,
-                    key=f"curveball_reduction_{item_key(item)}",
-                )
-                item["recovery_months"] = st.number_input(
-                    "Recovery period (months)", min_value=0,
-                    value=int(item.get("recovery_months", 0)), step=1,
-                    key=f"curveball_recovery_{item_key(item)}",
-                )
-                st.caption(
-                    "During recovery, the configured reduction tapers linearly to zero. "
-                    "Overlapping events multiply their income factors."
-                )
-                if st.button("Remove curveball", key=f"remove_curveball_{item_key(item)}"):
-                    remove_item(st.session_state.curveballs, index)
-                    st.rerun()
+        configured = {item.get("name"): item for item in st.session_state.curveballs}
+        predefined_names = {preset["name"] for preset in PREDEFINED_CURVEBALLS}
+        for preset in PREDEFINED_CURVEBALLS:
+            existing = configured.get(preset["name"])
+            if existing is not None:
+                existing["start_month_min"] = 1
+                existing["start_month_max"] = max_month
+            selected = st.checkbox(
+                preset["name"], value=bool(existing and existing.get("enabled")),
+                key=f"curveball_preset_{preset['key']}",
+                help=preset["description"],
+            )
+            if existing is not None:
+                existing["enabled"] = selected
+            if selected and existing is None:
+                st.session_state.curveballs.append({
+                    "name": preset["name"], "enabled": True,
+                    "probability": preset["probability_pct"],
+                    "start_month_min": 1, "start_month_max": max_month,
+                    "duration_months": preset["duration_months"],
+                    "affected_income_name": None,
+                    "income_reduction_pct": preset["income_reduction_pct"],
+                    "recovery_months": preset["recovery_months"],
+                    "_id": uuid.uuid4().hex,
+                })
+            elif not selected and existing is not None:
+                st.session_state.curveballs = [
+                    item for item in st.session_state.curveballs
+                    if item.get("name") != preset["name"]
+                ]
+            st.caption(preset["description"])
+        custom_count = sum(
+            item.get("name") not in predefined_names
+            for item in st.session_state.curveballs
+        )
+        if custom_count:
+            st.caption(
+                f"{custom_count} custom curveball(s) from an older import are preserved "
+                "in the scenario but are not editable in this simplified panel."
+            )
 
     with st.sidebar:
         st.header("Scenario")
