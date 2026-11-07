@@ -237,6 +237,31 @@ assert any('comparison-results' in item.value for item in app.markdown)
     assert result.returncode == 0, result.stderr
 
 
+def test_abc_sensitivity_expander_runs_and_keeps_existing_analysis(tmp_path):
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+app.button(key='create_scenario_workspace').click().run(timeout=30)
+app.button(key='add_tertiary_scenario').click().run(timeout=30)
+next(item for item in app.number_input if item.label == 'Number of simulations').set_value(1).run(timeout=30)
+next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=30)
+assert any(item.key == 'sensitivity_metric' for item in app.selectbox)
+assert any(item.key == 'run_sensitivity_analysis' for item in app.button)
+assert any(item.key == 'abc_sensitivity_panel' for item in app.expander)
+next(item for item in app.button if item.key == 'run_abc_sensitivity_analysis').click().run(timeout=30)
+assert not app.exception
+assert any('Scenario' in item.value.columns for item in app.dataframe)
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_real_estate_panel_exposes_ownership_and_exact_links(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))

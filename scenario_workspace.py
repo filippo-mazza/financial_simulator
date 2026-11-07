@@ -5,6 +5,7 @@ from copy import deepcopy
 
 BASELINE_ID = "baseline"
 ALTERNATIVE_ID = "alternative"
+TERTIARY_ID = "tertiary"
 
 
 class ScenarioVariant:
@@ -99,3 +100,11 @@ class ScenarioWorkspace:
 
     def reset_from(self, target_id, source_id):
         return self.save(target_id, self.config_for(source_id))
+
+    def add_variant(self, variant):
+        if any(item.id == variant.id for item in self._variants):
+            raise ValueError(f"Scenario variant '{variant.id}' already exists")
+        return ScenarioWorkspace(
+            (*self._variants, variant),
+            variant.id,
+        )
