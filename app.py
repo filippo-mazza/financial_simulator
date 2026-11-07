@@ -2253,6 +2253,7 @@ def main():
     st.title("📈 Financial Simulator")
     st.caption("Explore a simple, stochastic projection of cash, investments, income, expenses, and debt.")
     active_workspace = st.session_state.get("scenario_workspace")
+    welcome_placeholder = st.empty()
     if isinstance(active_workspace, ScenarioWorkspace):
         st.info(
             f"A/B workspace · editing **{active_workspace.active_variant.name}**. "
@@ -4092,6 +4093,30 @@ def main():
                     "and effective seeds."
                 ),
             )
+
+    if (
+        not run_requested
+        and not comparison_requested
+        and st.session_state.get("simulation_result") is None
+        and st.session_state.get("scenario_comparison_result") is None
+        and active_workspace is None
+    ):
+        welcome_placeholder.info(
+            "**Start here**\n\n"
+            "- **Set up a scenario:** review or edit the starting cash, income, "
+            "expenses, investments, loans, and assumptions in the **Scenario** "
+            "controls in the left sidebar. Add optional details such as dependents, "
+            "a future property purchase, or unexpected income changes there too.\n"
+            "- **Run a projection:** choose the number of simulations and click "
+            "**Run simulations**. Each run models uncertain events; more runs make "
+            "the average smoother, but results are still estimates, not predictions.\n"
+            "- **Explore the results:** review the charts and balances, then select "
+            "a month to inspect its cash flows and loan balances. Change an input "
+            "and run again to see how the projection changes.\n"
+            "- **Compare or share:** use **Create Baseline A and Alternative B** "
+            "in the sidebar to compare two versions, or open **Scenario "
+            "import/export** to load or save JSON scenarios."
+        )
 
     purchase_config = None
     if st.session_state.purchase_enabled:
