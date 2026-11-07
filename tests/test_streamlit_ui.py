@@ -34,20 +34,24 @@ def test_sidebar_expanders_keep_stable_identity_when_summary_changes(monkeypatch
     assert _expander(app, "sidebar_cash").label.startswith("Cash · $7,500")
 
 
-def test_curveballs_panel_exposes_independent_event_controls(monkeypatch, tmp_path):
+def test_curveballs_panel_exposes_predefined_event_checkboxes(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
 
     curveballs = _expander(app, "sidebar_curveballs")
-    next(item for item in curveballs.button if item.label == "＋ Add curveball").click().run(timeout=30)
-    next(item for item in app.button if "Curveball 1" in item.label).click().run(timeout=30)
+    temporary_job_loss = next(
+        item for item in curveballs.checkbox if item.label == "Temporary job loss"
+    )
+    temporary_job_loss.set_value(True).run(timeout=30)
 
     assert not app.exception
-    assert any(item.label == "Probability per trajectory (%)" for item in app.number_input)
-    assert any(item.label == "Affected income" for item in app.selectbox)
-    assert any(item.label == "Income reduction (%)" for item in app.number_input)
-    assert any(item.label == "Recovery period (months)" for item in app.number_input)
+    assert any(
+        item.label == "Reduced working hours"
+        for item in _expander(app, "sidebar_curveballs").checkbox
+    )
+    assert app.session_state["curveballs"][0]["name"] == "Temporary job loss"
+    assert app.session_state["curveballs"][0]["enabled"] is True
 
 
 def test_streamlit_minimum_supports_persistent_keyed_expanders():
