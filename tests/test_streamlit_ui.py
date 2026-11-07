@@ -299,6 +299,79 @@ def _fresh_app(monkeypatch, tmp_path):
     return AppTest.from_file(str(APP_PATH)).run(timeout=30)
 
 
+def test_scenario_json_actions_are_grouped_in_sidebar(monkeypatch, tmp_path):
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+panel = next(item for item in app.sidebar.expander if item.key == 'sidebar_import')
+assert panel.label == 'Scenario import/export'
+assert {{item.label for item in panel.file_uploader}} == {{
+        "Import single-scenario JSON",
+        "Import A/B workspace JSON",
+    }}
+assert {{item.label for item in panel.button}} >= {{
+        "Import parameters",
+        "Import A/B workspace",
+        "Create Baseline A and Alternative B",
+    }}
+app.sidebar.button(key='create_scenario_workspace').click().run(timeout=30)
+next(item for item in app.number_input if item.label == 'Number of simulations').set_value(1).run(timeout=30)
+next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=60)
+assert not app.exception
+panel = next(item for item in app.sidebar.expander if item.key == 'sidebar_import')
+assert {{item.label for item in panel.download_button}} == {{
+        "Export single-scenario JSON",
+        "Export A/B workspace JSON",
+    }}
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=90,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_scenario_json_import_errors_keep_uploads_and_explain_failure(
+        monkeypatch, tmp_path):
+    app = _fresh_app(monkeypatch, tmp_path)
+    panel = _expander(app.sidebar, "sidebar_import")
+
+    panel.file_uploader(key="scenario_import_file_0").upload(
+        "invalid-scenario.json", b"{", "application/json",
+    ).run(timeout=30)
+    next(
+        item for item in _expander(app.sidebar, "sidebar_import").button
+        if item.label == "Import parameters"
+    ).click().run(timeout=30)
+
+    assert not app.exception
+    assert app.session_state.get("import_uploader_counter", 0) == 0
+    assert app.sidebar.file_uploader(key="scenario_import_file_0").value
+    assert any(
+        "The selected file is not valid UTF-8 JSON." in item.value
+        for item in _expander(app.sidebar, "sidebar_import").error
+    )
+
+    panel = _expander(app.sidebar, "sidebar_import")
+    panel.file_uploader(key="scenario_workspace_file_0").upload(
+        "invalid-workspace.json", b"{", "application/json",
+    ).run(timeout=30)
+    _expander(app.sidebar, "sidebar_import").button(
+        key="import_scenario_workspace",
+    ).click().run(timeout=30)
+
+    assert not app.exception
+    assert app.session_state["workspace_import_counter"] == 0
+    assert app.sidebar.file_uploader(key="scenario_workspace_file_0").value
+    assert any(
+        "not valid UTF-8 JSON" in item.value
+        for item in _expander(app.sidebar, "sidebar_import").error
+    )
+
+
 def test_jurisdiction_help_popup_lists_assumptions_sources_and_limitations(
         monkeypatch, tmp_path):
     app = _fresh_app(monkeypatch, tmp_path)

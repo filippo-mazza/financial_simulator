@@ -1299,11 +1299,6 @@ def main():
             "The other scenario is stored as an independent configuration snapshot."
         )
     workspace_notice = st.session_state.pop("workspace_success_notice", None)
-    if workspace_notice:
-        st.success(workspace_notice)
-    workspace_error = st.session_state.pop("workspace_import_error", None)
-    if workspace_error:
-        st.error(workspace_error)
     for import_warning in st.session_state.pop("import_warnings", []):
         st.warning(import_warning)
 
@@ -2262,35 +2257,7 @@ def main():
 
     with st.sidebar:
         st.header("Scenario")
-        with st.expander("Import saved scenario", key="sidebar_import"):
-            uploaded_export = st.file_uploader(
-                "Financial Simulator JSON", type="json",
-                help="Select a JSON file created by the export button.",
-                key=f"scenario_import_file_{st.session_state.get('import_uploader_counter', 0)}",
-            )
-            import_notice = st.session_state.pop("import_success_notice", None)
-            if import_notice:
-                st.success(import_notice)
-            if st.button(
-                "Import parameters", disabled=uploaded_export is None,
-                use_container_width=True,
-            ):
-                try:
-                    imported, import_warnings = read_simulation_export(
-                        uploaded_export.getvalue(), include_warnings=True,
-                    )
-                    import_config(imported)
-                    st.session_state.import_warnings = import_warnings
-                except ValueError as error:
-                    st.error(str(error))
-                else:
-                    st.session_state.import_uploader_counter = (
-                        st.session_state.get("import_uploader_counter", 0) + 1
-                    )
-                    st.session_state.import_success_notice = (
-                        f"Scenario imported from {uploaded_export.name}."
-                    )
-                    st.rerun()
+        scenario_controls_placeholder = st.empty()
 
         years = st.slider(
             "Simulation horizon (years)", 1, 50,
@@ -2912,97 +2879,139 @@ def main():
         ),
     )
 
-    with st.container(border=True):
-        st.subheader("A/B scenario workspace · optional")
-        workspace = st.session_state.scenario_workspace
-        if workspace is None:
-            st.caption(
-                "Create independent Baseline A and Alternative B copies from the "
-                "current inputs. Single-scenario simulation remains the default."
+    with scenario_controls_placeholder.container():
+        with st.expander("Scenario import/export", key="sidebar_import"):
+            st.markdown("**Single-scenario JSON**")
+            uploaded_export = st.file_uploader(
+                "Import single-scenario JSON", type="json",
+                help="Select a single-scenario JSON file exported by this simulator.",
+                key=f"scenario_import_file_{st.session_state.get('import_uploader_counter', 0)}",
             )
+            import_notice = st.session_state.pop("import_success_notice", None)
+            if import_notice:
+                st.success(import_notice)
             if st.button(
-                "Create Baseline A and Alternative B",
-                key="create_scenario_workspace",
+                "Import parameters", disabled=uploaded_export is None,
+                use_container_width=True,
             ):
-                st.session_state.scenario_workspace = ScenarioWorkspace.from_config(config)
-                st.session_state.pop("simulation_result", None)
-                st.session_state.pop("scenario_variant_selector", None)
-                st.rerun()
-        else:
-            # Every rerun first saves the visible editor into only the active
-            # variant.  ScenarioWorkspace defensively copies the configuration.
-            workspace = workspace.save(workspace.active_id, config)
-            baseline_name = st.text_input(
-                "Baseline name",
-                value=workspace.variant(BASELINE_ID).name,
-                key="scenario_baseline_name",
-            )
-            alternative_name = st.text_input(
-                "Alternative name",
-                value=workspace.variant(ALTERNATIVE_ID).name,
-                key="scenario_alternative_name",
-            )
-            try:
-                if baseline_name != workspace.variant(BASELINE_ID).name:
-                    workspace = workspace.rename(BASELINE_ID, baseline_name)
-                if alternative_name != workspace.variant(ALTERNATIVE_ID).name:
-                    workspace = workspace.rename(ALTERNATIVE_ID, alternative_name)
-            except ValueError as error:
-                st.error(str(error))
-            st.session_state.scenario_workspace = workspace
+                try:
+                    imported, import_warnings = read_simulation_export(
+                        uploaded_export.getvalue(), include_warnings=True,
+                    )
+                    import_config(imported)
+                    st.session_state.import_warnings = import_warnings
+                except ValueError as error:
+                    st.error(str(error))
+                else:
+                    st.session_state.import_uploader_counter = (
+                        st.session_state.get("import_uploader_counter", 0) + 1
+                    )
+                    st.session_state.import_success_notice = (
+                        f"Scenario imported from {uploaded_export.name}."
+                    )
+                    st.rerun()
 
-            variant_ids = [BASELINE_ID, ALTERNATIVE_ID]
-            st.radio(
-                "Scenario to edit",
-                variant_ids,
-                index=variant_ids.index(workspace.active_id),
-                format_func=lambda variant_id: workspace.variant(variant_id).name,
-                horizontal=True,
-                key="scenario_variant_selector",
-                on_change=switch_scenario_variant,
-                help=(
-                    "The visible sidebar edits only the selected scenario. Switching "
-                    "saves the current inputs and clears their simulation result."
+            single_export_placeholder = st.empty()
+            single_export_placeholder.caption(
+                "Run simulations to export this single scenario with results."
+            )
+            st.divider()
+            st.markdown("**A/B workspace JSON**")
+            if workspace_notice:
+                st.success(workspace_notice)
+            workspace_error = st.session_state.pop("workspace_import_error", None)
+            workspace = st.session_state.scenario_workspace
+            if workspace is None:
+                st.caption(
+                    "Create independent Baseline A and Alternative B copies from the "
+                    "current inputs. Single-scenario simulation remains the default."
+                )
+                if st.button(
+                    "Create Baseline A and Alternative B",
+                    key="create_scenario_workspace",
+                ):
+                    st.session_state.scenario_workspace = ScenarioWorkspace.from_config(config)
+                    st.session_state.pop("simulation_result", None)
+                    st.session_state.pop("scenario_variant_selector", None)
+                    st.rerun()
+            else:
+                # Every rerun first saves the visible editor into only the active
+                # variant.  ScenarioWorkspace defensively copies the configuration.
+                workspace = workspace.save(workspace.active_id, config)
+                baseline_name = st.text_input(
+                    "Baseline name",
+                    value=workspace.variant(BASELINE_ID).name,
+                    key="scenario_baseline_name",
+                )
+                alternative_name = st.text_input(
+                    "Alternative name",
+                    value=workspace.variant(ALTERNATIVE_ID).name,
+                    key="scenario_alternative_name",
+                )
+                try:
+                    if baseline_name != workspace.variant(BASELINE_ID).name:
+                        workspace = workspace.rename(BASELINE_ID, baseline_name)
+                    if alternative_name != workspace.variant(ALTERNATIVE_ID).name:
+                        workspace = workspace.rename(ALTERNATIVE_ID, alternative_name)
+                except ValueError as error:
+                    st.error(str(error))
+                st.session_state.scenario_workspace = workspace
+
+                variant_ids = [BASELINE_ID, ALTERNATIVE_ID]
+                st.radio(
+                    "Scenario to edit",
+                    variant_ids,
+                    index=variant_ids.index(workspace.active_id),
+                    format_func=lambda variant_id: workspace.variant(variant_id).name,
+                    horizontal=True,
+                    key="scenario_variant_selector",
+                    on_change=switch_scenario_variant,
+                    help=(
+                        "The visible sidebar edits only the selected scenario. Switching "
+                        "saves the current inputs and clears their simulation result."
+                    ),
+                )
+
+                reset_col, export_col = st.columns(2)
+                reset_col.button(
+                    "Reset Alternative B from Baseline A",
+                    key="reset_alternative_scenario",
+                    use_container_width=True,
+                    on_click=reset_alternative_scenario,
+                )
+                export_col.download_button(
+                    "Export A/B workspace JSON",
+                    data=create_scenario_workspace_export(workspace),
+                    file_name="financial-scenario-workspace.json",
+                    mime="application/json",
+                    use_container_width=True,
+                    help=(
+                        "Exports both named input configurations without simulation results."
+                    ),
+                )
+                st.caption(
+                    "This story stores and edits configurations only. Paired-seed execution "
+                    "and side-by-side result deltas are implemented separately in issue #31."
+                )
+
+            uploaded_workspace = st.file_uploader(
+                "Import A/B workspace JSON",
+                type="json",
+                key=(
+                    "scenario_workspace_file_"
+                    f"{st.session_state.workspace_import_counter}"
                 ),
+                help="Select an A/B workspace JSON exported by this simulator.",
             )
-
-            reset_col, export_col = st.columns(2)
-            reset_col.button(
-                "Reset Alternative B from Baseline A",
-                key="reset_alternative_scenario",
+            st.button(
+                "Import A/B workspace",
+                disabled=uploaded_workspace is None,
+                key="import_scenario_workspace",
+                on_click=import_scenario_workspace,
                 use_container_width=True,
-                on_click=reset_alternative_scenario,
             )
-            export_col.download_button(
-                "⬇️ Export A/B parameters",
-                data=create_scenario_workspace_export(workspace),
-                file_name="financial-scenario-workspace.json",
-                mime="application/json",
-                use_container_width=True,
-                help=(
-                    "Exports both named input configurations without simulation results."
-                ),
-            )
-            st.caption(
-                "This story stores and edits configurations only. Paired-seed execution "
-                "and side-by-side result deltas are implemented separately in issue #31."
-            )
-
-        uploaded_workspace = st.file_uploader(
-            "Import A/B workspace",
-            type="json",
-            key=(
-                "scenario_workspace_file_"
-                f"{st.session_state.workspace_import_counter}"
-            ),
-            help="Select an A/B workspace JSON exported by this section.",
-        )
-        st.button(
-            "Import A/B parameters",
-            disabled=uploaded_workspace is None,
-            key="import_scenario_workspace",
-            on_click=import_scenario_workspace,
-        )
+            if workspace_error:
+                st.error(workspace_error)
 
     scenario_fingerprint = json.dumps(asdict(config), sort_keys=True)
     if run_requested:
@@ -3175,8 +3184,8 @@ def main():
     columns[2].metric(f"{label_prefix}final investments", _money(details["investments"][-1]))
     columns[3].metric("Loans repaid", len(repayment_dates))
 
-    st.download_button(
-        "⬇️ Export parameters and results",
+    single_export_placeholder.download_button(
+        "Export single-scenario JSON",
         data=create_simulation_export(
             config, *average_result,
             simulation_count=int(simulation_count),
