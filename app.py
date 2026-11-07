@@ -1584,6 +1584,31 @@ def _serialized_trajectory(trajectory):
     return serialized
 
 
+def build_export_filename(name, fallback_name, exported_at=None):
+    """Build a safe JSON download filename without changing the export data."""
+    exported_at = exported_at or datetime.now(timezone.utc)
+    if exported_at.tzinfo is None:
+        exported_at = exported_at.replace(tzinfo=timezone.utc)
+    timestamp = exported_at.astimezone(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+
+    def safe_stem(value):
+        if not isinstance(value, str):
+            return ""
+        stem = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "-", value.strip())
+        stem = re.sub(r"\s+", "-", stem)
+        stem = re.sub(r"-+", "-", stem).strip(" .-_")
+        while stem.lower().endswith(".json"):
+            stem = stem[:-5].strip(" .-_")
+        if re.match(r"(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])$", stem):
+            stem = f"_{stem}"
+        return stem[:180].rstrip(" .-_")
+
+    stem = safe_stem(name)
+    if not stem:
+        stem = safe_stem(f"{fallback_name}-{timestamp}")
+    return f"{stem or f'financial-scenario-{timestamp}'}.json"
+
+
 def create_simulation_export(config, net_worth, repayment_dates, details,
                              exported_at=None, simulation_count=1,
                              trajectories=None):
@@ -3671,6 +3696,17 @@ def main():
                 on_click=import_single_scenario,
             )
 
+            workspace = st.session_state.scenario_workspace
+            suggested_scenario_name = (
+                workspace.active_variant.name
+                if isinstance(workspace, ScenarioWorkspace) else "Financial scenario"
+            )
+            single_export_filename = st.text_input(
+                "Single-scenario export filename",
+                key="single_export_filename",
+                placeholder=suggested_scenario_name,
+                help="Optional download filename; leave blank to include a timestamp.",
+            )
             single_export_placeholder = st.empty()
             single_export_placeholder.caption(
                 "Run simulations to export this single scenario with results."
@@ -3732,6 +3768,16 @@ def main():
                     ),
                 )
 
+                workspace_suggestion = (
+                    f"{workspace.variant(BASELINE_ID).name}-vs-"
+                    f"{workspace.variant(ALTERNATIVE_ID).name}"
+                )
+                workspace_export_filename = st.text_input(
+                    "A/B workspace export filename",
+                    key="workspace_export_filename",
+                    placeholder=workspace_suggestion,
+                    help="Optional download filename; leave blank to include a timestamp.",
+                )
                 reset_col, export_col = st.columns(2)
                 reset_col.button(
                     "Reset Alternative B from Baseline A",
@@ -3742,7 +3788,9 @@ def main():
                 export_col.download_button(
                     "Export A/B workspace JSON",
                     data=create_scenario_workspace_export(workspace),
-                    file_name="financial-scenario-workspace.json",
+                    file_name=build_export_filename(
+                        workspace_export_filename, workspace_suggestion,
+                    ),
                     mime="application/json",
                     use_container_width=True,
                     help=(
@@ -4238,7 +4286,10 @@ def main():
             simulation_count=int(simulation_count),
             trajectories=trajectories,
         ),
-        file_name=f"financial-simulation-{config.years}y-{simulation_count}-runs.json",
+        file_name=build_export_filename(
+            single_export_filename,
+            suggested_scenario_name,
+        ),
         mime="application/json",
         help="Download the scenario inputs and month-by-month results as JSON.",
     )

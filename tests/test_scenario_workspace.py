@@ -11,6 +11,7 @@ from app import (
     comparison_balance_rows,
     comparison_cash_flow_rows,
     comparison_explanation,
+    build_export_filename,
     create_scenario_workspace_export,
     create_simulation_export,
     deterministic_ab_suggestions,
@@ -40,6 +41,23 @@ def _config():
         expenses=[],
         loans=[],
     )
+
+
+def test_export_filename_sanitizes_extensions_and_timestamps_blank_names():
+    exported_at = datetime(2026, 10, 31, 12, 0, 0, 123456, tzinfo=timezone.utc)
+
+    assert build_export_filename(
+        "Plan / A:*?.JSON.json", "Fallback", exported_at,
+    ) == "Plan-A.json"
+    assert build_export_filename("", "Baseline A", exported_at) == (
+        "Baseline-A-20261031-120000-123456.json"
+    )
+    assert build_export_filename(
+        "   ", "Baseline A", exported_at.replace(microsecond=123457),
+    ) == "Baseline-A-20261031-120000-123457.json"
+    assert build_export_filename(
+        "/:*?<>|\\", "Fallback", exported_at,
+    ) == "Fallback-20261031-120000-123456.json"
 
 
 def test_workspace_duplicates_configs_without_shared_mutable_state():
