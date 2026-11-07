@@ -51,6 +51,8 @@ MONTE_CARLO_TRAJECTORIES_EXPORT_VERSION = 1
 SCENARIO_WORKSPACE_EXPORT_VERSION = 1
 SIMULATION_DETAIL_VERSION = 4
 MAX_SIMULATION_COUNT = 25
+MAX_SENSITIVITY_PARAMETERS = 12
+MAX_SENSITIVITY_SIMULATIONS = 10
 LOW_SAMPLE_THRESHOLD = 10
 CHART_EVENT_COLORS = {
     "Loan repaid": "#e06c75",
@@ -200,6 +202,17 @@ class SimulationTrajectory:
     @property
     def result(self):
         return self.net_worth, self.repayment_dates, self.details
+
+
+@dataclass(frozen=True)
+class SensitivityParameter:
+    """One bounded low/high variation for local sensitivity analysis."""
+
+    key: str
+    label: str
+    perturbation: str
+    low_config: SimulationConfig
+    high_config: SimulationConfig
 
 
 def deterministic_ab_suggestions(config: SimulationConfig):
@@ -547,6 +560,241 @@ def run_paired_scenario_comparison(workspace, simulation_count):
         baseline, alternative, baseline_batch, alternative_batch,
         simulation_count, horizon_years, base_seed, tuple(warnings),
     )
+
+
+SENSITIVITY_METRICS = {
+    "final_net_worth": "Final net worth",
+    "minimum_cash": "Minimum cash",
+    "purchase_timing": "Average purchase month",
+    "cash_shortfall_probability": "Cash-shortfall probability",
+}
+
+
+def _bounded_relative(value, factor):
+    return max(0.0, value * factor)
+
+
+def _sensitivity_parameter(config, key, label, perturbation, setter, value):
+    low_config = deepcopy(config)
+    high_config = deepcopy(config)
+    setter(low_config, _bounded_relative(value, 0.9))
+    setter(high_config, _bounded_relative(value, 1.1))
+    return SensitivityParameter(key, label, perturbation, low_config, high_config)
+
+
+def build_sensitivity_parameters(config, limit=MAX_SENSITIVITY_PARAMETERS):
+    """Build safe, local one-factor variations without mutating ``config``."""
+    if limit < 1:
+        return []
+    parameters = []
+
+    if config.initial_cash > 0:
+        parameters.append(_sensitivity_parameter(
+            config, "initial_cash", "Starting cash", "±10% relative",
+            lambda candidate, value: setattr(candidate, "initial_cash", value),
+            config.initial_cash,
+        ))
+
+    incomes = config.incomes
+    if incomes is None and config.monthly_income > 0:
+        parameters.append(_sensitivity_parameter(
+            config, "monthly_income", "Primary income", "±10% relative",
+            lambda candidate, value: setattr(candidate, "monthly_income", value),
+            config.monthly_income,
+        ))
+    else:
+        for index, item in enumerate(incomes or []):
+            if item.monthly_amount <= 0:
+                continue
+            parameters.append(_sensitivity_parameter(
+                config, f"income_{index}", f"{item.name} monthly income",
+                "±10% relative",
+                lambda candidate, value, index=index: setattr(
+                    candidate.incomes[index], "monthly_amount", value,
+                ), item.monthly_amount,
+            ))
+
+    expenses = config.expenses
+    if expenses is None and config.monthly_expense > 0:
+        parameters.append(_sensitivity_parameter(
+            config, "monthly_expense", "Primary expense", "±10% relative",
+            lambda candidate, value: setattr(candidate, "monthly_expense", value),
+            config.monthly_expense,
+        ))
+    else:
+        for index, item in enumerate(expenses or []):
+            if item.monthly_amount <= 0:
+                continue
+            parameters.append(_sensitivity_parameter(
+                config, f"expense_{index}", f"{item.name} monthly expense",
+                "±10% relative",
+                lambda candidate, value, index=index: setattr(
+                    candidate.expenses[index], "monthly_amount", value,
+                ), item.monthly_amount,
+            ))
+
+    investments = config.investments or []
+    seen_return_types = set()
+    for index, item in enumerate(investments):
+        if item.monthly_contribution > 0:
+            parameters.append(_sensitivity_parameter(
+                config, f"investment_contribution_{index}",
+                f"{item.name} monthly contribution", "±10% relative",
+                lambda candidate, value, index=index: setattr(
+                    candidate.investments[index], "monthly_contribution", value,
+                ), item.monthly_contribution,
+            ))
+        if item.investment_type in seen_return_types:
+            continue
+        seen_return_types.add(item.investment_type)
+        return_rate = config.assumptions.investment_return_means[item.investment_type]
+        low_config = deepcopy(config)
+        high_config = deepcopy(config)
+        low_config.assumptions.investment_return_means[item.investment_type] = max(
+            -100.0, return_rate - 1.0,
+        )
+        high_config.assumptions.investment_return_means[item.investment_type] = min(
+            100.0, return_rate + 1.0,
+        )
+        parameters.append(SensitivityParameter(
+            f"investment_return_{item.investment_type}",
+            f"{item.investment_type.title()} investment return",
+            "±1 percentage point", low_config, high_config,
+        ))
+
+    purchase = config.property_purchase
+    purchase_template = purchase.purchase if isinstance(purchase, AutomaticPurchasePolicy) else purchase
+    if purchase_template is not None:
+        rate = purchase_template.mortgage_interest_rate
+        low_config = deepcopy(config)
+        high_config = deepcopy(config)
+        for candidate, value in ((low_config, max(0.0, rate - 1.0)),
+                                 (high_config, min(100.0, rate + 1.0))):
+            template = (
+                candidate.property_purchase.purchase
+                if isinstance(candidate.property_purchase, AutomaticPurchasePolicy)
+                else candidate.property_purchase
+            )
+            updated_template = replace(template, mortgage_interest_rate=value)
+            if isinstance(candidate.property_purchase, AutomaticPurchasePolicy):
+                candidate.property_purchase = replace(
+                    candidate.property_purchase, purchase=updated_template,
+                )
+            else:
+                candidate.property_purchase = updated_template
+        parameters.append(SensitivityParameter(
+            "mortgage_rate", "Mortgage interest rate", "±1 percentage point",
+            low_config, high_config,
+        ))
+
+    return parameters[:limit]
+
+
+def _sensitivity_trajectory_values(batch, metric):
+    values = []
+    for trajectory in batch.trajectories:
+        if metric == "final_net_worth":
+            values.append(trajectory.net_worth[-1])
+        elif metric == "minimum_cash":
+            values.append(min(trajectory.details.get("bank_account", [0])))
+        elif metric == "cash_shortfall_probability":
+            values.append(float(min(trajectory.details.get("bank_account", [0])) < 0))
+        elif metric == "purchase_timing":
+            outcome = purchase_outcome_from_details(trajectory.details)
+            if outcome and outcome.get("purchased"):
+                values.append(outcome["purchase_month"] + 1)
+    return values
+
+
+def _sensitivity_summary(values):
+    if not values:
+        return {"mean": None, "p10": None, "p90": None}
+    return {
+        "mean": fmean(values),
+        "p10": _percentile(values, 0.1),
+        "p90": _percentile(values, 0.9),
+    }
+
+
+def _sensitivity_values_for_config(config, simulation_count, metric):
+    """Return metric samples, counting insolvent paths for shortfall analysis."""
+    if metric != "cash_shortfall_probability":
+        batch = run_simulation_batch(deepcopy(config), simulation_count)
+        return _sensitivity_trajectory_values(batch, metric)
+    values = []
+    for offset in range(simulation_count):
+        candidate = deepcopy(config)
+        candidate.seed = config.seed + offset
+        try:
+            result = run_simulation(candidate)
+        except InsufficientFundsException:
+            # The engine stops before recording a negative balance. For this
+            # metric, that failed trajectory is itself evidence of shortfall.
+            values.append(1.0)
+            continue
+        values.append(float(min(result[2].get("bank_account", [0])) < 0))
+    return values
+
+
+def run_sensitivity_analysis(config, simulation_count, metric="final_net_worth"):
+    """Run bounded one-factor variations with common seeds and rank impacts."""
+    if metric not in SENSITIVITY_METRICS:
+        raise ValueError(f"Unsupported sensitivity metric: {metric}")
+    if not 1 <= simulation_count <= MAX_SENSITIVITY_SIMULATIONS:
+        raise ValueError(
+            f"Sensitivity simulation count must be between 1 and {MAX_SENSITIVITY_SIMULATIONS}"
+        )
+    baseline_values = _sensitivity_values_for_config(
+        config, simulation_count, metric,
+    )
+    rows = []
+    for parameter in build_sensitivity_parameters(config):
+        low_summary = _sensitivity_summary(_sensitivity_values_for_config(
+            parameter.low_config, simulation_count, metric,
+        ))
+        high_summary = _sensitivity_summary(_sensitivity_values_for_config(
+            parameter.high_config, simulation_count, metric,
+        ))
+        baseline_summary = _sensitivity_summary(baseline_values)
+        deltas = [
+            abs(value - baseline_summary["mean"])
+            for value in (low_summary["mean"], high_summary["mean"])
+            if value is not None and baseline_summary["mean"] is not None
+        ]
+        rows.append({
+            "Parameter": parameter.label,
+            "Perturbation": parameter.perturbation,
+            "Low": low_summary["mean"],
+            "High": high_summary["mean"],
+            "Low 10th–90th": (
+                f"{low_summary['p10']:.2f}–{low_summary['p90']:.2f}"
+                if low_summary["mean"] is not None else "n/a"
+            ),
+            "High 10th–90th": (
+                f"{high_summary['p10']:.2f}–{high_summary['p90']:.2f}"
+                if high_summary["mean"] is not None else "n/a"
+            ),
+            "Impact": max(deltas, default=0.0),
+        })
+    rows.sort(key=lambda row: row["Impact"], reverse=True)
+    return {
+        "metric": metric,
+        "metric_label": SENSITIVITY_METRICS[metric],
+        "simulation_count": simulation_count,
+        "baseline": _sensitivity_summary(baseline_values),
+        "rows": rows,
+        "parameter_count": len(rows),
+    }
+
+
+def _format_sensitivity_metric(metric, value):
+    if value is None:
+        return "n/a"
+    if metric == "cash_shortfall_probability":
+        return f"{value:.1%}"
+    if metric == "purchase_timing":
+        return f"month {value:.1f}"
+    return _money(value)
 
 
 def _percentile(values, proportion):
@@ -4111,6 +4359,132 @@ def main():
                 "pre-event levels. A blank recovery month means the threshold was not "
                 "reached before the simulation ended."
             )
+
+    with st.expander("Sensitivity analysis", expanded=False):
+        st.caption(
+            "One-factor-at-a-time local analysis. Each selected assumption is varied "
+            "by its documented low/high perturbation while paired seeds are reused. "
+            "This ranks modeled sensitivity; it is not causal importance analysis."
+        )
+        sensitivity_metric = st.selectbox(
+            "Outcome to rank",
+            options=list(SENSITIVITY_METRICS),
+            format_func=SENSITIVITY_METRICS.get,
+            key="sensitivity_metric",
+        )
+        sensitivity_runs = st.number_input(
+            "Simulations per sensitivity variant", min_value=1,
+            max_value=MAX_SENSITIVITY_SIMULATIONS, value=min(5, int(simulation_count)),
+            step=1, key="sensitivity_simulation_count",
+            help=(
+                "Sensitivity runs are capped to keep the analysis bounded. "
+                "The selected count is used for baseline and every low/high variant."
+            ),
+        )
+        sensitivity_parameter_count = len(build_sensitivity_parameters(config))
+        st.caption(
+            f"This analysis will run at most {1 + 2 * sensitivity_parameter_count} "
+            f"batches ({sensitivity_parameter_count} parameters × low/high plus baseline), "
+            f"with a maximum of {MAX_SENSITIVITY_PARAMETERS} parameters."
+        )
+        if st.button("Run sensitivity analysis", key="run_sensitivity_analysis"):
+            try:
+                with st.spinner("Running bounded sensitivity scenarios..."):
+                    sensitivity_result = run_sensitivity_analysis(
+                        config, int(sensitivity_runs), sensitivity_metric,
+                    )
+            except (ValueError, TypeError, KeyError, InsufficientFundsException) as error:
+                st.session_state.pop("sensitivity_result", None)
+                st.error(f"Sensitivity analysis could not run: {error}")
+            else:
+                st.session_state.sensitivity_result = {
+                    "fingerprint": scenario_fingerprint,
+                    "result": sensitivity_result,
+                }
+
+        stored_sensitivity = st.session_state.get("sensitivity_result")
+        if stored_sensitivity is not None:
+            if stored_sensitivity["fingerprint"] != scenario_fingerprint:
+                st.warning(
+                    "The scenario changed after this analysis. Run sensitivity analysis "
+                    "again to refresh the results."
+                )
+            else:
+                sensitivity_result = stored_sensitivity["result"]
+                baseline_value = sensitivity_result["baseline"]["mean"]
+                st.metric(
+                    f"Baseline · {sensitivity_result['metric_label']}",
+                    _format_sensitivity_metric(sensitivity_result["metric"], baseline_value),
+                )
+                if not sensitivity_result["rows"]:
+                    st.info("No positive-valued eligible assumptions were found to vary.")
+                else:
+                    display_rows = []
+                    chart_rows = []
+                    parameter_order = [
+                        row["Parameter"] for row in sensitivity_result["rows"]
+                    ]
+                    baseline_chart_value = sensitivity_result["baseline"]["mean"]
+                    for row in sensitivity_result["rows"]:
+                        metric = sensitivity_result["metric"]
+                        display_rows.append({
+                            "Parameter": row["Parameter"],
+                            "Perturbation": row["Perturbation"],
+                            "Low": _format_sensitivity_metric(metric, row["Low"]),
+                            "High": _format_sensitivity_metric(metric, row["High"]),
+                            "Low 10th–90th": row["Low 10th–90th"],
+                            "High 10th–90th": row["High 10th–90th"],
+                            "Impact": _format_sensitivity_metric(metric, row["Impact"]),
+                        })
+                        if baseline_chart_value is not None and row["Low"] is not None:
+                            chart_rows.append({
+                                "Parameter": row["Parameter"],
+                                "Variant": "Low",
+                                "Change": row["Low"] - baseline_chart_value,
+                            })
+                        if baseline_chart_value is not None and row["High"] is not None:
+                            chart_rows.append({
+                                "Parameter": row["Parameter"],
+                                "Variant": "High",
+                                "Change": row["High"] - baseline_chart_value,
+                            })
+                    change_axis_format = (
+                        ".1%" if sensitivity_result["metric"] == "cash_shortfall_probability"
+                        else (".1f" if sensitivity_result["metric"] == "purchase_timing" else "$,.0f")
+                    )
+                    change_chart = alt.Chart(alt.Data(values=chart_rows)).mark_bar().encode(
+                        x=alt.X(
+                            "Change:Q", title=f"Change from baseline · {sensitivity_result['metric_label']}",
+                            axis=alt.Axis(format=change_axis_format),
+                        ),
+                        y=alt.Y(
+                            "Parameter:N", sort=parameter_order, title=None,
+                        ),
+                        color=alt.Color("Variant:N", title="Variation"),
+                        tooltip=[
+                            alt.Tooltip("Parameter:N"),
+                            alt.Tooltip("Variant:N"),
+                            alt.Tooltip("Change:Q", format=change_axis_format),
+                        ],
+                    )
+                    zero_rule = alt.Chart(alt.Data(values=[{"baseline": 0}])).mark_rule(
+                        color="#4b5563",
+                    ).encode(x="baseline:Q")
+                    if chart_rows:
+                        st.altair_chart(
+                            (change_chart + zero_rule).properties(
+                                height=max(220, 28 * len(display_rows)),
+                                title="Sensitivity tornado view (change from baseline)",
+                            ),
+                            use_container_width=True, key="sensitivity_tornado",
+                        )
+                    st.dataframe(display_rows, hide_index=True, use_container_width=True)
+                    st.caption(
+                        f"Ranked by the largest absolute change from baseline across low/high "
+                        f"variants. {sensitivity_result['simulation_count']} simulation(s) per "
+                        "variant; 10th–90th ranges are descriptive sample intervals, not "
+                        "confidence or tail-risk estimates."
+                    )
 
     st.subheader("Monte Carlo analysis")
     view_mode = st.radio(
