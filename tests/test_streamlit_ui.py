@@ -119,6 +119,26 @@ def test_ab_workspace_restores_each_scenario_rent_selection(monkeypatch, tmp_pat
     ).value == "Do not stop any expense"
 
 
+def test_ab_workspace_restores_each_scenario_maintenance_percentage(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+    next(
+        item for item in app.checkbox
+        if item.label == "Enable future property purchase"
+    ).set_value(True).run(timeout=30)
+    app.number_input(key="purchase_maintenance_percentage").set_value(1.0).run(timeout=30)
+    app.button(key="create_scenario_workspace").click().run(timeout=30)
+
+    app.radio(key="scenario_variant_selector").set_value("alternative").run(timeout=30)
+    app.number_input(key="purchase_maintenance_percentage").set_value(3.0).run(timeout=30)
+    app.radio(key="scenario_variant_selector").set_value("baseline").run(timeout=30)
+
+    assert not app.exception
+    assert app.number_input(key="purchase_maintenance_percentage").value == 1.0
+
+
 def test_ab_workspace_runs_paired_comparison_dashboard(tmp_path):
     # Engine-only tests install a minimal numpy stub process-wide. Exercise the
     # completed dataframe/Altair dashboard in a clean interpreter.

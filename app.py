@@ -2130,6 +2130,7 @@ def main():
             "purchase_price", "purchase_down_pct", "purchase_fees", "purchase_rate",
             "purchase_term", "purchase_fixed", "purchase_monthly_cost",
             "purchase_yearly_tax", "purchase_threshold", "purchase_reserve_input",
+            "purchase_maintenance_percentage",
             "purchase_month", "purchase_affordability_toggle",
             "purchase_affordability_ratio_input", "purchase_qualifying_income_input",
             "purchase_variable_income_input",
