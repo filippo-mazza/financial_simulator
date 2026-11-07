@@ -14,7 +14,7 @@ from statistics import fmean
 import uuid
 
 from bank_account import BankAccount, InsufficientFundsException
-from expense import AgeBasedExpense, Expense, YearlyExpense
+from expense import AgeBasedExpense, ChildcareExpense, Expense, YearlyExpense
 from financial_assumptions import FinancialAssumptions, INCOME_TYPES, INVESTMENT_TYPES
 from income_source import IncomeSource
 from investment import Investment
@@ -55,6 +55,7 @@ CHART_EVENT_COLORS = {
     "Loan repaid": "#e06c75",
     "School starts": "#b7791f",
     "Property purchase": "#0e7490",
+    "Curveball": "#c2410c",
 }
 AUTO_INVEST_TYPES = frozenset({"stock", "safe"})
 LEGACY_AUTO_INVEST_WARNING = (
@@ -78,6 +79,24 @@ class DependentConfig:
     age: int = 0
     school_start_age: int | None = 6
     school_monthly_cost: float = 250.0
+    # None preserves the legacy recurring-child-cost behavior for old exports.
+    # A value enables the explicit childcare-to-school transition model.
+    childcare_monthly_cost: float | None = None
+
+
+@dataclass
+class CurveballConfig:
+    """One optional, temporary adverse event in a trajectory."""
+
+    name: str
+    enabled: bool = False
+    probability: float = 0.0
+    start_month_min: int = 1
+    start_month_max: int = 120
+    duration_months: int = 3
+    affected_income_name: str | None = None
+    income_reduction_pct: float = 100.0
+    recovery_months: int = 0
 
 
 @dataclass
@@ -140,6 +159,7 @@ class SimulationConfig:
     loan_already_paid: float = 0.0
     additional_expenses: list[ExpenseConfig] = field(default_factory=list)
     dependents: list[DependentConfig] = field(default_factory=list)
+    curveballs: list[CurveballConfig] = field(default_factory=list)
     # None retains the backwards-compatible single-investment defaults;
     # an explicit empty list means the scenario has no investments.
     investments: list[InvestmentConfig] | None = None
@@ -466,6 +486,11 @@ def _scenario_structure_signature(config):
         collection_signature(investment_specs, ("name", "investment_type")),
         collection_signature(loan_specs, ("name",)),
         tuple((item.name, item.school_start_age) for item in config.dependents),
+        tuple((
+            item.name, item.enabled, item.probability, item.start_month_min,
+            item.start_month_max, item.duration_months, item.affected_income_name,
+            item.income_reduction_pct, item.recovery_months,
+        ) for item in config.curveballs),
         purchase_signature,
     )
 
@@ -858,14 +883,19 @@ def build_components(config: SimulationConfig):
             used_expense_names.add(linked_name)
     # A dependent is a recurring cost in the model. Keeping this explicit makes
     # it easy to evolve into age-based childcare/education rules later.
-    expenses.extend(
-        AgeBasedExpense(
-            f"{dependent.name} (child)", dependent.monthly_cost, dependent.age,
-            {dependent.school_start_age: dependent.school_monthly_cost}
-            if dependent.school_start_age is not None else {},
-        )
-        for dependent in config.dependents
-    )
+    for dependent in config.dependents:
+        if dependent.childcare_monthly_cost is not None:
+            expenses.append(ChildcareExpense(
+                f"{dependent.name} (child)", dependent.childcare_monthly_cost,
+                dependent.school_monthly_cost, dependent.age,
+                dependent.school_start_age, dependent.monthly_cost,
+            ))
+        else:
+            expenses.append(AgeBasedExpense(
+                f"{dependent.name} (child)", dependent.monthly_cost, dependent.age,
+                {dependent.school_start_age: dependent.school_monthly_cost}
+                if dependent.school_start_age is not None else {},
+            ))
     investments = []
     for item in investment_specs:
         if item.auto_invest_enabled and item.investment_type not in AUTO_INVEST_TYPES:
@@ -961,6 +991,7 @@ def run_simulation(config: SimulationConfig):
             property_purchase=resolved_property_purchase(config),
             selected_rent_expense=config.selected_rent_expense,
             assumptions=config.assumptions,
+            curveballs=config.curveballs,
         )
     finally:
         random.setstate(random_state)
@@ -997,13 +1028,14 @@ def run_simulation_batch(config: SimulationConfig, simulation_count: int):
     for detail_name in (
         "investment_values", "automatic_contributions",
         "automatic_contribution_fees", "income_rates", "income_values",
+        "curveball_income_adjustments",
         "expense_values", "loan_balances", "loan_payments",
         "property_market_values", "property_owned_values",
         "property_debt_balances", "property_equity",
         "property_rental_income", "property_operating_costs",
     ):
         item_names = set().union(*(
-            trajectory.details[detail_name] for trajectory in trajectories
+            trajectory.details.get(detail_name, {}) for trajectory in trajectories
         ))
         average_details[detail_name] = {
             item_name: [
@@ -1034,6 +1066,11 @@ def run_simulation_batch(config: SimulationConfig, simulation_count: int):
                 trajectory.details["purchase_outcome"] for trajectory in trajectories
             ],
         }
+    if "curveball_events" in trajectories[0].details:
+        average_details["curveball_events"] = [
+            trajectory.details["curveball_events"]
+            for trajectory in trajectories
+        ]
     # Loan schedules do not depend on the stochastic investment/income paths.
     average_result = average_net_worth, trajectories[0].repayment_dates, average_details
     return SimulationBatch(average_result, trajectories)
@@ -1233,7 +1270,7 @@ def _consume_run_request(session_state, button_clicked):
 
 
 def build_simulation_events(config, repayment_dates, months_simulated,
-                            purchase_events=None):
+                            purchase_events=None, curveball_events=None):
     """Return chart events with human-friendly, one-based month numbers."""
     events = [
         {
@@ -1274,6 +1311,26 @@ def build_simulation_events(config, repayment_dates, months_simulated,
             if "chart_label" in purchase:
                 event["chart_label"] = purchase["chart_label"]
             events.append(event)
+    flattened_curveballs = []
+    for candidate in curveball_events or []:
+        if isinstance(candidate, list):
+            flattened_curveballs.extend(candidate)
+        else:
+            flattened_curveballs.append(candidate)
+    seen_curveballs = set()
+    for curveball in flattened_curveballs:
+        if not curveball.get("triggered") or curveball.get("start_month") is None:
+            continue
+        month = curveball["start_month"]
+        key = (curveball.get("name"), month)
+        if month > months_simulated or key in seen_curveballs:
+            continue
+        seen_curveballs.add(key)
+        events.append({
+            "month": month,
+            "label": f"{curveball.get('name', 'Curveball')} started",
+            "event_type": "Curveball",
+        })
     return sorted(events, key=lambda event: (event["month"], event["label"]))
 
 
@@ -1311,6 +1368,7 @@ def get_month_details(net_worth, details, month):
     for category, detail_name in (
         ("Gross monthly income rate", "income_rates"),
         ("Income received", "income_values"),
+        ("Curveball income reduction", "curveball_income_adjustments"),
         ("Automatic investment contribution", "automatic_contributions"),
         ("Automatic contribution fee", "automatic_contribution_fees"),
         ("Expense paid", "expense_values"),
@@ -1347,6 +1405,10 @@ def _monthly_results(net_worth, details):
             },
             "income_values": {
                 name: values[index] for name, values in details["income_values"].items()
+            },
+            "curveball_income_adjustments": {
+                name: values[index]
+                for name, values in details.get("curveball_income_adjustments", {}).items()
             },
             "income_rates": {
                 name: values[index] for name, values in details["income_rates"].items()
@@ -1391,6 +1453,8 @@ def _serialized_trajectory(trajectory):
         serialized["purchase_events"] = trajectory.details.get("purchase_events", [])
     if "purchase_outcome" in trajectory.details:
         serialized["purchase_outcome"] = trajectory.details["purchase_outcome"]
+    if "curveball_events" in trajectory.details:
+        serialized["curveball_events"] = trajectory.details["curveball_events"]
     return serialized
 
 
@@ -1425,7 +1489,8 @@ def create_simulation_export(config, net_worth, repayment_dates, details,
                 for name, month_index in repayment_dates.items()
             ],
             "events": build_simulation_events(
-                config, repayment_dates, len(net_worth), details.get("purchase_events")
+                config, repayment_dates, len(net_worth), details.get("purchase_events"),
+                details.get("curveball_events"),
             ),
         },
     }
@@ -1586,6 +1651,7 @@ def read_simulation_export(data, include_warnings=False):
         rebuild_collection("additional_expenses", ExpenseConfig) or []
     )
     parameters["dependents"] = rebuild_collection("dependents", DependentConfig) or []
+    parameters["curveballs"] = rebuild_collection("curveballs", CurveballConfig) or []
     profile_values = parameters.get("jurisdiction_profiles", [])
     if (not isinstance(profile_values, list)
             or not all(isinstance(item, dict) for item in profile_values)):
@@ -1718,6 +1784,7 @@ def main():
 
     st.session_state.setdefault("additional_expenses", [])
     st.session_state.setdefault("dependents", [])
+    st.session_state.setdefault("curveballs", [])
     st.session_state.setdefault("investments", [{
         "name": "Portfolio", "investment_type": "stock",
         "initial_amount": 1000.0, "monthly_contribution": 100.0,
@@ -1991,6 +2058,13 @@ def main():
         st.session_state.dependents = editable_items(
             imported.dependents, ("monthly_cost", "school_monthly_cost")
         )
+        for item, dependent in zip(st.session_state.dependents, imported.dependents):
+            item["childcare_monthly_cost"] = dependent.childcare_monthly_cost
+        st.session_state.curveballs = [
+            {**asdict(item), "probability": item.probability * 100,
+             "_id": uuid.uuid4().hex}
+            for item in imported.curveballs
+        ]
         st.session_state.active_card = None
         st.session_state.pop("simulation_result", None)
         if run_after_load:
@@ -2042,6 +2116,30 @@ def main():
         st.session_state.workspace_import_counter += 1
         st.session_state.workspace_success_notice = "A/B scenario workspace imported."
 
+    def import_single_scenario():
+        """Import parameters from a widget callback before the next widgets render."""
+        uploaded = st.session_state.get(
+            "scenario_import_file_"
+            f"{st.session_state.get('import_uploader_counter', 0)}"
+        )
+        if uploaded is None:
+            return
+        try:
+            imported, import_warnings = read_simulation_export(
+                uploaded.getvalue(), include_warnings=True,
+            )
+        except ValueError as error:
+            st.session_state.import_error = str(error)
+            return
+        import_config(imported)
+        st.session_state.import_warnings = import_warnings
+        st.session_state.import_uploader_counter = (
+            st.session_state.get("import_uploader_counter", 0) + 1
+        )
+        st.session_state.import_success_notice = (
+            f"Scenario imported from {uploaded.name}."
+        )
+
     def card_is_open(collection, item):
         active = st.session_state.get("active_card")
         card_id = f"{collection}:{item_key(item)}"
@@ -2064,8 +2162,20 @@ def main():
     def add_dependent():
         number = len(st.session_state.dependents) + 1
         st.session_state.dependents.append({
-            "name": f"Child {number}", "monthly_cost": 300.0, "age": 0,
+            "name": f"Child {number}", "monthly_cost": 0.0, "childcare_monthly_cost": 300.0,
+            "age": 0,
             "school_start_age": 6, "school_monthly_cost": 250.0,
+            "_id": uuid.uuid4().hex,
+        })
+
+    def add_curveball():
+        number = len(st.session_state.curveballs) + 1
+        st.session_state.curveballs.append({
+            "name": f"Curveball {number}", "enabled": False,
+            "probability": 25.0, "start_month_min": 1,
+            "start_month_max": max(1, int(st.session_state.get("scenario_years", 10)) * 12),
+            "duration_months": 3, "affected_income_name": None,
+            "income_reduction_pct": 100.0, "recovery_months": 3,
             "_id": uuid.uuid4().hex,
         })
 
@@ -2634,14 +2744,14 @@ def main():
                     st.rerun()
 
     def render_dependents():
-        st.caption("Add the people and recurring costs that shape this scenario.")
+        st.caption("Add the people and lifecycle costs that shape this scenario.")
         if st.button("＋ Add daughter / child", use_container_width=True):
             add_dependent()
         for index, item in enumerate(st.session_state.dependents):
             with st.container(border=True):
                 if not card_is_open("dependent", item):
                     st.caption(
-                        f"age {item.get('age', 0)} · ${item['monthly_cost']:,.0f}/month"
+                        f"age {item.get('age', 0)} · childcare ${item.get('childcare_monthly_cost') or item.get('monthly_cost', 0):,.0f}/month"
                     )
                     continue
                 item["name"] = st.text_input(
@@ -2652,9 +2762,24 @@ def main():
                     value=int(item.get("age", 0)), key=f"dependent_age_{item_key(item)}",
                 )
                 item["monthly_cost"] = st.number_input(
-                    "Monthly child cost", min_value=0.0, value=float(item["monthly_cost"]),
+                    "Other monthly child cost", min_value=0.0, value=float(item["monthly_cost"]),
                     step=25.0, format="%.0f", key=f"dependent_cost_{item_key(item)}",
                 )
+                if item.get("childcare_monthly_cost") is None:
+                    st.caption(
+                        "Legacy child-cost behavior is preserved for this imported "
+                        "scenario; add a new child to configure childcare explicitly."
+                    )
+                else:
+                    item["childcare_monthly_cost"] = st.number_input(
+                        "Childcare monthly cost (until school)", min_value=0.0,
+                        value=float(item["childcare_monthly_cost"]), step=25.0,
+                        format="%.0f", key=f"dependent_childcare_{item_key(item)}",
+                        help=(
+                            "This cost stops at the existing school-start milestone; "
+                            "school cost begins in the following month."
+                        ),
+                    )
                 automatic_costs = st.checkbox(
                     "Add school cost from age 6*",
                     value=item.get("school_start_age") is not None,
@@ -2670,6 +2795,82 @@ def main():
                 st.caption("* Illustrative assumption; adjust or disable for your situation.")
                 if st.button("Remove child", key=f"remove_dependent_{item_key(item)}"):
                     remove_item(st.session_state.dependents, index)
+                    st.rerun()
+
+    def render_curveballs():
+        st.caption(
+            "Optional adverse events are sampled independently per trajectory. "
+            "Disabled events consume no random draws and never trigger."
+        )
+        if st.button("＋ Add curveball", use_container_width=True):
+            add_curveball()
+        income_options = ["All incomes"] + [item["name"] for item in st.session_state.incomes]
+        max_month = max(1, int(st.session_state.get("scenario_years", 10)) * 12)
+        for index, item in enumerate(st.session_state.curveballs):
+            with st.container(border=True):
+                if not card_is_open("curveball", item):
+                    state = "on" if item.get("enabled") else "off"
+                    st.caption(
+                        f"{state} · {item.get('probability', 0):.0f}% chance · "
+                        f"{item.get('duration_months', 0)} months"
+                    )
+                    continue
+                item["name"] = st.text_input(
+                    "Name", item["name"], key=f"curveball_name_{item_key(item)}"
+                )
+                item["enabled"] = st.checkbox(
+                    "Enabled", value=bool(item.get("enabled", False)),
+                    key=f"curveball_enabled_{item_key(item)}",
+                )
+                item["probability"] = st.number_input(
+                    "Probability per trajectory (%)", min_value=0.0, max_value=100.0,
+                    value=float(item.get("probability", 0.0)), step=5.0,
+                    key=f"curveball_probability_{item_key(item)}",
+                )
+                current_target = item.get("affected_income_name")
+                target_label = (
+                    current_target if current_target in income_options else "All incomes"
+                )
+                selected_target = st.selectbox(
+                    "Affected income", income_options,
+                    index=income_options.index(target_label),
+                    key=f"curveball_income_{item_key(item)}",
+                )
+                item["affected_income_name"] = (
+                    None if selected_target == "All incomes" else selected_target
+                )
+                start_left, start_right = st.columns(2)
+                item["start_month_min"] = start_left.number_input(
+                    "Earliest start month", min_value=1, max_value=max_month,
+                    value=min(max_month, int(item.get("start_month_min", 1))), step=1,
+                    key=f"curveball_start_min_{item_key(item)}",
+                )
+                item["start_month_max"] = start_right.number_input(
+                    "Latest start month", min_value=1, max_value=max_month,
+                    value=min(max_month, int(item.get("start_month_max", max_month))), step=1,
+                    key=f"curveball_start_max_{item_key(item)}",
+                )
+                item["duration_months"] = st.number_input(
+                    "Income-reduction duration (months)", min_value=1,
+                    value=int(item.get("duration_months", 3)), step=1,
+                    key=f"curveball_duration_{item_key(item)}",
+                )
+                item["income_reduction_pct"] = st.number_input(
+                    "Income reduction (%)", min_value=0.0, max_value=100.0,
+                    value=float(item.get("income_reduction_pct", 100.0)), step=5.0,
+                    key=f"curveball_reduction_{item_key(item)}",
+                )
+                item["recovery_months"] = st.number_input(
+                    "Recovery period (months)", min_value=0,
+                    value=int(item.get("recovery_months", 0)), step=1,
+                    key=f"curveball_recovery_{item_key(item)}",
+                )
+                st.caption(
+                    "During recovery, the configured reduction tapers linearly to zero. "
+                    "Overlapping events multiply their income factors."
+                )
+                if st.button("Remove curveball", key=f"remove_curveball_{item_key(item)}"):
+                    remove_item(st.session_state.curveballs, index)
                     st.rerun()
 
     with st.sidebar:
@@ -3164,6 +3365,16 @@ def main():
         ):
             render_dependents()
 
+        enabled_curveballs = sum(
+            bool(item.get("enabled")) for item in st.session_state.curveballs
+        )
+        with st.expander(
+            f"Curveballs · {enabled_curveballs} enabled / "
+            f"{len(st.session_state.curveballs)} configured",
+            key="sidebar_curveballs",
+        ):
+            render_curveballs()
+
     run_copy, run_controls = st.columns([3, 1], gap="large")
     with run_copy:
         st.subheader("Run projection")
@@ -3287,7 +3498,15 @@ def main():
         dependents=[DependentConfig(
             item["name"], _whole_amount(item["monthly_cost"]), item["age"],
             item["school_start_age"], _whole_amount(item["school_monthly_cost"]),
+            (_whole_amount(item["childcare_monthly_cost"])
+             if item.get("childcare_monthly_cost") is not None else None),
         ) for item in st.session_state.dependents],
+        curveballs=[CurveballConfig(
+            item["name"], bool(item["enabled"]), float(item["probability"]) / 100,
+            int(item["start_month_min"]), int(item["start_month_max"]),
+            int(item["duration_months"]), item.get("affected_income_name"),
+            float(item["income_reduction_pct"]), int(item["recovery_months"]),
+        ) for item in st.session_state.curveballs],
         assumptions=FinancialAssumptions(**st.session_state.financial_assumptions),
         property_purchase=purchase_config,
         selected_rent_expense=st.session_state.selected_rent_expense,
@@ -3317,26 +3536,14 @@ def main():
             import_notice = st.session_state.pop("import_success_notice", None)
             if import_notice:
                 st.success(import_notice)
-            if st.button(
+            import_error = st.session_state.pop("import_error", None)
+            if import_error:
+                st.error(import_error)
+            st.button(
                 "Import parameters", disabled=uploaded_export is None,
                 use_container_width=True,
-            ):
-                try:
-                    imported, import_warnings = read_simulation_export(
-                        uploaded_export.getvalue(), include_warnings=True,
-                    )
-                    import_config(imported)
-                    st.session_state.import_warnings = import_warnings
-                except ValueError as error:
-                    st.error(str(error))
-                else:
-                    st.session_state.import_uploader_counter = (
-                        st.session_state.get("import_uploader_counter", 0) + 1
-                    )
-                    st.session_state.import_success_notice = (
-                        f"Scenario imported from {uploaded_export.name}."
-                    )
-                    st.rerun()
+                on_click=import_single_scenario,
+            )
 
             single_export_placeholder = st.empty()
             single_export_placeholder.caption(
@@ -3742,6 +3949,28 @@ def main():
         elif not purchased:
             st.info("Not purchased during this simulation.")
 
+    curveball_rows = []
+    for trajectory in trajectories:
+        for event in trajectory.details.get("curveball_events", []):
+            curveball_rows.append({
+                "Run": trajectory.run_number,
+                "Event": event["name"],
+                "Triggered": event["triggered"],
+                "Start month": event["start_month"],
+                "End month": event["end_month"],
+                "Cash below pre-event level": event["cash_below_pre_event_month"],
+                "Recovered month": event["recovery_month"],
+                "Recovery months observed": event["recovery_months_observed"],
+            })
+    if curveball_rows:
+        with st.expander("Curveball outcomes", expanded=True):
+            st.dataframe(curveball_rows, hide_index=True, use_container_width=True)
+            st.caption(
+                "Recovery means both cash and net worth returned to their respective "
+                "pre-event levels. A blank recovery month means the threshold was not "
+                "reached before the simulation ended."
+            )
+
     st.subheader("Monte Carlo analysis")
     view_mode = st.radio(
         "Result view", ("Overview", "Individual run", "Compare"), horizontal=True,
@@ -3920,7 +4149,8 @@ def main():
     ).transform_filter(month_selection)
 
     events = build_simulation_events(
-        config, repayment_dates, len(net_worth), details.get("purchase_events")
+        config, repayment_dates, len(net_worth), details.get("purchase_events"),
+        details.get("curveball_events"),
     )
     chart = lines + month_hitboxes + selected_month_rule
     if events:

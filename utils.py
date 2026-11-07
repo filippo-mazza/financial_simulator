@@ -65,9 +65,87 @@ def _withdraw_for_simulation(bank_account, amount, month, reason):
         ) from error
 
 
+def _prepare_curveball_events(curveballs, income_names, months, random_source):
+    """Plan optional adverse events once per trajectory using the seeded RNG."""
+    events = []
+    for curveball in curveballs or []:
+        name = getattr(curveball, "name", "Curveball")
+        enabled = bool(getattr(curveball, "enabled", False))
+        probability = float(getattr(curveball, "probability", 0.0))
+        start_min = int(getattr(curveball, "start_month_min", 1))
+        start_max = int(getattr(curveball, "start_month_max", months))
+        duration = int(getattr(curveball, "duration_months", 0))
+        recovery = int(getattr(curveball, "recovery_months", 0))
+        reduction = float(getattr(curveball, "income_reduction_pct", 0.0))
+        affected = getattr(curveball, "affected_income_name", None)
+        if not name.strip():
+            raise ValueError("Curveball names cannot be empty")
+        if not 0 <= probability <= 1:
+            raise ValueError(f"Curveball '{name}' probability must be between 0 and 1")
+        if start_min < 1 or start_max < start_min:
+            raise ValueError(f"Curveball '{name}' has an invalid start-month range")
+        if duration < 1:
+            raise ValueError(f"Curveball '{name}' duration must be at least one month")
+        if recovery < 0:
+            raise ValueError(f"Curveball '{name}' recovery must be nonnegative")
+        if not 0 <= reduction <= 100:
+            raise ValueError(f"Curveball '{name}' income reduction must be 0–100%")
+        if affected is not None and affected not in income_names:
+            raise ValueError(
+                f"Curveball '{name}' targets unknown income '{affected}'"
+            )
+        event = {
+            "name": name,
+            "enabled": enabled,
+            "probability": probability,
+            "affected_income_name": affected,
+            "income_reduction_pct": reduction,
+            "duration_months": duration,
+            "recovery_months": recovery,
+            "start_month_min": start_min,
+            "start_month_max": start_max,
+            "triggered": False,
+            "start_month": None,
+            "end_month": None,
+            "pre_event_cash": None,
+            "pre_event_net_worth": None,
+            "cash_below_pre_event_month": None,
+            "recovery_month": None,
+            "recovery_months_observed": None,
+        }
+        # Disabled events and zero-probability events consume no random draws.
+        if enabled and probability > 0 and random_source.random() < probability:
+            event["triggered"] = True
+            event["start_month"] = random_source.randint(start_min, start_max)
+            event["end_month"] = event["start_month"] + duration + recovery - 1
+        events.append(event)
+    return events
+
+
+def _curveball_income_factor(event, month_number, income_name):
+    if (not event["triggered"]
+            or (event["affected_income_name"] is not None
+                and event["affected_income_name"] != income_name)
+            or month_number < event["start_month"]):
+        return 1.0
+    elapsed = month_number - event["start_month"]
+    if elapsed < event["duration_months"]:
+        severity = 1.0
+    elif elapsed < event["duration_months"] + event["recovery_months"]:
+        recovery_elapsed = elapsed - event["duration_months"] + 1
+        severity = max(
+            0.0,
+            1.0 - recovery_elapsed / event["recovery_months"],
+        )
+    else:
+        severity = 0.0
+    return 1.0 - event["income_reduction_pct"] / 100 * severity
+
+
 def compute_net_worth_over_time(years, bank_account, investments, loans, income_sources,
                                 expenses, seed=None, property_purchase=None,
-                                assumptions=None, selected_rent_expense=None):
+                                assumptions=None, selected_rent_expense=None,
+                                curveballs=None):
     """Simulate net worth month by month.
 
     When ``seed`` is provided, all simulations using the standard-library random
@@ -150,6 +228,14 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             "completion_attempts": 0,
             "completion_status": "not_eligible",
         }
+    curveball_events = _prepare_curveball_events(
+        curveballs, income_names, years * 12, random,
+    )
+    if curveballs:
+        monthly_details["curveball_income_adjustments"] = {
+            name: [] for name in income_names
+        }
+        monthly_details["curveball_events"] = curveball_events
     monthly_net_worth = []
     loan_repayment_dates = {}
     scheduled_purchase = None
@@ -178,6 +264,7 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
         
         for month in range(12):
             current_month = year * 12 + month  # Counting months from the start
+            month_number = current_month + 1
             month_income_rates = {}
             affordability_income_rates = []
             month_income_values = {}
@@ -185,7 +272,15 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             month_loan_payments = {}
             month_automatic_contributions = {}
             month_automatic_contribution_fees = {}
+            month_curveball_adjustments = {}
             month_purchase_fee = 0
+
+            for event in curveball_events:
+                if event["triggered"] and event["start_month"] == month_number:
+                    event["pre_event_cash"] = bank_account.subaccounts["Main"]
+                    event["pre_event_net_worth"] = get_net_worth(
+                        investments, loans, bank_account,
+                    )
             
             # Income
             for source, source_name in zip(income_sources, income_names):
@@ -201,11 +296,18 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                     + regular_monthly_rate
                 )
                 monthly_income = source.step()
+                unadjusted_income = monthly_income
+                for event in curveball_events:
+                    monthly_income *= _curveball_income_factor(
+                        event, month_number, source_name,
+                    )
                 year_income+=monthly_income
                 bank_account.deposit(monthly_income, account_name="Main")
                 month_income_values[source_name] = (
                     month_income_values.get(source_name, 0) + monthly_income
                 )
+                month_curveball_adjustment = unadjusted_income - monthly_income
+                month_curveball_adjustments[source_name] = month_curveball_adjustment
             
             purchase_due = (
                 scheduled_purchase is not None
@@ -533,6 +635,8 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 values.append(month_income_rates.get(name, 0))
             for name, values in monthly_details["income_values"].items():
                 values.append(month_income_values.get(name, 0))
+            for name, values in monthly_details.get("curveball_income_adjustments", {}).items():
+                values.append(month_curveball_adjustments.get(name, 0))
             for name, values in monthly_details["expense_values"].items():
                 values.append(month_expense_values.get(name, 0))
             for name, values in monthly_details["loan_balances"].items():
@@ -581,6 +685,20 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             # Compute net worth for the month
             net_worth = get_net_worth(investments, loans, bank_account)
             monthly_net_worth.append(net_worth)
+            for event in curveball_events:
+                if not event["triggered"] or event["pre_event_cash"] is None:
+                    continue
+                if (event["cash_below_pre_event_month"] is None
+                        and bank_account.subaccounts["Main"] < event["pre_event_cash"]):
+                    event["cash_below_pre_event_month"] = month_number
+                if (event["recovery_month"] is None
+                        and month_number >= event["end_month"]
+                        and bank_account.subaccounts["Main"] >= event["pre_event_cash"]
+                        and net_worth >= event["pre_event_net_worth"]):
+                    event["recovery_month"] = month_number
+                    event["recovery_months_observed"] = (
+                        month_number - event["start_month"] + 1
+                    )
     finally:
         if random_state is not None:
             random.setstate(random_state)

@@ -22,7 +22,7 @@ def test_sidebar_expanders_keep_stable_identity_when_summary_changes(monkeypatch
     expected_keys = {
         "sidebar_import", "sidebar_cash", "sidebar_investments", "sidebar_income",
         "sidebar_expenses", "sidebar_loans", "sidebar_assumptions", "sidebar_family",
-        "sidebar_jurisdictions",
+        "sidebar_jurisdictions", "sidebar_curveballs",
     }
     assert {expander.key for expander in app.expander} == expected_keys
     assert _expander(app, "sidebar_cash").label.startswith("Cash · $5,000")
@@ -32,6 +32,22 @@ def test_sidebar_expanders_keep_stable_identity_when_summary_changes(monkeypatch
     assert not app.exception
     assert _expander(app, "sidebar_cash").key == "sidebar_cash"
     assert _expander(app, "sidebar_cash").label.startswith("Cash · $7,500")
+
+
+def test_curveballs_panel_exposes_independent_event_controls(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+    curveballs = _expander(app, "sidebar_curveballs")
+    next(item for item in curveballs.button if item.label == "＋ Add curveball").click().run(timeout=30)
+    next(item for item in app.button if "Curveball 1" in item.label).click().run(timeout=30)
+
+    assert not app.exception
+    assert any(item.label == "Probability per trajectory (%)" for item in app.number_input)
+    assert any(item.label == "Affected income" for item in app.selectbox)
+    assert any(item.label == "Income reduction (%)" for item in app.number_input)
+    assert any(item.label == "Recovery period (months)" for item in app.number_input)
 
 
 def test_streamlit_minimum_supports_persistent_keyed_expanders():
@@ -432,10 +448,39 @@ def test_scenario_json_import_errors_keep_uploads_and_explain_failure(
     assert not app.exception
     assert app.session_state["workspace_import_counter"] == 0
     assert app.sidebar.file_uploader(key="scenario_workspace_file_0").value
-    assert any(
-        "not valid UTF-8 JSON" in item.value
-        for item in _expander(app.sidebar, "sidebar_import").error
+
+
+def test_older_single_scenario_import_updates_widget_state_before_render(tmp_path):
+    script = f"""
+import json
+from app import SimulationConfig, create_simulation_export, run_simulation
+from streamlit.testing.v1 import AppTest
+
+config = SimulationConfig(years=1, seed=7, investments=[], incomes=[], expenses=[], loans=[])
+net_worth, repayments, details = run_simulation(config)
+document = json.loads(create_simulation_export(config, net_worth, repayments, details))
+document['parameters'].pop('curveballs', None)
+payload = json.dumps(document).encode()
+
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+app.sidebar.file_uploader(key='scenario_import_file_0').upload(
+    'older-scenario.json', payload, 'application/json',
+).run(timeout=30)
+panel = next(item for item in app.sidebar.expander if item.key == 'sidebar_import')
+next(item for item in panel.button if item.label == 'Import parameters').click().run(timeout=60)
+assert not app.exception
+assert app.session_state['scenario_years'] == 1
+assert app.session_state.get('import_success_notice') is None
+assert not any('cannot be modified after the widget' in item.value for item in app.exception)
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=120,
     )
+    assert result.returncode == 0, result.stderr
 
 
 def test_jurisdiction_help_popup_lists_assumptions_sources_and_limitations(

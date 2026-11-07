@@ -1,6 +1,9 @@
 import math
 
-from app import DependentConfig, ExpenseConfig, InvestmentConfig, SimulationConfig, run_simulation
+from app import (
+    CurveballConfig, DependentConfig, ExpenseConfig, IncomeConfig, InvestmentConfig,
+    SimulationConfig, run_simulation,
+)
 
 
 def family_config(**overrides):
@@ -54,6 +57,112 @@ def test_child_already_at_school_age_includes_school_cost_immediately():
                                    school_start_age=6, school_monthly_cost=400)],
     ))
     assert result[2]["bank_account"][0] == 49500
+
+
+def test_explicit_childcare_switches_to_school_without_double_counting():
+    result = run_simulation(family_config(
+        years=2,
+        dependents=[DependentConfig(
+            "Child", monthly_cost=0, age=5, school_start_age=6,
+            school_monthly_cost=200, childcare_monthly_cost=500,
+        )],
+    ))
+
+    assert result[2]["bank_account"][11] == 44000
+    assert result[2]["bank_account"][-1] == 41600
+    child_values = result[2]["expense_values"]["Child (child)"]
+    assert child_values[:12] == [500] * 12
+    assert child_values[12:] == [200] * 12
+
+
+def test_explicit_childcare_includes_other_child_costs_before_and_after_school():
+    result = run_simulation(family_config(
+        years=2,
+        dependents=[DependentConfig(
+            "Child", monthly_cost=100, age=5, school_start_age=6,
+            school_monthly_cost=200, childcare_monthly_cost=500,
+        )],
+    ))
+
+    child_values = result[2]["expense_values"]["Child (child)"]
+    assert child_values[:12] == [600] * 12
+    assert child_values[12:] == [300] * 12
+
+
+def test_explicit_childcare_remains_when_school_transition_is_disabled():
+    result = run_simulation(family_config(
+        years=1,
+        dependents=[DependentConfig(
+            "Child", monthly_cost=100, age=5, school_start_age=None,
+            school_monthly_cost=200, childcare_monthly_cost=500,
+        )],
+    ))
+
+    assert result[2]["expense_values"]["Child (child)"] == [600] * 12
+
+
+def test_disabled_curveball_matches_baseline_and_is_audited_as_off():
+    baseline = family_config(
+        years=1,
+        initial_cash=0,
+        incomes=[IncomeConfig("Salary", "salary", 1_000)],
+    )
+    disabled = SimulationConfig(
+        **{**baseline.__dict__, "curveballs": [CurveballConfig(
+            "Job loss", enabled=False, probability=1.0,
+            start_month_min=1, start_month_max=1,
+        )]},
+    )
+
+    base_result = run_simulation(baseline)
+    disabled_result = run_simulation(disabled)
+
+    assert disabled_result[0] == base_result[0]
+    assert disabled_result[2]["curveball_events"][0]["triggered"] is False
+
+
+def test_curveball_is_seeded_temporary_and_recovery_is_reported():
+    config = family_config(
+        years=1,
+        initial_cash=0,
+        incomes=[IncomeConfig("Salary", "salary", 1_000)],
+        curveballs=[CurveballConfig(
+            "Job loss", enabled=True, probability=1.0,
+            start_month_min=2, start_month_max=2, duration_months=2,
+            affected_income_name="Salary", income_reduction_pct=100,
+            recovery_months=2,
+        )],
+    )
+
+    result = run_simulation(config)
+    income = result[2]["income_values"]["Salary"]
+    event = result[2]["curveball_events"][0]
+
+    assert income[0] == 700
+    assert income[1:3] == [0, 0]
+    assert income[3] == 350
+    assert income[4] == 700
+    assert event["triggered"] is True
+    assert event["start_month"] == 2
+    assert event["recovery_month"] == 5
+    assert event["recovery_months_observed"] == 4
+
+
+def test_overlapping_curveballs_stack_income_reductions():
+    config = family_config(
+        years=1,
+        initial_cash=0,
+        incomes=[IncomeConfig("Salary", "salary", 1_000)],
+        curveballs=[
+            CurveballConfig("Shock A", True, 1.0, 1, 1, 1, "Salary", 50, 0),
+            CurveballConfig("Shock B", True, 1.0, 1, 1, 1, "Salary", 50, 0),
+        ],
+    )
+
+    result = run_simulation(config)
+
+    assert result[2]["income_values"]["Salary"][0] == 175
+    assert result[2]["curveball_income_adjustments"]["Salary"][0] == 525
 
 
 def test_starting_level_orders_ending_level_for_same_family_setup():
