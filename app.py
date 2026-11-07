@@ -3714,6 +3714,11 @@ def main():
                 except (ValueError, TypeError, KeyError, InsufficientFundsException) as error:
                     st.error(f"This suggestion cannot be compared: {error}")
                 else:
+                    for key in (
+                        "scenario_baseline_name", "scenario_alternative_name",
+                        "scenario_variant_selector",
+                    ):
+                        st.session_state.pop(key, None)
                     st.session_state.scenario_workspace = suggestion_workspace
                     st.session_state.scenario_comparison_result = {
                         "fingerprint": suggestion_fingerprint,
