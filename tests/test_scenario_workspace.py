@@ -5,7 +5,7 @@ import json
 import pytest
 
 from app import (
-    ExpenseConfig, FinancialAssumptions, IncomeConfig,
+    CurveballConfig, ExpenseConfig, FinancialAssumptions, IncomeConfig,
     InvestmentConfig,
     SimulationConfig,
     comparison_balance_rows,
@@ -161,7 +161,15 @@ def test_workspace_reader_rejects_wrong_shape_without_affecting_single_exports()
 
 def test_abc_scenario_sensitivity_compares_three_saved_variants():
     workspace = ScenarioWorkspace.from_config(_config())
-    c_config = replace(workspace.config_for(BASELINE_ID), initial_cash=8_000)
+    b_config = workspace.config_for(ALTERNATIVE_ID)
+    b_config.curveballs = [CurveballConfig(
+        "Temporary job loss", True, 1.0, 1, 1, 3, "Salary", 100.0,
+    )]
+    workspace = workspace.save(ALTERNATIVE_ID, b_config)
+    c_config = replace(
+        workspace.config_for(BASELINE_ID),
+        property_purchase=PropertyPurchase(10_000, 10),
+    )
     workspace = workspace.add_variant(
         ScenarioVariant(TERTIARY_ID, "Alternative C", c_config),
     )
@@ -171,8 +179,7 @@ def test_abc_scenario_sensitivity_compares_three_saved_variants():
     assert [row["Scenario"] for row in result["rows"]] == [
         "Baseline A", "Alternative B", "Alternative C",
     ]
-    assert result["rows"][0]["Mean"] == result["rows"][1]["Mean"]
-    assert result["rows"][2]["Mean"] > result["rows"][0]["Mean"]
+    assert result["rows"][1]["Mean"] < result["rows"][0]["Mean"]
     restored = read_scenario_workspace_export(create_scenario_workspace_export(workspace))
     assert restored.config_for(TERTIARY_ID) == c_config
 
