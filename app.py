@@ -3346,8 +3346,18 @@ def main():
         if custom_count:
             st.caption(
                 f"{custom_count} custom curveball(s) from an older import are preserved "
-                "in the scenario but are not editable in this simplified panel."
+                "in the scenario. They are not editable here, but can be removed."
             )
+            for item in list(st.session_state.curveballs):
+                if item.get("name") in predefined_names:
+                    continue
+                remove_col, label_col = st.columns([1, 3])
+                if remove_col.button(
+                    "Remove", key=f"remove_imported_curveball_{item_key(item)}",
+                ):
+                    st.session_state.curveballs.remove(item)
+                    st.rerun()
+                label_col.caption(item.get("name", "Imported curveball"))
 
     with st.sidebar:
         st.header("Scenario")

@@ -137,6 +137,27 @@ def test_curveball_custom_start_range_survives_variant_switch(monkeypatch, tmp_p
     assert app.session_state["curveballs"][0]["start_month_max"] == 36
 
 
+def test_imported_custom_curveball_can_be_removed(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+    app.session_state["curveballs"] = [{
+        "name": "Old custom event", "enabled": True, "probability": 25.0,
+        "start_month_min": 1, "start_month_max": 120, "duration_months": 3,
+        "affected_income_name": None, "income_reduction_pct": 50.0,
+        "recovery_months": 3, "_id": "old-custom",
+    }]
+    app.run(timeout=30)
+
+    curveballs = _expander(app, "sidebar_curveballs")
+    next(item for item in curveballs.button if item.label == "Remove").click().run(
+        timeout=30
+    )
+
+    assert not app.exception
+    assert app.session_state["curveballs"] == []
+
+
 def test_new_expense_is_inserted_at_top_of_expense_list(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
