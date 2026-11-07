@@ -162,12 +162,16 @@ def test_workspace_reader_rejects_wrong_shape_without_affecting_single_exports()
 def test_abc_scenario_sensitivity_compares_three_saved_variants():
     workspace = ScenarioWorkspace.from_config(_config())
     b_config = workspace.config_for(ALTERNATIVE_ID)
+    b_config.years = 3
+    b_config.seed = 99
     b_config.curveballs = [CurveballConfig(
         "Temporary job loss", True, 1.0, 1, 1, 3, "Salary", 100.0,
     )]
     workspace = workspace.save(ALTERNATIVE_ID, b_config)
     c_config = replace(
         workspace.config_for(BASELINE_ID),
+        years=2,
+        seed=5,
         property_purchase=PropertyPurchase(10_000, 10),
     )
     workspace = workspace.add_variant(
@@ -180,6 +184,15 @@ def test_abc_scenario_sensitivity_compares_three_saved_variants():
         "Baseline A", "Alternative B", "Alternative C",
     ]
     assert result["rows"][1]["Mean"] < result["rows"][0]["Mean"]
+    assert result["effective_horizon_years"] == 1
+    assert result["effective_seed"] == 17
+    assert result["rows"][0]["Saved horizon (years)"] == 1
+    assert result["rows"][1]["Saved horizon (years)"] == 3
+    assert result["rows"][1]["Saved seed"] == 99
+    assert result["rows"][1]["Applied horizon (years)"] == 1
+    assert result["rows"][1]["Applied seed"] == 17
+    assert result["rows"][2]["Saved horizon (years)"] == 2
+    assert result["rows"][2]["Saved seed"] == 5
     restored = read_scenario_workspace_export(create_scenario_workspace_export(workspace))
     assert restored.config_for(TERTIARY_ID) == c_config
 

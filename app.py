@@ -838,8 +838,9 @@ def run_abc_scenario_sensitivity(workspace, simulation_count, metric="final_net_
     rows = []
     for variant_id in variant_ids:
         variant = workspace.variant(variant_id)
+        saved_config = variant.config
         config = replace(
-            variant.config, years=baseline.years, seed=baseline.seed,
+            saved_config, years=baseline.years, seed=baseline.seed,
         )
         summary = _sensitivity_summary(_sensitivity_values_for_config(
             config, simulation_count, metric,
@@ -847,6 +848,10 @@ def run_abc_scenario_sensitivity(workspace, simulation_count, metric="final_net_
         rows.append({
             "Scenario": variant.name,
             "Mean": summary["mean"],
+            "Saved horizon (years)": saved_config.years,
+            "Saved seed": saved_config.seed,
+            "Applied horizon (years)": baseline.years,
+            "Applied seed": baseline.seed,
             "10th–90th": (
                 f"{summary['p10']:.2f}–{summary['p90']:.2f}"
                 if summary["mean"] is not None else "n/a"
@@ -856,6 +861,8 @@ def run_abc_scenario_sensitivity(workspace, simulation_count, metric="final_net_
         "metric": metric,
         "metric_label": SENSITIVITY_METRICS[metric],
         "simulation_count": simulation_count,
+        "effective_horizon_years": baseline.years,
+        "effective_seed": baseline.seed,
         "rows": rows,
     }
 
@@ -2575,8 +2582,14 @@ def main():
         workspace = st.session_state.get("scenario_workspace")
         if not isinstance(workspace, ScenarioWorkspace):
             return
+        existing_names = {variant.name for variant in workspace.variants}
+        name = "Alternative C"
+        suffix = 2
+        while name in existing_names:
+            name = f"Alternative C ({suffix})"
+            suffix += 1
         workspace = workspace.add_variant(ScenarioVariant(
-            TERTIARY_ID, "Alternative C", workspace.config_for(BASELINE_ID),
+            TERTIARY_ID, name, workspace.config_for(BASELINE_ID),
         )).activate(TERTIARY_ID)
         st.session_state.scenario_workspace = workspace
         for key in ("scenario_tertiary_name", "scenario_variant_selector"):
@@ -4717,6 +4730,14 @@ def main():
                                             abc_result["metric"], row["Mean"],
                                         )
                                     ),
+                                    "Saved horizon (years)": row[
+                                        "Saved horizon (years)"
+                                    ],
+                                    "Saved seed": row["Saved seed"],
+                                    "Applied horizon (years)": row[
+                                        "Applied horizon (years)"
+                                    ],
+                                    "Applied seed": row["Applied seed"],
                                     "10th–90th": row["10th–90th"],
                                 }
                                 for row in valid_rows
@@ -4725,7 +4746,11 @@ def main():
                         )
                         st.caption(
                             f"{abc_result['simulation_count']} simulation(s) per "
-                            "scenario. These are modeled scenario outcomes, not "
+                            f"scenario. All runs use Baseline A's "
+                            f"{abc_result['effective_horizon_years']}-year horizon "
+                            f"and seed {abc_result['effective_seed']} + run index. "
+                            "Saved and applied settings are shown for each scenario. "
+                            "These are modeled scenario outcomes, not "
                             "causal attribution; trajectory shocks may differ when "
                             "scenario structures change."
                         )
