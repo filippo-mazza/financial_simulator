@@ -258,6 +258,25 @@ def test_comparison_explanation_handles_added_removed_and_multiple_inputs():
     assert "Food" in explanation
 
 
+def test_comparison_explanation_preserves_removed_item_identity_after_shift():
+    config = _config()
+    config.incomes = [
+        IncomeConfig("Salary", "salary", 3_000, 0),
+        IncomeConfig("Side job", "salary", 500, 0),
+    ]
+    workspace = ScenarioWorkspace.from_config(config)
+    alternative = workspace.config_for(ALTERNATIVE_ID)
+    alternative.incomes = [alternative.incomes[1]]
+    workspace = workspace.save(ALTERNATIVE_ID, alternative)
+
+    explanation = comparison_explanation(run_paired_scenario_comparison(workspace, 1))
+
+    assert "Salary (removed)" in explanation
+    assert "Side job" not in explanation.split("The compared change(s) are ", 1)[1].split(
+        ". The largest", 1
+    )[0]
+
+
 def test_comparison_warns_when_bonus_changes_draws():
     workspace = ScenarioWorkspace.from_config(_config())
     alternative = workspace.config_for(ALTERNATIVE_ID)

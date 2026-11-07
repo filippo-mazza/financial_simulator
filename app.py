@@ -772,13 +772,38 @@ def _comparison_change_labels(comparison, differences):
             else:
                 collection, index_text, field = match.groups()
                 index = int(index_text)
-                item = None
-                for config in (comparison.alternative_config, comparison.baseline_config):
-                    items = getattr(config, collection, None)
-                    if items is not None and index < len(items):
-                        item = items[index]
-                        break
-                item_name = getattr(item, "name", collection.replace("_", " "))
+                baseline_items = getattr(comparison.baseline_config, collection, None) or []
+                alternative_items = (
+                    getattr(comparison.alternative_config, collection, None) or []
+                )
+                baseline_item = (
+                    baseline_items[index] if index < len(baseline_items) else None
+                )
+                alternative_item = (
+                    alternative_items[index] if index < len(alternative_items) else None
+                )
+                baseline_name = getattr(baseline_item, "name", None)
+                alternative_name = getattr(alternative_item, "name", None)
+                baseline_names = {
+                    getattr(item, "name", None) for item in baseline_items
+                }
+                alternative_names = {
+                    getattr(item, "name", None) for item in alternative_items
+                }
+                if baseline_name != alternative_name:
+                    if baseline_name and baseline_name not in alternative_names:
+                        item_name = f"{baseline_name} (removed)"
+                    elif alternative_name and alternative_name not in baseline_names:
+                        item_name = f"{alternative_name} (added)"
+                    else:
+                        # The same named item moved to another index; this is not
+                        # an input change and should not be presented as one.
+                        continue
+                else:
+                    item_name = (
+                        baseline_name or alternative_name
+                        or collection.replace("_", " ")
+                    )
                 label = item_name
                 fields = indexed_paths[(collection, index)]
                 if field and len(fields) == 1:
