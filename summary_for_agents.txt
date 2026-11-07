@@ -338,6 +338,14 @@ Paired comparison results are session-local and invalidated by a fingerprint of
 both configs, names, and the run count. Historical snapshots (#124) are not
 treated as paired comparisons.
 
+After a completed single-scenario run, deterministic_ab_suggestions() provides
+transparent, static sensitivity variants (property purchase/no property,
+investment contribution, and starting cash buffer). The UI announces them with a
+bottom-right Streamlit toast and an actionable popover. Selecting one creates a
+fresh workspace with the current inputs as Baseline A and the suggestion as
+Alternative B, then runs the existing paired comparison. Suggestions do not call
+an AI service, mutate inputs before confirmation, or make recommendations.
+
 Monthly export rows contain a property_positions mapping with market value,
 owned value, attributable debt, equity, rental income, and operating costs.
 InvestmentConfig exports preserve ownership_percentage, linked_loan_name,

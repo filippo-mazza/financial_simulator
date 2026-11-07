@@ -277,6 +277,25 @@ assert any('especially small' in item.value and 'tail probabilities' in item.val
     assert result.returncode == 0, result.stderr
 
 
+def test_completed_run_announces_deterministic_ab_suggestions(tmp_path):
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=60)
+assert not app.exception
+assert any('Deterministic A/B alternatives' in item.value for item in app.toast)
+assert sum(item.label == 'Apply and compare' for item in app.button) == 3
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=90,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_monte_carlo_compare_view_shows_run_identifiers_and_seeds(tmp_path):
     script = f"""
 from streamlit.testing.v1 import AppTest
