@@ -75,6 +75,32 @@ def test_explicit_childcare_switches_to_school_without_double_counting():
     assert child_values[12:] == [200] * 12
 
 
+def test_explicit_childcare_includes_other_child_costs_before_and_after_school():
+    result = run_simulation(family_config(
+        years=2,
+        dependents=[DependentConfig(
+            "Child", monthly_cost=100, age=5, school_start_age=6,
+            school_monthly_cost=200, childcare_monthly_cost=500,
+        )],
+    ))
+
+    child_values = result[2]["expense_values"]["Child (child)"]
+    assert child_values[:12] == [600] * 12
+    assert child_values[12:] == [300] * 12
+
+
+def test_explicit_childcare_remains_when_school_transition_is_disabled():
+    result = run_simulation(family_config(
+        years=1,
+        dependents=[DependentConfig(
+            "Child", monthly_cost=100, age=5, school_start_age=None,
+            school_monthly_cost=200, childcare_monthly_cost=500,
+        )],
+    ))
+
+    assert result[2]["expense_values"]["Child (child)"] == [600] * 12
+
+
 def test_disabled_curveball_matches_baseline_and_is_audited_as_off():
     baseline = family_config(
         years=1,

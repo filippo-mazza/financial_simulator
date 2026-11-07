@@ -884,12 +884,11 @@ def build_components(config: SimulationConfig):
     # A dependent is a recurring cost in the model. Keeping this explicit makes
     # it easy to evolve into age-based childcare/education rules later.
     for dependent in config.dependents:
-        if (dependent.childcare_monthly_cost is not None
-                and dependent.school_start_age is not None):
+        if dependent.childcare_monthly_cost is not None:
             expenses.append(ChildcareExpense(
                 f"{dependent.name} (child)", dependent.childcare_monthly_cost,
                 dependent.school_monthly_cost, dependent.age,
-                dependent.school_start_age,
+                dependent.school_start_age, dependent.monthly_cost,
             ))
         else:
             expenses.append(AgeBasedExpense(
@@ -2061,6 +2060,11 @@ def main():
         )
         for item, dependent in zip(st.session_state.dependents, imported.dependents):
             item["childcare_monthly_cost"] = dependent.childcare_monthly_cost
+        st.session_state.curveballs = [
+            {**asdict(item), "probability": item.probability * 100,
+             "_id": uuid.uuid4().hex}
+            for item in imported.curveballs
+        ]
         st.session_state.active_card = None
         st.session_state.pop("simulation_result", None)
         if run_after_load:
@@ -2747,7 +2751,7 @@ def main():
             with st.container(border=True):
                 if not card_is_open("dependent", item):
                     st.caption(
-                        f"age {item.get('age', 0)} · childcare ${item.get('childcare_monthly_cost', 0):,.0f}/month"
+                        f"age {item.get('age', 0)} · childcare ${item.get('childcare_monthly_cost') or item.get('monthly_cost', 0):,.0f}/month"
                     )
                     continue
                 item["name"] = st.text_input(
@@ -3498,7 +3502,7 @@ def main():
              if item.get("childcare_monthly_cost") is not None else None),
         ) for item in st.session_state.dependents],
         curveballs=[CurveballConfig(
-            item["name"], bool(item["enabled"]), float(item["probability"]),
+            item["name"], bool(item["enabled"]), float(item["probability"]) / 100,
             int(item["start_month_min"]), int(item["start_month_max"]),
             int(item["duration_months"]), item.get("affected_income_name"),
             float(item["income_reduction_pct"]), int(item["recovery_months"]),
