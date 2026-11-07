@@ -50,6 +50,25 @@ def test_curveballs_panel_exposes_independent_event_controls(monkeypatch, tmp_pa
     assert any(item.label == "Recovery period (months)" for item in app.number_input)
 
 
+def test_new_expense_is_inserted_at_top_of_expense_list(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+    expenses = _expander(app, "sidebar_expenses")
+    next(item for item in expenses.button if item.label == "＋ Add expense").click().run(
+        timeout=30
+    )
+
+    assert not app.exception
+    expense_buttons = [
+        item.label for item in _expander(app, "sidebar_expenses").button
+        if item.label.startswith(("▸ ", "▾ "))
+    ]
+    assert expense_buttons[0].endswith("Expense 2")
+    assert expense_buttons[1].endswith("Living expenses")
+
+
 def test_streamlit_minimum_supports_persistent_keyed_expanders():
     assert "streamlit>=1.56,<2" in REQUIREMENTS_PATH.read_text()
 
