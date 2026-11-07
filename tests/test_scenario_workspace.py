@@ -12,6 +12,7 @@ from app import (
     comparison_cash_flow_rows,
     comparison_explanation,
     build_export_filename,
+    build_sensitivity_parameters,
     create_scenario_workspace_export,
     create_simulation_export,
     deterministic_ab_suggestions,
@@ -19,10 +20,11 @@ from app import (
     read_simulation_export,
     paired_delta_quantiles,
     run_paired_scenario_comparison,
+    run_sensitivity_analysis,
     run_simulation,
     scenario_input_differences,
 )
-from property_purchase import PropertyPurchase
+from property_purchase import AutomaticPurchasePolicy, PropertyPurchase
 from scenario_workspace import (
     ALTERNATIVE_ID,
     BASELINE_ID,
@@ -293,6 +295,61 @@ def test_comparison_explanation_preserves_removed_item_identity_after_shift():
     assert "Side job" not in explanation.split("The compared change(s) are ", 1)[1].split(
         ". The largest", 1
     )[0]
+
+
+def test_sensitivity_analysis_ranks_paired_variations_without_mutating_config():
+    config = _config()
+    before = config.initial_cash
+
+    result = run_sensitivity_analysis(config, 2)
+
+    assert config.initial_cash == before
+    assert result["simulation_count"] == 2
+    assert result["rows"]
+    assert result["rows"][0]["Impact"] >= result["rows"][-1]["Impact"]
+    assert all("Low 10th–90th" in row for row in result["rows"])
+
+
+def test_sensitivity_parameters_skip_zero_values_and_bound_rates():
+    config = SimulationConfig(
+        initial_cash=0, investments=[], incomes=[], expenses=[], loans=[],
+    )
+
+    parameters = build_sensitivity_parameters(config)
+
+    assert parameters == []
+
+
+def test_sensitivity_variants_replace_frozen_purchase_templates():
+    config = _config()
+    config.property_purchase = AutomaticPurchasePolicy(
+        PropertyPurchase(100_000, 20, mortgage_interest_rate=4), 0, 0,
+    )
+
+    parameters = build_sensitivity_parameters(config, limit=100)
+
+    mortgage = next(item for item in parameters if item.key == "mortgage_rate")
+    assert mortgage.low_config.property_purchase.purchase.mortgage_interest_rate == 3
+    assert mortgage.high_config.property_purchase.purchase.mortgage_interest_rate == 5
+    assert config.property_purchase.purchase.mortgage_interest_rate == 4
+
+
+def test_shortfall_sensitivity_counts_insolvent_trajectories():
+    config = SimulationConfig(
+        years=1, initial_cash=100, yearly_fee=0,
+        investments=[],
+        incomes=[IncomeConfig("Salary", "salary", 1_000, 0)],
+        expenses=[ExpenseConfig("Living", "housing", 690)],
+        loans=[],
+    )
+
+    result = run_sensitivity_analysis(
+        config, 2, metric="cash_shortfall_probability",
+    )
+
+    assert result["rows"]
+    income_row = next(row for row in result["rows"] if "income" in row["Parameter"])
+    assert income_row["Low"] == 1.0
 
 
 def test_comparison_warns_when_bonus_changes_draws():
