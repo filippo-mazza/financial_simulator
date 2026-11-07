@@ -2112,6 +2112,30 @@ def main():
         st.session_state.workspace_import_counter += 1
         st.session_state.workspace_success_notice = "A/B scenario workspace imported."
 
+    def import_single_scenario():
+        """Import parameters from a widget callback before the next widgets render."""
+        uploaded = st.session_state.get(
+            "scenario_import_file_"
+            f"{st.session_state.get('import_uploader_counter', 0)}"
+        )
+        if uploaded is None:
+            return
+        try:
+            imported, import_warnings = read_simulation_export(
+                uploaded.getvalue(), include_warnings=True,
+            )
+        except ValueError as error:
+            st.session_state.import_error = str(error)
+            return
+        import_config(imported)
+        st.session_state.import_warnings = import_warnings
+        st.session_state.import_uploader_counter = (
+            st.session_state.get("import_uploader_counter", 0) + 1
+        )
+        st.session_state.import_success_notice = (
+            f"Scenario imported from {uploaded.name}."
+        )
+
     def card_is_open(collection, item):
         active = st.session_state.get("active_card")
         card_id = f"{collection}:{item_key(item)}"
@@ -3508,26 +3532,14 @@ def main():
             import_notice = st.session_state.pop("import_success_notice", None)
             if import_notice:
                 st.success(import_notice)
-            if st.button(
+            import_error = st.session_state.pop("import_error", None)
+            if import_error:
+                st.error(import_error)
+            st.button(
                 "Import parameters", disabled=uploaded_export is None,
                 use_container_width=True,
-            ):
-                try:
-                    imported, import_warnings = read_simulation_export(
-                        uploaded_export.getvalue(), include_warnings=True,
-                    )
-                    import_config(imported)
-                    st.session_state.import_warnings = import_warnings
-                except ValueError as error:
-                    st.error(str(error))
-                else:
-                    st.session_state.import_uploader_counter = (
-                        st.session_state.get("import_uploader_counter", 0) + 1
-                    )
-                    st.session_state.import_success_notice = (
-                        f"Scenario imported from {uploaded_export.name}."
-                    )
-                    st.rerun()
+                on_click=import_single_scenario,
+            )
 
             single_export_placeholder = st.empty()
             single_export_placeholder.caption(
