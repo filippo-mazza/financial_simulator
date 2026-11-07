@@ -2449,6 +2449,8 @@ def main():
             "purchase_cadastral_income_input", "purchase_assessed_value_input",
         ):
             st.session_state.pop(key, None)
+        for preset in PREDEFINED_CURVEBALLS:
+            st.session_state.pop(f"curveball_preset_{preset['key']}", None)
         st.session_state.selected_rent_expense = imported.selected_rent_expense
         for key in list(st.session_state):
             if key.startswith("assumption_"):
@@ -3241,6 +3243,9 @@ def main():
         predefined_names = {preset["name"] for preset in PREDEFINED_CURVEBALLS}
         for preset in PREDEFINED_CURVEBALLS:
             existing = configured.get(preset["name"])
+            if existing is not None:
+                existing["start_month_min"] = 1
+                existing["start_month_max"] = max_month
             selected = st.checkbox(
                 preset["name"], value=bool(existing and existing.get("enabled")),
                 key=f"curveball_preset_{preset['key']}",

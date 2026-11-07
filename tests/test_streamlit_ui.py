@@ -54,6 +54,37 @@ def test_curveballs_panel_exposes_predefined_event_checkboxes(monkeypatch, tmp_p
     assert app.session_state["curveballs"][0]["enabled"] is True
 
 
+def test_curveball_preset_state_is_isolated_between_ab_variants(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+    app.button(key="create_scenario_workspace").click().run(timeout=30)
+    app.radio(key="scenario_variant_selector").set_value("alternative").run(timeout=30)
+    _expander(app, "sidebar_curveballs").checkbox(
+        key="curveball_preset_temporary_job_loss"
+    ).set_value(True).run(timeout=30)
+    app.radio(key="scenario_variant_selector").set_value("baseline").run(timeout=30)
+
+    assert not app.exception
+    assert app.session_state["curveballs"] == []
+    assert app.checkbox(key="curveball_preset_temporary_job_loss").value is False
+
+
+def test_curveball_preset_range_tracks_shorter_horizon(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+    _expander(app, "sidebar_curveballs").checkbox(
+        key="curveball_preset_temporary_job_loss"
+    ).set_value(True).run(timeout=30)
+    app.slider(key="scenario_years").set_value(1).run(timeout=30)
+
+    assert not app.exception
+    assert app.session_state["curveballs"][0]["start_month_max"] == 12
+
+
 def test_streamlit_minimum_supports_persistent_keyed_expanders():
     assert "streamlit>=1.56,<2" in REQUIREMENTS_PATH.read_text()
 
