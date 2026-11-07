@@ -206,6 +206,21 @@ def test_ab_workspace_keeps_baseline_and_alternative_inputs_isolated(
     assert "simulation_result" not in app.session_state
 
 
+def test_add_scenario_c_chooses_unused_default_name(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+    app.button(key="create_scenario_workspace").click().run(timeout=30)
+    app.text_input(key="scenario_alternative_name").set_value(
+        "Alternative C",
+    ).run(timeout=30)
+    app.button(key="add_tertiary_scenario").click().run(timeout=30)
+
+    assert not app.exception
+    assert app.text_input(key="scenario_tertiary_name").value == "Alternative C (2)"
+
+
 def test_ab_workspace_restores_each_scenario_rent_selection(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
@@ -299,6 +314,36 @@ app.button(key='create_scenario_workspace').click().run(timeout=30)
 next(item for item in app.button if item.label == '⇄ Compare A/B').click().run(timeout=30)
 assert not app.exception
 assert any('comparison-results' in item.value for item in app.markdown)
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_abc_sensitivity_expander_runs_and_keeps_existing_analysis(tmp_path):
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+app.button(key='create_scenario_workspace').click().run(timeout=30)
+app.button(key='add_tertiary_scenario').click().run(timeout=30)
+next(item for item in app.number_input if item.label == 'Number of simulations').set_value(1).run(timeout=30)
+next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=30)
+assert any(item.key == 'sensitivity_metric' for item in app.selectbox)
+assert any(item.key == 'run_sensitivity_analysis' for item in app.button)
+assert any(item.key == 'abc_sensitivity_panel' for item in app.expander)
+next(item for item in app.button if item.key == 'run_abc_sensitivity_analysis').click().run(timeout=30)
+assert not app.exception
+results = next(item.value for item in app.dataframe if 'Scenario' in item.value.columns)
+assert 'Saved horizon (years)' in results.columns
+assert 'Saved seed' in results.columns
+assert 'Applied horizon (years)' in results.columns
+assert 'Applied seed' in results.columns
+assert any("All runs use Baseline A's" in item.value and "+ run index" in item.value for item in app.caption)
 """
     environment = dict(os.environ)
     environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")

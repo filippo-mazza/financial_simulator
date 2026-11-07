@@ -125,9 +125,15 @@ named **Baseline A** and **Alternative B** configurations. Select either name to
 edit it with the existing sidebar; switching first saves the visible inputs and
 then loads an independent defensive copy, while clearing the previous scenario's
 result. Resetting B copies the current saved A inputs again. Under
-**A/B workspace JSON** in the sidebar, **Export A/B workspace JSON** saves both
-names and input configurations without results, alongside the single-scenario result export
-rather than replacing it.
+**A/B workspace JSON** in the sidebar, **Export A/B workspace JSON** saves the
+named input configurations without results, alongside the single-scenario result
+export rather than replacing it.
+
+Use **Add scenario C** to create and edit a third independent option. After a
+single-scenario run, the separate **A/B/C scenario sensitivity** expander compares
+the selected outcome across all three saved configurations; this is useful for
+testing structural changes such as job-loss events or a property purchase. Existing
+two-scenario workspaces and the one-factor **Sensitivity analysis** remain available.
 
 With a workspace active, **Compare A/B** runs both saved configurations over
 Baseline A's horizon with the same trajectory count and effective seeds. It

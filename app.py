@@ -41,6 +41,7 @@ from loan import Loan
 from scenario_workspace import (
     ALTERNATIVE_ID,
     BASELINE_ID,
+    TERTIARY_ID,
     ScenarioVariant,
     ScenarioWorkspace,
 )
@@ -815,6 +816,54 @@ def run_sensitivity_analysis(config, simulation_count, metric="final_net_worth")
         "baseline": _sensitivity_summary(baseline_values),
         "rows": rows,
         "parameter_count": len(rows),
+    }
+
+
+def run_abc_scenario_sensitivity(workspace, simulation_count, metric="final_net_worth"):
+    """Compare the modeled outcomes of named A/B/C scenarios."""
+    if not isinstance(workspace, ScenarioWorkspace):
+        raise ValueError("Create an A/B/C scenario workspace before comparing")
+    variant_ids = (BASELINE_ID, ALTERNATIVE_ID, TERTIARY_ID)
+    if any(variant_id not in {item.id for item in workspace.variants}
+           for variant_id in variant_ids):
+        raise ValueError("Add scenario C to the workspace before comparing A/B/C")
+    if metric not in SENSITIVITY_METRICS:
+        raise ValueError(f"Unsupported sensitivity metric: {metric}")
+    if not 1 <= simulation_count <= MAX_SENSITIVITY_SIMULATIONS:
+        raise ValueError(
+            f"Sensitivity simulation count must be between 1 and {MAX_SENSITIVITY_SIMULATIONS}"
+        )
+
+    baseline = workspace.config_for(BASELINE_ID)
+    rows = []
+    for variant_id in variant_ids:
+        variant = workspace.variant(variant_id)
+        saved_config = variant.config
+        config = replace(
+            saved_config, years=baseline.years, seed=baseline.seed,
+        )
+        summary = _sensitivity_summary(_sensitivity_values_for_config(
+            config, simulation_count, metric,
+        ))
+        rows.append({
+            "Scenario": variant.name,
+            "Mean": summary["mean"],
+            "Saved horizon (years)": saved_config.years,
+            "Saved seed": saved_config.seed,
+            "Applied horizon (years)": baseline.years,
+            "Applied seed": baseline.seed,
+            "10th–90th": (
+                f"{summary['p10']:.2f}–{summary['p90']:.2f}"
+                if summary["mean"] is not None else "n/a"
+            ),
+        })
+    return {
+        "metric": metric,
+        "metric_label": SENSITIVITY_METRICS[metric],
+        "simulation_count": simulation_count,
+        "effective_horizon_years": baseline.years,
+        "effective_seed": baseline.seed,
+        "rows": rows,
     }
 
 
@@ -1976,7 +2025,7 @@ def create_scenario_workspace_export(workspace, exported_at=None):
 
 
 def read_scenario_workspace_export(data):
-    """Validate and restore the additive A/B workspace format."""
+    """Validate and restore the additive A/B or A/B/C workspace format."""
     try:
         if isinstance(data, bytes):
             data = data.decode("utf-8")
@@ -1989,8 +2038,8 @@ def read_scenario_workspace_export(data):
     if document.get("schema_version") != SCENARIO_WORKSPACE_EXPORT_VERSION:
         raise ValueError("This scenario workspace version is not supported.")
     variants = document.get("variants")
-    if not isinstance(variants, list) or len(variants) != 2:
-        raise ValueError("A scenario workspace must contain exactly two variants.")
+    if not isinstance(variants, list) or len(variants) not in (2, 3):
+        raise ValueError("A scenario workspace must contain two or three variants.")
     restored = []
     for item in variants:
         if not isinstance(item, dict) or not isinstance(item.get("scenario"), dict):
@@ -2000,8 +2049,13 @@ def read_scenario_workspace_export(data):
             restored.append(ScenarioVariant(item.get("id"), item.get("name"), config))
         except (TypeError, ValueError) as error:
             raise ValueError(f"A scenario workspace variant is invalid: {error}") from error
-    if {item.id for item in restored} != {BASELINE_ID, ALTERNATIVE_ID}:
-        raise ValueError("The workspace must contain Baseline A and Alternative B.")
+    ids = {item.id for item in restored}
+    if (not {BASELINE_ID, ALTERNATIVE_ID}.issubset(ids)
+            or ids - {BASELINE_ID, ALTERNATIVE_ID, TERTIARY_ID}):
+        raise ValueError(
+            "The workspace must contain Baseline A and Alternative B, "
+            "with optional scenario C."
+        )
     try:
         return ScenarioWorkspace(restored, document.get("active_variant"))
     except ValueError as error:
@@ -2534,6 +2588,26 @@ def main():
         st.session_state.pop("simulation_result", None)
         st.session_state.pop("scenario_comparison_result", None)
 
+    def add_tertiary_scenario():
+        workspace = st.session_state.get("scenario_workspace")
+        if not isinstance(workspace, ScenarioWorkspace):
+            return
+        existing_names = {variant.name for variant in workspace.variants}
+        name = "Alternative C"
+        suffix = 2
+        while name in existing_names:
+            name = f"Alternative C ({suffix})"
+            suffix += 1
+        workspace = workspace.add_variant(ScenarioVariant(
+            TERTIARY_ID, name, workspace.config_for(BASELINE_ID),
+        )).activate(TERTIARY_ID)
+        st.session_state.scenario_workspace = workspace
+        for key in ("scenario_tertiary_name", "scenario_variant_selector"):
+            st.session_state.pop(key, None)
+        import_config(workspace.config_for(TERTIARY_ID), run_after_load=False)
+        st.session_state.pop("simulation_result", None)
+        st.session_state.pop("scenario_comparison_result", None)
+
     def import_scenario_workspace():
         uploaded = st.session_state.get(
             "scenario_workspace_file_"
@@ -2549,13 +2623,14 @@ def main():
         st.session_state.scenario_workspace = imported_workspace
         for key in (
             "scenario_baseline_name", "scenario_alternative_name",
+            "scenario_tertiary_name",
             "scenario_variant_selector",
         ):
             st.session_state.pop(key, None)
         import_config(imported_workspace.active_variant.config, run_after_load=False)
         st.session_state.pop("scenario_comparison_result", None)
         st.session_state.workspace_import_counter += 1
-        st.session_state.workspace_success_notice = "A/B scenario workspace imported."
+        st.session_state.workspace_success_notice = "Scenario workspace imported."
 
     def import_single_scenario():
         """Import parameters from a widget callback before the next widgets render."""
@@ -4165,11 +4240,27 @@ def main():
                         workspace = workspace.rename(BASELINE_ID, baseline_name)
                     if alternative_name != workspace.variant(ALTERNATIVE_ID).name:
                         workspace = workspace.rename(ALTERNATIVE_ID, alternative_name)
+                    if TERTIARY_ID in {item.id for item in workspace.variants}:
+                        tertiary_name = st.text_input(
+                            "Scenario C name",
+                            value=workspace.variant(TERTIARY_ID).name,
+                            key="scenario_tertiary_name",
+                        )
+                        if tertiary_name != workspace.variant(TERTIARY_ID).name:
+                            workspace = workspace.rename(TERTIARY_ID, tertiary_name)
                 except ValueError as error:
                     st.error(str(error))
                 st.session_state.scenario_workspace = workspace
 
                 variant_ids = [BASELINE_ID, ALTERNATIVE_ID]
+                if TERTIARY_ID in {item.id for item in workspace.variants}:
+                    variant_ids.append(TERTIARY_ID)
+                else:
+                    st.button(
+                        "＋ Add scenario C",
+                        key="add_tertiary_scenario",
+                        on_click=add_tertiary_scenario,
+                    )
                 st.radio(
                     "Scenario to edit",
                     variant_ids,
@@ -4210,7 +4301,7 @@ def main():
                     mime="application/json",
                     use_container_width=True,
                     help=(
-                        "Exports both named input configurations without simulation results."
+                        "Exports all saved named input configurations without simulation results."
                     ),
                 )
                 st.caption(
@@ -4529,6 +4620,7 @@ def main():
                 else:
                     for key in (
                         "scenario_baseline_name", "scenario_alternative_name",
+                        "scenario_tertiary_name",
                         "scenario_variant_selector",
                     ):
                         st.session_state.pop(key, None)
@@ -4676,6 +4768,7 @@ def main():
                         ),
                         y=alt.Y(
                             "Parameter:N", sort=parameter_order, title=None,
+                            axis=alt.Axis(labelLimit=500, labelOverlap=False),
                         ),
                         color=alt.Color("Variant:N", title="Variation"),
                         tooltip=[
@@ -4692,6 +4785,7 @@ def main():
                             (change_chart + zero_rule).properties(
                                 height=max(220, 28 * len(display_rows)),
                                 title="Sensitivity tornado view (change from baseline)",
+                                padding={"left": 12, "right": 12, "top": 8, "bottom": 8},
                             ),
                             use_container_width=True, key="sensitivity_tornado",
                         )
@@ -4702,6 +4796,113 @@ def main():
                         "variant; 10th–90th ranges are descriptive sample intervals, not "
                         "confidence or tail-risk estimates."
                     )
+
+    workspace = st.session_state.get("scenario_workspace")
+    if (isinstance(workspace, ScenarioWorkspace)
+            and TERTIARY_ID in {item.id for item in workspace.variants}):
+        with st.expander("A/B/C scenario sensitivity", key="abc_sensitivity_panel"):
+            st.caption(
+                "Compare three saved scenario options, such as a job-loss "
+                "assumption or a property purchase. The existing one-factor "
+                "sensitivity analysis above remains available separately."
+            )
+            abc_metric = st.selectbox(
+                "A/B/C outcome to compare",
+                options=list(SENSITIVITY_METRICS),
+                format_func=SENSITIVITY_METRICS.get,
+                key="abc_sensitivity_metric",
+            )
+            abc_runs = st.number_input(
+                "Simulations per A/B/C scenario", min_value=1,
+                max_value=MAX_SENSITIVITY_SIMULATIONS,
+                value=min(5, int(simulation_count)), step=1,
+                key="abc_sensitivity_simulation_count",
+            )
+            abc_fingerprint = json.dumps({
+                "simulation_count": int(abc_runs),
+                "metric": abc_metric,
+                "variants": [
+                    {
+                        "id": variant.id,
+                        "name": variant.name,
+                        "config": asdict(variant.config),
+                    }
+                    for variant in workspace.variants
+                    if variant.id in (
+                        BASELINE_ID, ALTERNATIVE_ID, TERTIARY_ID,
+                    )
+                ],
+            }, sort_keys=True)
+            if st.button(
+                "Run A/B/C scenario sensitivity",
+                key="run_abc_sensitivity_analysis",
+            ):
+                try:
+                    with st.spinner("Running A/B/C scenario sensitivity..."):
+                        abc_result = run_abc_scenario_sensitivity(
+                            workspace, int(abc_runs), abc_metric,
+                        )
+                except (ValueError, TypeError, KeyError,
+                        InsufficientFundsException) as error:
+                    st.session_state.pop("abc_sensitivity_result", None)
+                    st.error(f"A/B/C sensitivity could not run: {error}")
+                else:
+                    st.session_state.abc_sensitivity_result = {
+                        "fingerprint": abc_fingerprint,
+                        "result": abc_result,
+                    }
+
+            stored_abc = st.session_state.get("abc_sensitivity_result")
+            if stored_abc is not None:
+                if stored_abc["fingerprint"] != abc_fingerprint:
+                    st.warning(
+                        "A/B/C inputs changed after this analysis. Run it again "
+                        "to refresh the results."
+                    )
+                else:
+                    abc_result = stored_abc["result"]
+                    valid_rows = [
+                        row for row in abc_result["rows"]
+                        if row["Mean"] is not None
+                    ]
+                    if not valid_rows:
+                        st.info(
+                            "The selected outcome is unavailable for all three scenarios."
+                        )
+                    else:
+                        st.dataframe(
+                            [
+                                {
+                                    "Scenario": row["Scenario"],
+                                    abc_result["metric_label"]: (
+                                        _format_sensitivity_metric(
+                                            abc_result["metric"], row["Mean"],
+                                        )
+                                    ),
+                                    "Saved horizon (years)": row[
+                                        "Saved horizon (years)"
+                                    ],
+                                    "Saved seed": row["Saved seed"],
+                                    "Applied horizon (years)": row[
+                                        "Applied horizon (years)"
+                                    ],
+                                    "Applied seed": row["Applied seed"],
+                                    "10th–90th": row["10th–90th"],
+                                }
+                                for row in valid_rows
+                            ],
+                            hide_index=True, use_container_width=True,
+                        )
+                        st.caption(
+                            f"{abc_result['simulation_count']} simulation(s) per "
+                            f"scenario. All runs use Baseline A's "
+                            f"{abc_result['effective_horizon_years']}-year horizon "
+                            f"and seed {abc_result['effective_seed']} + run index. "
+                            "Saved and applied settings are shown for each scenario. "
+                            "These are modeled scenario outcomes, not "
+                            "causal attribution; trajectory shocks may differ when "
+                            "scenario structures change."
+                        )
 
     st.subheader("Monte Carlo analysis")
     view_mode = st.radio(
