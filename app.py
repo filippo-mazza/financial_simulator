@@ -41,6 +41,7 @@ from loan import Loan
 from scenario_workspace import (
     ALTERNATIVE_ID,
     BASELINE_ID,
+    TERTIARY_ID,
     ScenarioVariant,
     ScenarioWorkspace,
 )
@@ -815,6 +816,54 @@ def run_sensitivity_analysis(config, simulation_count, metric="final_net_worth")
         "baseline": _sensitivity_summary(baseline_values),
         "rows": rows,
         "parameter_count": len(rows),
+    }
+
+
+def run_abc_scenario_sensitivity(workspace, simulation_count, metric="final_net_worth"):
+    """Compare the modeled outcomes of named A/B/C scenarios."""
+    if not isinstance(workspace, ScenarioWorkspace):
+        raise ValueError("Create an A/B/C scenario workspace before comparing")
+    variant_ids = (BASELINE_ID, ALTERNATIVE_ID, TERTIARY_ID)
+    if any(variant_id not in {item.id for item in workspace.variants}
+           for variant_id in variant_ids):
+        raise ValueError("Add scenario C to the workspace before comparing A/B/C")
+    if metric not in SENSITIVITY_METRICS:
+        raise ValueError(f"Unsupported sensitivity metric: {metric}")
+    if not 1 <= simulation_count <= MAX_SENSITIVITY_SIMULATIONS:
+        raise ValueError(
+            f"Sensitivity simulation count must be between 1 and {MAX_SENSITIVITY_SIMULATIONS}"
+        )
+
+    baseline = workspace.config_for(BASELINE_ID)
+    rows = []
+    for variant_id in variant_ids:
+        variant = workspace.variant(variant_id)
+        saved_config = variant.config
+        config = replace(
+            saved_config, years=baseline.years, seed=baseline.seed,
+        )
+        summary = _sensitivity_summary(_sensitivity_values_for_config(
+            config, simulation_count, metric,
+        ))
+        rows.append({
+            "Scenario": variant.name,
+            "Mean": summary["mean"],
+            "Saved horizon (years)": saved_config.years,
+            "Saved seed": saved_config.seed,
+            "Applied horizon (years)": baseline.years,
+            "Applied seed": baseline.seed,
+            "10th–90th": (
+                f"{summary['p10']:.2f}–{summary['p90']:.2f}"
+                if summary["mean"] is not None else "n/a"
+            ),
+        })
+    return {
+        "metric": metric,
+        "metric_label": SENSITIVITY_METRICS[metric],
+        "simulation_count": simulation_count,
+        "effective_horizon_years": baseline.years,
+        "effective_seed": baseline.seed,
+        "rows": rows,
     }
 
 
@@ -1976,7 +2025,7 @@ def create_scenario_workspace_export(workspace, exported_at=None):
 
 
 def read_scenario_workspace_export(data):
-    """Validate and restore the additive A/B workspace format."""
+    """Validate and restore the additive A/B or A/B/C workspace format."""
     try:
         if isinstance(data, bytes):
             data = data.decode("utf-8")
@@ -1989,8 +2038,8 @@ def read_scenario_workspace_export(data):
     if document.get("schema_version") != SCENARIO_WORKSPACE_EXPORT_VERSION:
         raise ValueError("This scenario workspace version is not supported.")
     variants = document.get("variants")
-    if not isinstance(variants, list) or len(variants) != 2:
-        raise ValueError("A scenario workspace must contain exactly two variants.")
+    if not isinstance(variants, list) or len(variants) not in (2, 3):
+        raise ValueError("A scenario workspace must contain two or three variants.")
     restored = []
     for item in variants:
         if not isinstance(item, dict) or not isinstance(item.get("scenario"), dict):
@@ -2000,8 +2049,13 @@ def read_scenario_workspace_export(data):
             restored.append(ScenarioVariant(item.get("id"), item.get("name"), config))
         except (TypeError, ValueError) as error:
             raise ValueError(f"A scenario workspace variant is invalid: {error}") from error
-    if {item.id for item in restored} != {BASELINE_ID, ALTERNATIVE_ID}:
-        raise ValueError("The workspace must contain Baseline A and Alternative B.")
+    ids = {item.id for item in restored}
+    if (not {BASELINE_ID, ALTERNATIVE_ID}.issubset(ids)
+            or ids - {BASELINE_ID, ALTERNATIVE_ID, TERTIARY_ID}):
+        raise ValueError(
+            "The workspace must contain Baseline A and Alternative B, "
+            "with optional scenario C."
+        )
     try:
         return ScenarioWorkspace(restored, document.get("active_variant"))
     except ValueError as error:
@@ -2199,6 +2253,7 @@ def main():
     st.title("📈 Financial Simulator")
     st.caption("Explore a simple, stochastic projection of cash, investments, income, expenses, and debt.")
     active_workspace = st.session_state.get("scenario_workspace")
+    welcome_placeholder = st.empty()
     if isinstance(active_workspace, ScenarioWorkspace):
         st.info(
             f"A/B workspace · editing **{active_workspace.active_variant.name}**. "
@@ -2313,6 +2368,15 @@ def main():
         legacy_card = st.session_state.pop("active_card")
         if legacy_card:
             st.session_state.expanded_cards.setdefault(legacy_card, True)
+
+    def item_context(item, collection, index):
+        """Return a stable, human-readable context for repeated UI controls."""
+        name = str(item.get("name", "")).strip()
+        return f"{collection.title()} {index + 1}" + (f" — {name}" if name else "")
+
+    def field_label(context, label):
+        """Prefix repeated field labels so browser agents can identify the target."""
+        return f"{context}: {label}"
 
     def configured_jurisdiction_profiles():
         return [
@@ -2559,6 +2623,26 @@ def main():
         st.session_state.pop("simulation_result", None)
         st.session_state.pop("scenario_comparison_result", None)
 
+    def add_tertiary_scenario():
+        workspace = st.session_state.get("scenario_workspace")
+        if not isinstance(workspace, ScenarioWorkspace):
+            return
+        existing_names = {variant.name for variant in workspace.variants}
+        name = "Alternative C"
+        suffix = 2
+        while name in existing_names:
+            name = f"Alternative C ({suffix})"
+            suffix += 1
+        workspace = workspace.add_variant(ScenarioVariant(
+            TERTIARY_ID, name, workspace.config_for(BASELINE_ID),
+        )).activate(TERTIARY_ID)
+        st.session_state.scenario_workspace = workspace
+        for key in ("scenario_tertiary_name", "scenario_variant_selector"):
+            st.session_state.pop(key, None)
+        import_config(workspace.config_for(TERTIARY_ID), run_after_load=False)
+        st.session_state.pop("simulation_result", None)
+        st.session_state.pop("scenario_comparison_result", None)
+
     def import_scenario_workspace():
         uploaded = st.session_state.get(
             "scenario_workspace_file_"
@@ -2574,13 +2658,14 @@ def main():
         st.session_state.scenario_workspace = imported_workspace
         for key in (
             "scenario_baseline_name", "scenario_alternative_name",
+            "scenario_tertiary_name",
             "scenario_variant_selector",
         ):
             st.session_state.pop(key, None)
         import_config(imported_workspace.active_variant.config, run_after_load=False)
         st.session_state.pop("scenario_comparison_result", None)
         st.session_state.workspace_import_counter += 1
-        st.session_state.workspace_success_notice = "A/B scenario workspace imported."
+        st.session_state.workspace_success_notice = "Scenario workspace imported."
 
     def import_single_scenario():
         """Import parameters from a widget callback before the next widgets render."""
@@ -2807,9 +2892,10 @@ def main():
             st.rerun()
         for index, profile in enumerate(st.session_state.jurisdiction_profiles):
             profile_key = profile["_id"]
+            profile_context = f"Jurisdiction profile {index + 1}"
             with st.container(border=True):
                 profile["name"] = st.text_input(
-                    "Profile name", profile["name"],
+                    field_label(profile_context, "Profile name"), profile["name"],
                     key=f"jurisdiction_name_{profile_key}",
                 )
                 if profile.get("profile_id"):
@@ -2836,7 +2922,7 @@ def main():
                     before = float(profile.get(field, 0.0))
                     basis = profile.get(basis_field, "user")
                     value = st.number_input(
-                        f"{label} · {_BASIS_LABELS[basis]}",
+                        field_label(profile_context, f"{label} · {_BASIS_LABELS[basis]}"),
                         min_value=0.0, max_value=max_value, value=before,
                         key=f"jurisdiction_{key}_{profile_key}",
                     )
@@ -2856,7 +2942,8 @@ def main():
                     )
                     if component["method"] == "fixed":
                         amount = st.number_input(
-                            "Fixed amount ($)", min_value=0.0, max_value=1e9,
+                            field_label(profile_context, f"{component['label']} — Fixed amount ($)"),
+                            min_value=0.0, max_value=1e9,
                             value=float(component["amount"]),
                             key=f"jurisdiction_component_amount_{ckey}",
                         )
@@ -2868,12 +2955,13 @@ def main():
                     if component.get("note"):
                         st.caption(component["note"])
                     use_override = st.checkbox(
-                        "Override with my own flat % of the tax base",
+                        field_label(profile_context, f"{component['label']} — Override with my own flat % of the tax base"),
                         value=overridden, key=f"jurisdiction_component_toggle_{ckey}",
                     )
                     if use_override:
                         component["override_percentage"] = st.number_input(
-                            "Own rate (% of base)", min_value=0.0, max_value=100.0,
+                            field_label(profile_context, f"{component['label']} — Own rate (% of base)"),
+                            min_value=0.0, max_value=100.0,
                             value=float(component.get("override_percentage") or 0.0),
                             key=f"jurisdiction_component_override_{ckey}",
                         )
@@ -2920,7 +3008,10 @@ def main():
                     "Rental operating costs (% of gross monthly rent)",
                     "rental_expense_percentage", "rental_expense_basis", "rental",
                 )
-                if st.button("Remove profile", key=f"remove_jurisdiction_{profile_key}"):
+                if st.button(
+                    f"Remove {profile_context}", key=f"remove_jurisdiction_{profile_key}",
+                    help="Remove this jurisdiction profile from the scenario.",
+                ):
                     remove_item(st.session_state.jurisdiction_profiles, index)
                     st.rerun()
 
@@ -2936,6 +3027,7 @@ def main():
         if st.button("＋ Add investment", use_container_width=True):
             add_investment(add_type)
         for index, item in enumerate(st.session_state.investments):
+            context = item_context(item, "investment", index)
             with st.container(border=True):
                 if not card_is_open("investment", item):
                     if item["investment_type"] == "real_estate":
@@ -2974,25 +3066,26 @@ def main():
                         )
                     continue
                 item["name"] = st.text_input(
-                    "Name", item["name"], key=f"investment_name_{item_key(item)}"
+                    field_label(context, "Name"), item["name"],
+                    key=f"investment_name_{item_key(item)}",
                 )
                 item["investment_type"] = st.selectbox(
-                    "Type", investment_types,
+                    field_label(context, "Investment type"), investment_types,
                     index=investment_types.index(item["investment_type"]),
                     key=f"investment_type_{item_key(item)}",
                 )
                 item["initial_amount"] = st.number_input(
                     (
-                        "Current full property value"
+                        field_label(context, "Current full property value ($)")
                         if item["investment_type"] == "real_estate"
-                        else "Initial amount"
+                        else field_label(context, "Initial amount ($)")
                     ),
                     min_value=0.0, value=float(item["initial_amount"]),
                     step=100.0, format="%.0f", key=f"investment_initial_{item_key(item)}",
                 )
                 if item["investment_type"] == "real_estate":
                     item["ownership_percentage"] = st.number_input(
-                        "Ownership share (%)", min_value=0.01, max_value=100.0,
+                        field_label(context, "Ownership share (%)"), min_value=0.01, max_value=100.0,
                         value=float(item.get("ownership_percentage", 100.0)),
                         step=1.0, key=f"investment_ownership_{item_key(item)}",
                         help=(
@@ -3008,7 +3101,7 @@ def main():
                         if item.get("linked_loan_name") in loan_options else None
                     )
                     item["linked_loan_name"] = st.selectbox(
-                        "Mortgage / loan linked to this property",
+                        field_label(context, "Mortgage / loan linked to this property"),
                         loan_options,
                         index=loan_options.index(current_loan),
                         format_func=lambda value: "No linked loan" if value is None else value,
@@ -3019,7 +3112,7 @@ def main():
                         ),
                     )
                     item["liability_share_percentage"] = st.number_input(
-                        "Your share of the linked loan (%)", min_value=0.01,
+                        field_label(context, "Your share of the linked loan (%)"), min_value=0.01,
                         max_value=100.0,
                         value=float(item.get("liability_share_percentage", 100.0)),
                         step=1.0, key=f"investment_liability_share_{item_key(item)}",
@@ -3038,7 +3131,7 @@ def main():
                         if item.get("rental_income_name") in rent_options else None
                     )
                     item["rental_income_name"] = st.selectbox(
-                        "Rental income linked to this property",
+                        field_label(context, "Rental income linked to this property"),
                         rent_options,
                         index=rent_options.index(current_rent),
                         format_func=lambda value: (
@@ -3062,7 +3155,7 @@ def main():
                         else None
                     )
                     item["jurisdiction_profile_name"] = st.selectbox(
-                        "Property jurisdiction estimate profile",
+                        field_label(context, "Property jurisdiction estimate profile"),
                         profile_options,
                         index=profile_options.index(current_profile),
                         format_func=lambda value: (
@@ -3087,14 +3180,14 @@ def main():
                         if selected is not None and selected.unsupported_cases:
                             st.warning(f"Not covered: {selected.unsupported_cases}")
                     item["monthly_expenses"] = st.number_input(
-                        "Additional fixed monthly property expenses (your share)",
+                        field_label(context, "Additional fixed monthly property expenses ($, your share)"),
                         min_value=0.0,
                         value=float(item["monthly_expenses"]), step=50.0, format="%.0f",
                         key=f"investment_expenses_{item_key(item)}",
                         help="Maintenance, insurance, management, and similar recurring costs.",
                     )
                     item["yearly_tax"] = st.number_input(
-                        "Additional fixed yearly property tax (your share)", min_value=0.0,
+                        field_label(context, "Additional fixed yearly property tax ($, your share)"), min_value=0.0,
                         value=float(item["yearly_tax"]), step=100.0, format="%.0f",
                         key=f"investment_tax_{item_key(item)}",
                     )
@@ -3110,13 +3203,13 @@ def main():
                     item["rental_income_name"] = None
                     item["jurisdiction_profile_name"] = None
                     item["monthly_contribution"] = st.number_input(
-                        "Monthly contribution", min_value=0.0,
+                        field_label(context, "Monthly contribution ($)"), min_value=0.0,
                         value=float(item["monthly_contribution"]), step=50.0,
                         format="%.0f", key=f"investment_contribution_{item_key(item)}",
                     )
                     if item["investment_type"] in AUTO_INVEST_TYPES:
                         item["auto_invest_enabled"] = st.checkbox(
-                            "Enable automatic cash-sweep contributions",
+                            field_label(context, "Enable automatic cash-sweep contributions"),
                             value=bool(item["auto_invest_enabled"]),
                             key=f"investment_auto_enabled_{item_key(item)}",
                             help=(
@@ -3125,21 +3218,21 @@ def main():
                             ),
                         )
                         item["auto_invest_min_cash"] = st.number_input(
-                            "Automatic contribution cash threshold", min_value=0.0,
+                            field_label(context, "Automatic contribution cash threshold ($)"), min_value=0.0,
                             value=float(item["auto_invest_min_cash"]), step=500.0,
                             format="%.0f", key=f"investment_auto_cash_{item_key(item)}",
                             disabled=not item["auto_invest_enabled"],
                             help="A sweep is considered only when cash is above this amount.",
                         )
                         item["auto_invest_percentage"] = st.number_input(
-                            "Automatic contribution (% of current cash)",
+                            field_label(context, "Automatic contribution (% of current cash)"),
                             min_value=0.1, max_value=100.0,
                             value=float(item["auto_invest_percentage"]), step=1.0,
                             key=f"investment_auto_pct_{item_key(item)}",
                             disabled=not item["auto_invest_enabled"],
                         )
                         item["auto_invest_max_per_year"] = st.number_input(
-                            "Maximum automatic contributions per year",
+                            field_label(context, "Maximum automatic contributions per year"),
                             min_value=1, max_value=12,
                             value=int(item["auto_invest_max_per_year"]), step=1,
                             key=f"investment_auto_max_{item_key(item)}",
@@ -3150,7 +3243,10 @@ def main():
                             "of cumulative net income. Each transaction has the modeled "
                             "$50 investment fee."
                         )
-                if st.button("Remove investment", key=f"remove_investment_{item_key(item)}"):
+                if st.button(
+                    f"Remove {context}", key=f"remove_investment_{item_key(item)}",
+                    help="Remove this investment from the scenario.",
+                ):
                     remove_item(st.session_state.investments, index)
                     st.rerun()
 
@@ -3162,30 +3258,39 @@ def main():
         if st.button("＋ Add income", use_container_width=True):
             add_income(income_to_add)
         for index, item in enumerate(st.session_state.incomes):
+            context = item_context(item, "income", index)
             with st.container(border=True):
                 if not card_is_open("income", item):
                     st.caption(f"{item['income_type']} · ${item['monthly_amount']:,.0f}/month")
                     continue
                 item["name"] = st.text_input(
-                    "Name", item["name"], key=f"income_name_{item_key(item)}"
+                    field_label(context, "Name"), item["name"],
+                    key=f"income_name_{item_key(item)}"
                 )
                 item["income_type"] = st.selectbox(
-                    "Type", income_types, index=income_types.index(item["income_type"]),
+                    field_label(context, "Income type"), income_types,
+                    index=income_types.index(item["income_type"]),
                     key=f"income_type_{item_key(item)}",
                 )
                 item["monthly_amount"] = st.number_input(
-                    "Monthly amount", min_value=0.0, value=float(item["monthly_amount"]),
+                    field_label(context, "Monthly amount ($)"), min_value=0.0,
+                    value=float(item["monthly_amount"]),
                     step=100.0, format="%.0f", key=f"income_amount_{item_key(item)}",
                 )
                 item["tax_rate"] = st.number_input(
-                    "Custom tax rate", 0.0, 100.0, value=float(item["tax_rate"]),
+                    field_label(context, "Custom tax rate (%)"), 0.0, 100.0,
+                    value=float(item["tax_rate"]),
                     key=f"income_tax_{item_key(item)}",
                 )
                 item["bonus_pct"] = st.number_input(
-                    "Bonus cap (%)", 0.0, 100.0, value=float(item["bonus_pct"]),
+                    field_label(context, "Bonus cap (%)"), 0.0, 100.0,
+                    value=float(item["bonus_pct"]),
                     key=f"income_bonus_{item_key(item)}",
                 )
-                if st.button("Remove income", key=f"remove_income_{item_key(item)}"):
+                if st.button(
+                    f"Remove {context}", key=f"remove_income_{item_key(item)}",
+                    help="Remove this income source from the scenario.",
+                ):
                     remove_item(st.session_state.incomes, index)
                     st.rerun()
 
@@ -3197,23 +3302,29 @@ def main():
         if st.button("＋ Add expense", use_container_width=True):
             add_expense()
         for index, item in enumerate(st.session_state.expenses):
+            context = item_context(item, "expense", index)
             with st.container(border=True):
                 if not card_is_open("expense", item):
                     st.caption(f"{item['expense_type']} · ${item['monthly_amount']:,.0f}/month")
                     continue
                 item["name"] = st.text_input(
-                    "Name", item["name"], key=f"expense_name_{item_key(item)}"
+                    field_label(context, "Name"), item["name"],
+                    key=f"expense_name_{item_key(item)}"
                 )
                 item["expense_type"] = st.selectbox(
-                    "Type", expense_types,
+                    field_label(context, "Expense type"), expense_types,
                     index=expense_types.index(item["expense_type"]),
                     key=f"expense_type_{item_key(item)}",
                 )
                 item["monthly_amount"] = st.number_input(
-                    "Monthly amount", min_value=0.0, value=float(item["monthly_amount"]),
+                    field_label(context, "Monthly amount ($)"), min_value=0.0,
+                    value=float(item["monthly_amount"]),
                     step=25.0, format="%.0f", key=f"expense_amount_{item_key(item)}",
                 )
-                if st.button("Remove expense", key=f"remove_expense_{item_key(item)}"):
+                if st.button(
+                    f"Remove {context}", key=f"remove_expense_{item_key(item)}",
+                    help="Remove this expense from the scenario.",
+                ):
                     remove_item(st.session_state.expenses, index)
                     st.rerun()
 
@@ -3236,6 +3347,7 @@ def main():
         if st.button("＋ Add loan", use_container_width=True):
             add_loan()
         for index, item in enumerate(st.session_state.loans):
+            context = item_context(item, "loan", index)
             with st.container(border=True):
                 if not card_is_open("loan", item):
                     st.caption(
@@ -3244,29 +3356,37 @@ def main():
                     )
                     continue
                 item["name"] = st.text_input(
-                    "Name", item["name"], key=f"loan_name_{item_key(item)}"
+                    field_label(context, "Name"), item["name"],
+                    key=f"loan_name_{item_key(item)}"
                 )
                 item["amount"] = st.number_input(
-                    "Amount", min_value=0.0, value=float(item["amount"]), step=1000.0,
+                    field_label(context, "Principal amount ($)"), min_value=0.0,
+                    value=float(item["amount"]), step=1000.0,
                     format="%.0f", key=f"loan_amount_{item_key(item)}",
                 )
                 item["interest_rate"] = st.number_input(
-                    "Interest rate (%)", min_value=0.0, value=float(item["interest_rate"]),
+                    field_label(context, "Interest rate (%)"), min_value=0.0,
+                    value=float(item["interest_rate"]),
                     step=0.1, key=f"loan_rate_{item_key(item)}",
                 )
                 item["duration_years"] = st.number_input(
-                    "Duration (years)", min_value=1, value=int(item["duration_years"]),
+                    field_label(context, "Duration (years)"), min_value=1,
+                    value=int(item["duration_years"]),
                     key=f"loan_duration_{item_key(item)}",
                 )
                 item["fixed_rate"] = st.checkbox(
-                    "Fixed rate", value=item["fixed_rate"],
+                    field_label(context, "Fixed rate"), value=item["fixed_rate"],
                     key=f"loan_fixed_{item_key(item)}",
                 )
                 item["already_paid"] = st.number_input(
-                    "Already paid", min_value=0.0, value=float(item["already_paid"]),
+                    field_label(context, "Already paid ($)"), min_value=0.0,
+                    value=float(item["already_paid"]),
                     step=100.0, format="%.0f", key=f"loan_paid_{item_key(item)}",
                 )
-                if st.button("Remove loan", key=f"remove_loan_{item_key(item)}"):
+                if st.button(
+                    f"Remove {context}", key=f"remove_loan_{item_key(item)}",
+                    help="Remove this loan from the scenario.",
+                ):
                     remove_item(st.session_state.loans, index)
                     st.rerun()
 
@@ -3275,6 +3395,7 @@ def main():
         if st.button("＋ Add daughter / child", use_container_width=True):
             add_dependent()
         for index, item in enumerate(st.session_state.dependents):
+            context = item_context(item, "child", index)
             with st.container(border=True):
                 if not card_is_open("dependent", item):
                     st.caption(
@@ -3282,14 +3403,16 @@ def main():
                     )
                     continue
                 item["name"] = st.text_input(
-                    "Name", item["name"], key=f"dependent_name_{item_key(item)}"
+                    field_label(context, "Name"), item["name"],
+                    key=f"dependent_name_{item_key(item)}"
                 )
                 item["age"] = st.number_input(
-                    "Current age", min_value=0, max_value=25,
+                    field_label(context, "Current age (years)"), min_value=0, max_value=25,
                     value=int(item.get("age", 0)), key=f"dependent_age_{item_key(item)}",
                 )
                 item["monthly_cost"] = st.number_input(
-                    "Other monthly child cost", min_value=0.0, value=float(item["monthly_cost"]),
+                    field_label(context, "Other monthly child cost ($)"), min_value=0.0,
+                    value=float(item["monthly_cost"]),
                     step=25.0, format="%.0f", key=f"dependent_cost_{item_key(item)}",
                 )
                 if item.get("childcare_monthly_cost") is None:
@@ -3299,7 +3422,8 @@ def main():
                     )
                 else:
                     item["childcare_monthly_cost"] = st.number_input(
-                        "Childcare monthly cost (until school)", min_value=0.0,
+                        field_label(context, "Childcare monthly cost until school ($)"),
+                        min_value=0.0,
                         value=float(item["childcare_monthly_cost"]), step=25.0,
                         format="%.0f", key=f"dependent_childcare_{item_key(item)}",
                         help=(
@@ -3308,19 +3432,22 @@ def main():
                         ),
                     )
                 automatic_costs = st.checkbox(
-                    "Add school cost from age 6*",
+                    field_label(context, "Add school cost from age 6*"),
                     value=item.get("school_start_age") is not None,
                     key=f"dependent_school_toggle_{item_key(item)}",
                 )
                 item["school_start_age"] = 6 if automatic_costs else None
                 item["school_monthly_cost"] = st.number_input(
-                    "School monthly cost*", min_value=0.0,
+                    field_label(context, "School monthly cost ($)*"), min_value=0.0,
                     value=float(item.get("school_monthly_cost", 250.0)), step=25.0,
                     format="%.0f", key=f"dependent_school_cost_{item_key(item)}",
                     disabled=not automatic_costs,
                 )
                 st.caption("* Illustrative assumption; adjust or disable for your situation.")
-                if st.button("Remove child", key=f"remove_dependent_{item_key(item)}"):
+                if st.button(
+                    f"Remove {context}", key=f"remove_dependent_{item_key(item)}",
+                    help="Remove this child from the scenario.",
+                ):
                     remove_item(st.session_state.dependents, index)
                     st.rerun()
 
@@ -3379,7 +3506,7 @@ def main():
                 )
                 if card_is_open("curveball", existing):
                     existing["probability"] = st.number_input(
-                        "Probability per trajectory (%)", min_value=0.0,
+                        f"{preset['name']} — Probability per trajectory (%)", min_value=0.0,
                         max_value=100.0, value=float(existing["probability"]),
                         step=5.0, key=f"curveball_probability_{preset['key']}",
                     )
@@ -3389,7 +3516,7 @@ def main():
                     target = existing.get("affected_income_name")
                     target_label = target if target in income_options else "All incomes"
                     selected_target = st.selectbox(
-                        "Affected income", income_options,
+                        f"{preset['name']} — Affected income", income_options,
                         index=income_options.index(target_label),
                         key=f"curveball_income_{preset['key']}",
                     )
@@ -3398,29 +3525,32 @@ def main():
                     )
                     start_left, start_right = st.columns(2)
                     existing["start_month_min"] = start_left.number_input(
-                        "Earliest start month", min_value=1, max_value=max_month,
+                        f"{preset['name']} — Earliest start month", min_value=1,
+                        max_value=max_month,
                         value=min(max_month, int(existing["start_month_min"])),
                         step=1, key=f"curveball_start_min_{preset['key']}",
                     )
                     existing["start_month_max"] = start_right.number_input(
-                        "Latest start month", min_value=1, max_value=max_month,
+                        f"{preset['name']} — Latest start month", min_value=1,
+                        max_value=max_month,
                         value=min(max_month, int(existing["start_month_max"])),
                         step=1, key=f"curveball_start_max_{preset['key']}",
                     )
                     if existing["start_month_max"] < existing["start_month_min"]:
                         existing["start_month_max"] = existing["start_month_min"]
                     existing["duration_months"] = st.number_input(
-                        "Income-reduction duration (months)", min_value=1,
+                        f"{preset['name']} — Income-reduction duration (months)", min_value=1,
                         value=int(existing["duration_months"]), step=1,
                         key=f"curveball_duration_{preset['key']}",
                     )
                     existing["income_reduction_pct"] = st.number_input(
-                        "Income reduction (%)", min_value=0.0, max_value=100.0,
+                        f"{preset['name']} — Income reduction (%)", min_value=0.0,
+                        max_value=100.0,
                         value=float(existing["income_reduction_pct"]), step=5.0,
                         key=f"curveball_reduction_{preset['key']}",
                     )
                     existing["recovery_months"] = st.number_input(
-                        "Recovery period (months)", min_value=0,
+                        f"{preset['name']} — Recovery period (months)", min_value=0,
                         value=int(existing["recovery_months"]), step=1,
                         key=f"curveball_recovery_{preset['key']}",
                     )
@@ -3997,6 +4127,30 @@ def main():
                 ),
             )
 
+    if (
+        not run_requested
+        and not comparison_requested
+        and st.session_state.get("simulation_result") is None
+        and st.session_state.get("scenario_comparison_result") is None
+        and active_workspace is None
+    ):
+        welcome_placeholder.info(
+            "**Start here**\n\n"
+            "- **Set up a scenario:** review or edit the starting cash, income, "
+            "expenses, investments, loans, and assumptions in the **Scenario** "
+            "controls in the left sidebar. Add optional details such as dependents, "
+            "a future property purchase, or unexpected income changes there too.\n"
+            "- **Run a projection:** choose the number of simulations and click "
+            "**Run simulations**. Each run models uncertain events; more runs make "
+            "the average smoother, but results are still estimates, not predictions.\n"
+            "- **Explore the results:** review the charts and balances, then select "
+            "a month to inspect its cash flows and loan balances. Change an input "
+            "and run again to see how the projection changes.\n"
+            "- **Compare or share:** use **Create Baseline A and Alternative B** "
+            "in the sidebar to compare two versions, or open **Scenario "
+            "import/export** to load or save JSON scenarios."
+        )
+
     purchase_config = None
     if st.session_state.purchase_enabled:
         purchase_template = PropertyPurchase(**st.session_state.purchase_fields)
@@ -4198,11 +4352,27 @@ def main():
                         workspace = workspace.rename(BASELINE_ID, baseline_name)
                     if alternative_name != workspace.variant(ALTERNATIVE_ID).name:
                         workspace = workspace.rename(ALTERNATIVE_ID, alternative_name)
+                    if TERTIARY_ID in {item.id for item in workspace.variants}:
+                        tertiary_name = st.text_input(
+                            "Scenario C name",
+                            value=workspace.variant(TERTIARY_ID).name,
+                            key="scenario_tertiary_name",
+                        )
+                        if tertiary_name != workspace.variant(TERTIARY_ID).name:
+                            workspace = workspace.rename(TERTIARY_ID, tertiary_name)
                 except ValueError as error:
                     st.error(str(error))
                 st.session_state.scenario_workspace = workspace
 
                 variant_ids = [BASELINE_ID, ALTERNATIVE_ID]
+                if TERTIARY_ID in {item.id for item in workspace.variants}:
+                    variant_ids.append(TERTIARY_ID)
+                else:
+                    st.button(
+                        "＋ Add scenario C",
+                        key="add_tertiary_scenario",
+                        on_click=add_tertiary_scenario,
+                    )
                 st.radio(
                     "Scenario to edit",
                     variant_ids,
@@ -4243,7 +4413,7 @@ def main():
                     mime="application/json",
                     use_container_width=True,
                     help=(
-                        "Exports both named input configurations without simulation results."
+                        "Exports all saved named input configurations without simulation results."
                     ),
                 )
                 st.caption(
@@ -4562,6 +4732,7 @@ def main():
                 else:
                     for key in (
                         "scenario_baseline_name", "scenario_alternative_name",
+                        "scenario_tertiary_name",
                         "scenario_variant_selector",
                     ):
                         st.session_state.pop(key, None)
@@ -4709,6 +4880,7 @@ def main():
                         ),
                         y=alt.Y(
                             "Parameter:N", sort=parameter_order, title=None,
+                            axis=alt.Axis(labelLimit=500, labelOverlap=False),
                         ),
                         color=alt.Color("Variant:N", title="Variation"),
                         tooltip=[
@@ -4725,6 +4897,7 @@ def main():
                             (change_chart + zero_rule).properties(
                                 height=max(220, 28 * len(display_rows)),
                                 title="Sensitivity tornado view (change from baseline)",
+                                padding={"left": 12, "right": 12, "top": 8, "bottom": 8},
                             ),
                             use_container_width=True, key="sensitivity_tornado",
                         )
@@ -4735,6 +4908,113 @@ def main():
                         "variant; 10th–90th ranges are descriptive sample intervals, not "
                         "confidence or tail-risk estimates."
                     )
+
+    workspace = st.session_state.get("scenario_workspace")
+    if (isinstance(workspace, ScenarioWorkspace)
+            and TERTIARY_ID in {item.id for item in workspace.variants}):
+        with st.expander("A/B/C scenario sensitivity", key="abc_sensitivity_panel"):
+            st.caption(
+                "Compare three saved scenario options, such as a job-loss "
+                "assumption or a property purchase. The existing one-factor "
+                "sensitivity analysis above remains available separately."
+            )
+            abc_metric = st.selectbox(
+                "A/B/C outcome to compare",
+                options=list(SENSITIVITY_METRICS),
+                format_func=SENSITIVITY_METRICS.get,
+                key="abc_sensitivity_metric",
+            )
+            abc_runs = st.number_input(
+                "Simulations per A/B/C scenario", min_value=1,
+                max_value=MAX_SENSITIVITY_SIMULATIONS,
+                value=min(5, int(simulation_count)), step=1,
+                key="abc_sensitivity_simulation_count",
+            )
+            abc_fingerprint = json.dumps({
+                "simulation_count": int(abc_runs),
+                "metric": abc_metric,
+                "variants": [
+                    {
+                        "id": variant.id,
+                        "name": variant.name,
+                        "config": asdict(variant.config),
+                    }
+                    for variant in workspace.variants
+                    if variant.id in (
+                        BASELINE_ID, ALTERNATIVE_ID, TERTIARY_ID,
+                    )
+                ],
+            }, sort_keys=True)
+            if st.button(
+                "Run A/B/C scenario sensitivity",
+                key="run_abc_sensitivity_analysis",
+            ):
+                try:
+                    with st.spinner("Running A/B/C scenario sensitivity..."):
+                        abc_result = run_abc_scenario_sensitivity(
+                            workspace, int(abc_runs), abc_metric,
+                        )
+                except (ValueError, TypeError, KeyError,
+                        InsufficientFundsException) as error:
+                    st.session_state.pop("abc_sensitivity_result", None)
+                    st.error(f"A/B/C sensitivity could not run: {error}")
+                else:
+                    st.session_state.abc_sensitivity_result = {
+                        "fingerprint": abc_fingerprint,
+                        "result": abc_result,
+                    }
+
+            stored_abc = st.session_state.get("abc_sensitivity_result")
+            if stored_abc is not None:
+                if stored_abc["fingerprint"] != abc_fingerprint:
+                    st.warning(
+                        "A/B/C inputs changed after this analysis. Run it again "
+                        "to refresh the results."
+                    )
+                else:
+                    abc_result = stored_abc["result"]
+                    valid_rows = [
+                        row for row in abc_result["rows"]
+                        if row["Mean"] is not None
+                    ]
+                    if not valid_rows:
+                        st.info(
+                            "The selected outcome is unavailable for all three scenarios."
+                        )
+                    else:
+                        st.dataframe(
+                            [
+                                {
+                                    "Scenario": row["Scenario"],
+                                    abc_result["metric_label"]: (
+                                        _format_sensitivity_metric(
+                                            abc_result["metric"], row["Mean"],
+                                        )
+                                    ),
+                                    "Saved horizon (years)": row[
+                                        "Saved horizon (years)"
+                                    ],
+                                    "Saved seed": row["Saved seed"],
+                                    "Applied horizon (years)": row[
+                                        "Applied horizon (years)"
+                                    ],
+                                    "Applied seed": row["Applied seed"],
+                                    "10th–90th": row["10th–90th"],
+                                }
+                                for row in valid_rows
+                            ],
+                            hide_index=True, use_container_width=True,
+                        )
+                        st.caption(
+                            f"{abc_result['simulation_count']} simulation(s) per "
+                            f"scenario. All runs use Baseline A's "
+                            f"{abc_result['effective_horizon_years']}-year horizon "
+                            f"and seed {abc_result['effective_seed']} + run index. "
+                            "Saved and applied settings are shown for each scenario. "
+                            "These are modeled scenario outcomes, not "
+                            "causal attribution; trajectory shocks may differ when "
+                            "scenario structures change."
+                        )
 
     st.subheader("Monte Carlo analysis")
     view_mode = st.radio(

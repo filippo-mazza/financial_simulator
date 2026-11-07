@@ -5,7 +5,7 @@ import json
 import pytest
 
 from app import (
-    ExpenseConfig, FinancialAssumptions, IncomeConfig,
+    CurveballConfig, ExpenseConfig, FinancialAssumptions, IncomeConfig,
     InvestmentConfig,
     SimulationConfig,
     comparison_balance_rows,
@@ -19,6 +19,7 @@ from app import (
     read_scenario_workspace_export,
     read_simulation_export,
     paired_delta_quantiles,
+    run_abc_scenario_sensitivity,
     run_paired_scenario_comparison,
     run_sensitivity_analysis,
     run_simulation,
@@ -28,6 +29,8 @@ from property_purchase import AutomaticPurchasePolicy, PropertyPurchase
 from scenario_workspace import (
     ALTERNATIVE_ID,
     BASELINE_ID,
+    TERTIARY_ID,
+    ScenarioVariant,
     ScenarioWorkspace,
 )
 
@@ -152,8 +155,46 @@ def test_workspace_reader_rejects_wrong_shape_without_affecting_single_exports()
         create_scenario_workspace_export(ScenarioWorkspace.from_config(config))
     )
     workspace_document["variants"].pop()
-    with pytest.raises(ValueError, match="exactly two"):
+    with pytest.raises(ValueError, match="two or three"):
         read_scenario_workspace_export(json.dumps(workspace_document))
+
+
+def test_abc_scenario_sensitivity_compares_three_saved_variants():
+    workspace = ScenarioWorkspace.from_config(_config())
+    b_config = workspace.config_for(ALTERNATIVE_ID)
+    b_config.years = 3
+    b_config.seed = 99
+    b_config.curveballs = [CurveballConfig(
+        "Temporary job loss", True, 1.0, 1, 1, 3, "Salary", 100.0,
+    )]
+    workspace = workspace.save(ALTERNATIVE_ID, b_config)
+    c_config = replace(
+        workspace.config_for(BASELINE_ID),
+        years=2,
+        seed=5,
+        property_purchase=PropertyPurchase(10_000, 10),
+    )
+    workspace = workspace.add_variant(
+        ScenarioVariant(TERTIARY_ID, "Alternative C", c_config),
+    )
+
+    result = run_abc_scenario_sensitivity(workspace, 1)
+
+    assert [row["Scenario"] for row in result["rows"]] == [
+        "Baseline A", "Alternative B", "Alternative C",
+    ]
+    assert result["rows"][1]["Mean"] < result["rows"][0]["Mean"]
+    assert result["effective_horizon_years"] == 1
+    assert result["effective_seed"] == 17
+    assert result["rows"][0]["Saved horizon (years)"] == 1
+    assert result["rows"][1]["Saved horizon (years)"] == 3
+    assert result["rows"][1]["Saved seed"] == 99
+    assert result["rows"][1]["Applied horizon (years)"] == 1
+    assert result["rows"][1]["Applied seed"] == 17
+    assert result["rows"][2]["Saved horizon (years)"] == 2
+    assert result["rows"][2]["Saved seed"] == 5
+    restored = read_scenario_workspace_export(create_scenario_workspace_export(workspace))
+    assert restored.config_for(TERTIARY_ID) == c_config
 
 
 def test_deterministic_ab_suggestions_offer_reproducible_input_based_variants():

@@ -42,6 +42,27 @@ def test_sidebar_expanders_keep_stable_identity_when_summary_changes(monkeypatch
     assert _expander(app, "sidebar_cash").label.startswith("Cash · $7,500")
 
 
+def test_getting_started_guidance_is_hidden_after_running_simulations(
+        monkeypatch, tmp_path):
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+assert any("Start here" in item.value for item in app.info)
+next(item for item in app.number_input if item.label == "Number of simulations").set_value(1).run(timeout=30)
+next(item for item in app.button if item.label == "▶ Run simulations").click().run(timeout=60)
+assert not app.exception
+assert not any("Start here" in item.value for item in app.info)
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_curveballs_panel_exposes_predefined_event_checkboxes(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
@@ -342,6 +363,21 @@ def test_ab_workspace_keeps_baseline_and_alternative_inputs_isolated(
     assert "simulation_result" not in app.session_state
 
 
+def test_add_scenario_c_chooses_unused_default_name(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+    app.button(key="create_scenario_workspace").click().run(timeout=30)
+    app.text_input(key="scenario_alternative_name").set_value(
+        "Alternative C",
+    ).run(timeout=30)
+    app.button(key="add_tertiary_scenario").click().run(timeout=30)
+
+    assert not app.exception
+    assert app.text_input(key="scenario_tertiary_name").value == "Alternative C (2)"
+
+
 def test_ab_workspace_restores_each_scenario_rent_selection(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
@@ -446,6 +482,36 @@ assert any('comparison-results' in item.value for item in app.markdown)
     assert result.returncode == 0, result.stderr
 
 
+def test_abc_sensitivity_expander_runs_and_keeps_existing_analysis(tmp_path):
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+app.button(key='create_scenario_workspace').click().run(timeout=30)
+app.button(key='add_tertiary_scenario').click().run(timeout=30)
+next(item for item in app.number_input if item.label == 'Number of simulations').set_value(1).run(timeout=30)
+next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=30)
+assert any(item.key == 'sensitivity_metric' for item in app.selectbox)
+assert any(item.key == 'run_sensitivity_analysis' for item in app.button)
+assert any(item.key == 'abc_sensitivity_panel' for item in app.expander)
+next(item for item in app.button if item.key == 'run_abc_sensitivity_analysis').click().run(timeout=30)
+assert not app.exception
+results = next(item.value for item in app.dataframe if 'Scenario' in item.value.columns)
+assert 'Saved horizon (years)' in results.columns
+assert 'Saved seed' in results.columns
+assert 'Applied horizon (years)' in results.columns
+assert 'Applied seed' in results.columns
+assert any("All runs use Baseline A's" in item.value and "+ run index" in item.value for item in app.caption)
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_real_estate_panel_exposes_ownership_and_exact_links(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
@@ -460,21 +526,24 @@ def test_real_estate_panel_exposes_ownership_and_exact_links(monkeypatch, tmp_pa
     assert next(
         item for item in app.button if item.label.endswith("Investment 2")
     ).label.startswith("▾ ")
-    assert any(item.label == "Ownership share (%)" for item in app.number_input)
     assert any(
-        item.label == "Mortgage / loan linked to this property"
+        item.label.endswith(": Ownership share (%)")
+        for item in app.number_input
+    )
+    assert any(
+        item.label.endswith(": Mortgage / loan linked to this property")
         for item in app.selectbox
     )
     assert any(
-        item.label == "Rental income linked to this property"
+        item.label.endswith(": Rental income linked to this property")
         for item in app.selectbox
     )
     assert any(
-        item.label == "Property jurisdiction estimate profile"
+        item.label.endswith(": Property jurisdiction estimate profile")
         for item in app.selectbox
     )
     assert any(
-        item.label.startswith("Acquisition costs")
+        "Acquisition costs" in item.label
         for item in app.number_input
     )
 
@@ -825,6 +894,7 @@ assert workspace.config_for('alternative').years == 2
 assert app.session_state['scenario_initial_cash'] == 1000
 assert app.session_state['sidebar_import'] is False
 assert any('Imported two scenarios' in item.value for item in app.toast)
+assert not any('Start here' in item.value for item in app.info)
 """
     environment = dict(os.environ)
     environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
