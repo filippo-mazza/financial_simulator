@@ -3247,8 +3247,14 @@ def main():
         for preset in PREDEFINED_CURVEBALLS:
             existing = configured.get(preset["name"])
             if existing is not None:
-                existing["start_month_min"] = 1
-                existing["start_month_max"] = max_month
+                existing["start_month_min"] = min(
+                    max_month, max(1, int(existing.get("start_month_min", 1)))
+                )
+                existing["start_month_max"] = min(
+                    max_month,
+                    max(existing["start_month_min"],
+                        int(existing.get("start_month_max", max_month))),
+                )
             selected = st.checkbox(
                 preset["name"], value=bool(existing and existing.get("enabled")),
                 key=f"curveball_preset_{preset['key']}",
