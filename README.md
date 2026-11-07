@@ -266,6 +266,13 @@ mortgage exactly once alongside active existing loan payments. It compares that
 total with selected net regular incomes using an editable variable-income
 inclusion percentage, a debt-service limit, and optional household buffers.
 Configured annual bonuses are never qualifying income because they are uncertain.
+An optional annual maintenance/upkeep allowance can be entered as a percentage
+of the original purchase price. It is converted to a monthly linked ownership
+expense after closing and remains based on that starting price; appreciation does
+not increase it. The separate annual ownership-tax input remains a once-per-year
+linked charge and is not combined with one-off acquisition fees or mortgage
+repayments. Both options default to zero for backward compatibility and are
+planning estimates, not country-specific tax advice.
 The assessment, assumptions, ratio, amounts, and reason are shown in results and
 exported; disabling it preserves the previous cash-only rule. These are planning
 assumptions, not universal lender criteria. Purchase parameters, events, fees,

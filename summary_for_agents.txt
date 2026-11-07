@@ -193,6 +193,15 @@ reserve is a point-in-time minimum immediately after closing, not a protected
 subaccount. Purchase outcomes record it alongside actual post-closing cash;
 later modeled cash flows can reduce that balance.
 
+PropertyPurchase.annual_maintenance_percentage is an optional, backward-compatible
+upkeep allowance based on the original purchase price. At closing,
+PropertyPurchase.effective_monthly_expenses converts it to a monthly linked
+expense; the amount does not follow property appreciation (the normal expense
+inflation treatment still applies). PropertyPurchase.yearly_tax remains a
+separate YearlyExpense charged once per year after closing. Neither charge is
+created when a purchase does not occur, and annual maintenance is distinct from
+one-off acquisition fees and mortgage repayments.
+
 AutomaticPurchasePolicy.mortgage_affordability is optional. When present,
 utils.py evaluates it every month using that month's pre-step regular income
 rates and the current active-loan schedules. The result contains qualifying

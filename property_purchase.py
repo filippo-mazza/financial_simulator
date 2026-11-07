@@ -272,6 +272,7 @@ class PropertyPurchase:
     fixed_rate: bool = False
     monthly_expenses: float = 0.0
     yearly_tax: float = 0.0
+    annual_maintenance_percentage: float = 0.0
 
     @property
     def down_payment(self):
@@ -286,6 +287,7 @@ class PropertyPurchase:
             self.purchase_price, self.down_payment_percentage,
             self.transaction_fees, self.mortgage_interest_rate,
             self.monthly_expenses, self.yearly_tax,
+            self.annual_maintenance_percentage,
         )
         if not all(math.isfinite(value) for value in numeric):
             raise PropertyPurchaseError("Purchase amounts and rates must be finite")
@@ -297,6 +299,10 @@ class PropertyPurchase:
             raise PropertyPurchaseError("Transaction fees cannot be negative")
         if self.monthly_expenses < 0 or self.yearly_tax < 0:
             raise PropertyPurchaseError("Property operating costs cannot be negative")
+        if not 0 <= self.annual_maintenance_percentage <= 100:
+            raise PropertyPurchaseError(
+                "Annual maintenance percentage must be between 0 and 100"
+            )
         if self.mortgage_interest_rate < 0:
             raise PropertyPurchaseError("Mortgage interest rate cannot be negative")
         if self.mortgage_duration_years <= 0:
@@ -315,6 +321,16 @@ class PropertyPurchase:
                 f"Insufficient funds for property purchase: ${required:,.2f} required"
             )
         return self
+
+    @property
+    def annual_maintenance_amount(self):
+        """Annual upkeep allowance based on the original purchase price."""
+        return self.purchase_price * self.annual_maintenance_percentage / 100
+
+    @property
+    def effective_monthly_expenses(self):
+        """Fixed monthly costs plus the initial-price maintenance allowance."""
+        return self.monthly_expenses + self.annual_maintenance_amount / 12
 
 
 def execute_property_purchase(
@@ -353,6 +369,7 @@ def execute_property_purchase(
         "down_payment": purchase.down_payment,
         "transaction_fees": purchase.transaction_fees,
         "mortgage_principal": purchase.mortgage_principal,
-        "monthly_expenses": purchase.monthly_expenses,
+        "monthly_expenses": purchase.effective_monthly_expenses,
         "yearly_tax": purchase.yearly_tax,
+        "annual_maintenance_amount": purchase.annual_maintenance_amount,
     }
