@@ -34,6 +34,27 @@ def test_sidebar_expanders_keep_stable_identity_when_summary_changes(monkeypatch
     assert _expander(app, "sidebar_cash").label.startswith("Cash · $7,500")
 
 
+def test_getting_started_guidance_is_hidden_after_running_simulations(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+    assert any("Start here" in item.value for item in app.info)
+
+    run_count = next(
+        item for item in app.number_input if item.label == "Number of simulations"
+    )
+    run_count.set_value(1).run(timeout=30)
+    run_button = next(
+        item for item in app.button if item.label == "▶ Run simulations"
+    )
+    run_button.click().run(timeout=60)
+
+    assert not app.exception
+    assert not any("Start here" in item.value for item in app.info)
+
+
 def test_curveballs_panel_exposes_predefined_event_checkboxes(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
@@ -689,6 +710,7 @@ assert workspace.config_for('alternative').years == 2
 assert app.session_state['scenario_initial_cash'] == 1000
 assert app.session_state['sidebar_import'] is False
 assert any('Imported two scenarios' in item.value for item in app.toast)
+assert not any('Start here' in item.value for item in app.info)
 """
     environment = dict(os.environ)
     environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
