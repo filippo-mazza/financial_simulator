@@ -117,11 +117,22 @@ CONFIGURATION AND OBJECT CONSTRUCTION
 -------------------------------------
 app.py and financial_assumptions.py define these dataclasses:
   SimulationConfig, InvestmentConfig, IncomeConfig, ExpenseConfig, LoanConfig,
-  DependentConfig, FinancialAssumptions.
+  DependentConfig, CurveballConfig, FinancialAssumptions.
 
 build_components(config) converts them into fresh model objects and returns:
   (BankAccount, investments, loans, incomes, expenses)
 This order intentionally matches compute_net_worth_over_time(years, ...).
+
+DependentConfig.childcare_monthly_cost (when not None) uses ChildcareExpense:
+childcare is charged until the configured school_start_age, then school cost
+starts in the following month. None preserves the legacy AgeBasedExpense
+behavior for older configurations. SimulationConfig.curveballs is a list of
+independent CurveballConfig events. Enabled events are sampled once per
+trajectory with the seeded standard-library RNG; disabled events and zero-
+probability events consume no random draws. Each event records trigger/start/end,
+pre-event cash and net worth, cash drawdown, and the first month both thresholds
+recover. Income reductions apply to targeted or all income sources; overlapping
+events multiply factors, and monthly adjustment amounts are exported.
 
 Collection semantics matter:
   - None uses the legacy single-item defaults in SimulationConfig.

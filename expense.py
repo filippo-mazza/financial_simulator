@@ -127,6 +127,41 @@ class AgeBasedExpense(Expense):
         )
 
 
+class ChildcareExpense(Expense):
+    """Childcare that switches to school cost at the configured school age.
+
+    The switch follows the existing age-based convention: a child who reaches
+    the school age at the end of month 12 first incurs school cost in month 13.
+    This keeps the transition aligned with ``build_simulation_events``.
+    """
+
+    def __init__(self, name, childcare_monthly_cost, school_monthly_cost,
+                 current_age, school_start_age):
+        self.initial_age = current_age
+        self.current_age = current_age
+        self.school_start_age = school_start_age
+        self.childcare_monthly_cost = childcare_monthly_cost
+        self.school_monthly_cost = school_monthly_cost
+        super().__init__(name, "education", childcare_monthly_cost)
+
+    def step(self):
+        if not self.active:
+            return 0
+        self.months_passed += 1
+        amount = (
+            self.school_monthly_cost
+            if self.current_age >= self.school_start_age
+            else self.childcare_monthly_cost
+        )
+        if self.months_passed % 12 == 0:
+            self.current_age += 1
+        return amount
+
+    def reset(self):
+        super().reset()
+        self.current_age = self.initial_age
+
+
 class YearlyExpense(Expense):
     """An expense charged once per year and adjusted annually for inflation."""
 
