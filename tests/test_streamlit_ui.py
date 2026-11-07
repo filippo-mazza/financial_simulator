@@ -144,6 +144,25 @@ assert len(app.dataframe) >= 2
     assert result.returncode == 0, result.stderr
 
 
+def test_ab_comparison_marks_results_for_mobile_focus(tmp_path):
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+app.button(key='create_scenario_workspace').click().run(timeout=30)
+next(item for item in app.button if item.label == '⇄ Compare A/B').click().run(timeout=30)
+assert not app.exception
+assert any('comparison-results' in item.value for item in app.markdown)
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_real_estate_panel_exposes_ownership_and_exact_links(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))

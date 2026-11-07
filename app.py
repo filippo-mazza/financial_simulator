@@ -3674,6 +3674,7 @@ def main():
             "comparison": comparison,
         }
         st.session_state.active_result_mode = "comparison"
+        st.session_state.focus_comparison_results = True
 
     scenario_fingerprint = json.dumps(asdict(config), sort_keys=True)
     if run_requested:
@@ -3706,6 +3707,19 @@ def main():
             )
             return
         comparison = comparison_record["comparison"]
+        st.markdown('<div id="comparison-results"></div>', unsafe_allow_html=True)
+        if st.session_state.pop("focus_comparison_results", False):
+            st.components.v1.html(
+                """
+                <script>
+                const results = window.parent.document.getElementById("comparison-results");
+                if (results) {
+                    results.scrollIntoView({behavior: "smooth", block: "start"});
+                }
+                </script>
+                """,
+                height=0,
+            )
         st.subheader("Paired A/B comparison")
         st.info(
             f"Arithmetic averages across {comparison.simulation_count} paired "
