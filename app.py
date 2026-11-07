@@ -10,6 +10,7 @@ from copy import deepcopy
 import inspect
 import json
 import random
+import re
 from statistics import fmean
 import uuid
 
@@ -731,6 +732,131 @@ def scenario_input_differences(comparison):
                 "Alternative B": "(not present)" if b_value is missing else b_value,
             })
     return rows
+
+
+def _comparison_change_labels(comparison, differences):
+    """Turn changed config paths into a short list of human-readable items."""
+    labels = []
+    collection_pattern = re.compile(r"^(\w+)\[(\d+)\](?:\.(.+))?$")
+    indexed_paths = {}
+    for difference in differences:
+        match = collection_pattern.match(difference["Input"])
+        if match:
+            collection, index_text, field = match.groups()
+            indexed_paths.setdefault((collection, int(index_text)), set()).add(field)
+    indexed_collections = {collection for collection, _index in indexed_paths}
+    field_labels = {
+        "monthly_amount": "monthly amount",
+        "monthly_contribution": "monthly contribution",
+        "monthly_expenses": "monthly expenses",
+        "yearly_tax": "yearly tax",
+        "income_type": "income type",
+        "expense_type": "expense type",
+        "initial_amount": "initial amount",
+    }
+    for difference in differences:
+        path = difference["Input"]
+        if path.startswith("property_purchase"):
+            label = "property purchase"
+        elif path.startswith("selected_rent_expense"):
+            label = "selected rent expense"
+        elif path in {"initial_cash", "yearly_fee"}:
+            label = "starting cash" if path == "initial_cash" else "yearly fee"
+        else:
+            match = collection_pattern.match(path)
+            if not match:
+                collection = path.split(".", 1)[0]
+                if collection in indexed_collections:
+                    continue
+                label = collection.replace("_", " ")
+            else:
+                collection, index_text, field = match.groups()
+                index = int(index_text)
+                baseline_items = getattr(comparison.baseline_config, collection, None) or []
+                alternative_items = (
+                    getattr(comparison.alternative_config, collection, None) or []
+                )
+                baseline_item = (
+                    baseline_items[index] if index < len(baseline_items) else None
+                )
+                alternative_item = (
+                    alternative_items[index] if index < len(alternative_items) else None
+                )
+                baseline_name = getattr(baseline_item, "name", None)
+                alternative_name = getattr(alternative_item, "name", None)
+                baseline_names = {
+                    getattr(item, "name", None) for item in baseline_items
+                }
+                alternative_names = {
+                    getattr(item, "name", None) for item in alternative_items
+                }
+                if baseline_name != alternative_name:
+                    if baseline_name and baseline_name not in alternative_names:
+                        item_name = f"{baseline_name} (removed)"
+                    elif alternative_name and alternative_name not in baseline_names:
+                        item_name = f"{alternative_name} (added)"
+                    else:
+                        # The same named item moved to another index; this is not
+                        # an input change and should not be presented as one.
+                        continue
+                else:
+                    item_name = (
+                        baseline_name or alternative_name
+                        or collection.replace("_", " ")
+                    )
+                label = item_name
+                fields = indexed_paths[(collection, index)]
+                if field and len(fields) == 1:
+                    label = f"{item_name}'s {field_labels.get(field, field.replace('_', ' '))}"
+        if label not in labels:
+            labels.append(label)
+    return labels
+
+
+def comparison_explanation(comparison):
+    """Describe the modeled A/B result and its observable input/flow differences."""
+    balance_rows = comparison_balance_rows(comparison)
+    net_worth = next(row for row in balance_rows if row["Balance"] == "Net worth")
+    delta = net_worth["B minus A"]
+    differences = scenario_input_differences(comparison)
+    labels = _comparison_change_labels(comparison, differences)
+    if abs(delta) < 0.5:
+        outcome = (
+            f"Alternative B ({comparison.alternative_name}) finishes at approximately "
+            f"the same average net worth as Baseline A ({_money(net_worth['Alternative B'])})."
+        )
+    else:
+        direction = "higher" if delta > 0 else "lower"
+        outcome = (
+            f"Alternative B ({comparison.alternative_name}) finishes with average net worth "
+            f"{_money(abs(delta))} {direction} than Baseline A "
+            f"({_money(net_worth['Alternative B'])} vs {_money(net_worth['Baseline A'])})."
+        )
+    if labels:
+        displayed = labels[:3]
+        if len(labels) > 3:
+            displayed.append(f"{len(labels) - 3} other changed input(s)")
+        changes = "The compared change(s) are " + ", ".join(displayed) + "."
+    else:
+        changes = "The effective A and B inputs are identical."
+    flow_differences = sorted(
+        (row for row in comparison_cash_flow_rows(comparison)
+         if abs(row["B minus A"]) >= 0.5),
+        key=lambda row: abs(row["B minus A"]), reverse=True,
+    )[:2]
+    if flow_differences:
+        drivers = " The largest tracked B−A flow differences are " + "; ".join(
+            f"{row['Tracked flow']} ({row['B minus A']:+,.0f})"
+            for row in flow_differences
+        ) + "."
+    else:
+        drivers = " No tracked cash-flow category differs materially between A and B."
+    return (
+        f"{outcome} {changes}{drivers} This is an average modeled result from "
+        f"{comparison.simulation_count} paired simulation(s), not financial advice "
+        "or a guaranteed outcome; the listed flows are indicators, not a causal "
+        "attribution bridge."
+    )
 
 
 def aggregate_purchase_events(trajectories):
@@ -3727,6 +3853,7 @@ def main():
             f"Run n uses seed {comparison.base_seed} + n − 1 in both scenarios. "
             "B−A is calculated within each seed pair before uncertainty summaries."
         )
+        st.info(comparison_explanation(comparison), icon="ℹ️")
         for warning in comparison.warnings:
             st.warning(warning, icon="⚠️")
 
