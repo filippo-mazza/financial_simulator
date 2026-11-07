@@ -12,6 +12,7 @@ from app import (
     comparison_cash_flow_rows,
     create_scenario_workspace_export,
     create_simulation_export,
+    deterministic_ab_suggestions,
     read_scenario_workspace_export,
     read_simulation_export,
     paired_delta_quantiles,
@@ -132,6 +133,38 @@ def test_workspace_reader_rejects_wrong_shape_without_affecting_single_exports()
     workspace_document["variants"].pop()
     with pytest.raises(ValueError, match="exactly two"):
         read_scenario_workspace_export(json.dumps(workspace_document))
+
+
+def test_deterministic_ab_suggestions_offer_reproducible_input_based_variants():
+    config = _config()
+
+    first = deterministic_ab_suggestions(config)
+    second = deterministic_ab_suggestions(config)
+
+    assert [item.key for item in first] == [
+        "automatic_property", "increase_investing", "larger_cash_buffer",
+    ]
+    assert [(item.title, item.description) for item in first] == [
+        (item.title, item.description) for item in second
+    ]
+    property_suggestion = first[0].config.property_purchase
+    assert property_suggestion is not None
+    assert property_suggestion.purchase.purchase_price == 145_000
+    assert first[1].config.investments[0].monthly_contribution == 100
+    assert first[2].config.initial_cash == 6_000
+
+
+def test_deterministic_ab_suggestions_remove_property_when_already_configured():
+    config = _config()
+    config.property_purchase = PropertyPurchase(
+        120_000, 20, transaction_fees=3_600, purchase_month=0,
+    )
+
+    suggestions = deterministic_ab_suggestions(config)
+
+    assert suggestions[0].key == "without_property"
+    assert suggestions[0].config.property_purchase is None
+    assert suggestions[0].config.selected_rent_expense is None
 
 
 def test_paired_comparison_of_identical_variants_has_zero_differences():

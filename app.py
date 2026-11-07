@@ -6,6 +6,7 @@ can be exercised in unit tests and reused by another front end later.
 
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
+from copy import deepcopy
 import inspect
 import json
 import random
@@ -157,6 +158,16 @@ class SimulationConfig:
 
 
 @dataclass(frozen=True)
+class ScenarioSuggestion:
+    """A deterministic, opt-in Alternative B derived from one current scenario."""
+
+    key: str
+    title: str
+    description: str
+    config: SimulationConfig
+
+
+@dataclass(frozen=True)
 class SimulationTrajectory:
     """One reproducible Monte Carlo path and its effective seed."""
     run_number: int
@@ -168,6 +179,99 @@ class SimulationTrajectory:
     @property
     def result(self):
         return self.net_worth, self.repayment_dates, self.details
+
+
+def deterministic_ab_suggestions(config: SimulationConfig):
+    """Return small, reproducible A/B alternatives for the current inputs.
+
+    These are transparent scenario prompts, not financial advice and not an AI
+    call. Each rule changes one bounded assumption so the existing paired
+    comparison can show the modeled consequence before the user adopts anything.
+    """
+    suggestions = []
+
+    if config.property_purchase is None:
+        income_specs = config.incomes or [IncomeConfig(
+            "Primary income", config.income_type, config.monthly_income,
+            config.tax_rate, config.bonus_pct,
+        )]
+        monthly_income = sum(max(0.0, item.monthly_amount) for item in income_specs)
+        purchase_price = max(100_000.0, round(monthly_income * 48 / 5_000) * 5_000)
+        purchase = PropertyPurchase(
+            purchase_price=purchase_price,
+            down_payment_percentage=20.0,
+            transaction_fees=round(purchase_price * 0.03),
+            mortgage_interest_rate=4.0,
+            mortgage_duration_years=25,
+            purchase_month=0,
+            property_name="Suggested property",
+        )
+        alternative = deepcopy(config)
+        alternative.property_purchase = AutomaticPurchasePolicy(
+            purchase, minimum_available_cash=0.0, minimum_cash_reserve=0.0,
+        )
+        suggestions.append(ScenarioSuggestion(
+            "automatic_property",
+            "Test an automatic home purchase",
+            (
+                f"Model a ${purchase_price:,.0f} property with 20% down and "
+                "3% transaction fees; the simulation still decides whether cash "
+                "makes closing possible."
+            ),
+            alternative,
+        ))
+    else:
+        alternative = deepcopy(config)
+        alternative.property_purchase = None
+        alternative.selected_rent_expense = None
+        suggestions.append(ScenarioSuggestion(
+            "without_property",
+            "Compare without the property purchase",
+            "Remove the configured purchase to isolate the rest of the household plan.",
+            alternative,
+        ))
+
+    investments = config.investments
+    if investments is None:
+        investments = [InvestmentConfig(
+            "Portfolio", config.investment_type, config.investment_initial,
+            config.investment_contribution,
+        )]
+    eligible_index = next((index for index, item in enumerate(investments)
+                           if item.investment_type in AUTO_INVEST_TYPES), None)
+    if eligible_index is None:
+        alternative = deepcopy(config)
+        alternative.investments = [*deepcopy(investments), InvestmentConfig(
+            "Suggested savings", "safe", 0.0, 100.0,
+        )]
+        title = "Add a modest savings investment"
+        description = "Add a safe investment receiving a deterministic $100 monthly contribution."
+    else:
+        alternative = deepcopy(config)
+        if alternative.investments is None:
+            alternative.investments = deepcopy(investments)
+        target = alternative.investments[eligible_index]
+        increment = max(100.0, round(target.monthly_contribution * 0.10 / 50) * 50)
+        target.monthly_contribution += increment
+        title = "Increase monthly investing"
+        description = (
+            f"Increase {target.name}'s monthly contribution by ${increment:,.0f} "
+            "to show the modeled savings sensitivity."
+        )
+    suggestions.append(ScenarioSuggestion(
+        "increase_investing", title, description, alternative,
+    ))
+
+    alternative = deepcopy(config)
+    cash_increment = max(1_000.0, round(max(config.initial_cash, 1_000.0) * 0.25 / 500) * 500)
+    alternative.initial_cash += cash_increment
+    suggestions.append(ScenarioSuggestion(
+        "larger_cash_buffer",
+        "Keep a larger starting cash buffer",
+        f"Add ${cash_increment:,.0f} to starting cash as a liquidity sensitivity check.",
+        alternative,
+    ))
+    return suggestions
 
 
 def property_purchase_payment(purchase):
@@ -3564,6 +3668,64 @@ def main():
     average_result = stored_result["result"]
     trajectories = stored_result["trajectories"]
     run_id = stored_result.get("run_id", "legacy")
+
+    suggestions = deterministic_ab_suggestions(config)
+    suggestion_notice_key = f"{run_id}:{scenario_fingerprint}"
+    if st.session_state.get("ab_suggestion_notice_key") != suggestion_notice_key:
+        st.session_state.ab_suggestion_notice_key = suggestion_notice_key
+        st.toast(
+            "Deterministic A/B alternatives are available. Open the suggestion "
+            "panel below the results to compare one.",
+            icon="✨",
+        )
+    with st.popover("✨ Suggested A/B alternatives", use_container_width=False):
+        st.caption(
+            "These are static, transparent scenario rules based on the current "
+            "inputs. Nothing changes until you choose a comparison."
+        )
+        for suggestion in suggestions:
+            st.markdown(f"**{suggestion.title}**")
+            st.caption(suggestion.description)
+            if st.button(
+                "Apply and compare",
+                key=f"apply_ab_suggestion_{suggestion.key}",
+                use_container_width=True,
+            ):
+                suggestion_workspace = ScenarioWorkspace.from_config(config)
+                suggestion_workspace = suggestion_workspace.rename(
+                    BASELINE_ID, "Current scenario",
+                ).rename(ALTERNATIVE_ID, suggestion.title)
+                suggestion_workspace = suggestion_workspace.save(
+                    ALTERNATIVE_ID, suggestion.config,
+                )
+                suggestion_fingerprint = json.dumps({
+                    "simulation_count": int(simulation_count),
+                    "baseline_name": suggestion_workspace.variant(BASELINE_ID).name,
+                    "alternative_name": suggestion_workspace.variant(ALTERNATIVE_ID).name,
+                    "baseline": asdict(suggestion_workspace.config_for(BASELINE_ID)),
+                    "alternative": asdict(suggestion_workspace.config_for(ALTERNATIVE_ID)),
+                }, sort_keys=True)
+                try:
+                    with st.spinner(
+                            f"Comparing current scenario with {suggestion.title}..."):
+                        comparison = run_paired_scenario_comparison(
+                            suggestion_workspace, int(simulation_count),
+                        )
+                except (ValueError, TypeError, KeyError, InsufficientFundsException) as error:
+                    st.error(f"This suggestion cannot be compared: {error}")
+                else:
+                    for key in (
+                        "scenario_baseline_name", "scenario_alternative_name",
+                        "scenario_variant_selector",
+                    ):
+                        st.session_state.pop(key, None)
+                    st.session_state.scenario_workspace = suggestion_workspace
+                    st.session_state.scenario_comparison_result = {
+                        "fingerprint": suggestion_fingerprint,
+                        "comparison": comparison,
+                    }
+                    st.session_state.active_result_mode = "comparison"
+                    st.rerun()
 
     if config.property_purchase is not None:
         outcomes = [purchase_outcome_from_details(t.details) for t in trajectories]

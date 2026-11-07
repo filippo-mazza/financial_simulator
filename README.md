@@ -148,6 +148,16 @@ debt, and property-equity rows are overlapping observed balances, not causal
 contributions or a recommendation. A/B exports still contain inputs only; paired
 results remain session-local and are recomputed after input changes.
 
+After a completed single-scenario run, the dashboard shows a bottom-right notice
+with **Suggested A/B alternatives**. These are deterministic, transparent rules
+based only on the current inputs (for example, testing an automatic property
+purchase when no purchase is configured, increasing a savings contribution, or
+checking a larger cash buffer). Choose **Apply and compare** for one suggestion
+to create the current scenario as Baseline A and run the selected variant as
+Alternative B. No suggestion changes the inputs until it is explicitly chosen;
+there is no runtime AI or network call, and the suggestions are scenario
+sensitivities rather than financial advice.
+
 ### Screenshots
 
 Choose a run count and click **Run simulations** to average multiple stochastic
