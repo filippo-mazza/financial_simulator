@@ -312,29 +312,55 @@ class PairedScenarioComparison:
 
 def _scenario_structure_signature(config):
     """Describe draw-relevant structure without comparing financial amounts."""
-    def collection_signature(items, fields):
-        if items is None:
-            return None
+    def collection_signature(items, fields, flags=()):
         return tuple(
-            tuple(getattr(item, field_name, None) for field_name in fields)
+            (
+                *(getattr(item, field_name, None) for field_name in fields),
+                *(bool(getattr(item, field_name, None)) for field_name in flags),
+            )
             for item in items
         )
 
+    income_specs = config.incomes if config.incomes is not None else [IncomeConfig(
+        "Primary income", config.income_type, config.monthly_income,
+        config.tax_rate, config.bonus_pct,
+    )]
+    expense_specs = [
+        *(config.expenses if config.expenses is not None else [ExpenseConfig(
+            "Living expenses", config.expense_type, config.monthly_expense,
+        )]),
+        *config.additional_expenses,
+    ]
+    investment_specs = (
+        config.investments if config.investments is not None else [InvestmentConfig(
+            "Portfolio", config.investment_type, config.investment_initial,
+            config.investment_contribution,
+        )]
+    )
+    loan_specs = config.loans if config.loans is not None else [LoanConfig(
+        "Loan", config.loan_amount, config.loan_rate, config.loan_duration,
+        config.fixed_rate, config.loan_already_paid,
+    )]
     purchase = config.property_purchase
     if isinstance(purchase, AutomaticPurchasePolicy):
-        purchase_signature = (
-            "automatic", type(purchase.completion_delay).__name__,
-            type(purchase.mortgage_affordability).__name__,
-        )
+        # Any automatic-purchase policy input can alter the closing month. Closing
+        # creates a new stochastic investment, so that timing affects later draws.
+        purchase_signature = ("automatic", asdict(purchase))
     elif purchase is not None:
-        purchase_signature = ("scheduled",)
+        purchase_signature = ("scheduled", purchase.purchase_month)
     else:
         purchase_signature = None
     return (
-        collection_signature(config.incomes, ("name", "income_type")),
-        collection_signature(config.expenses, ("name", "expense_type")),
-        collection_signature(config.investments, ("name", "investment_type")),
-        collection_signature(config.loans, ("name",)),
+        # A non-zero bonus adds an annual Gaussian draw. Freelance and salary
+        # stochastic behavior is already represented by income_type.
+        collection_signature(
+            income_specs, ("name", "income_type"), flags=("bonus_pct",),
+        ),
+        # Unexpected expenses consume draws; including all effective expenses
+        # also preserves their order and covers additional_expenses.
+        collection_signature(expense_specs, ("name", "expense_type")),
+        collection_signature(investment_specs, ("name", "investment_type")),
+        collection_signature(loan_specs, ("name",)),
         tuple((item.name, item.school_start_age) for item in config.dependents),
         purchase_signature,
     )
@@ -544,13 +570,19 @@ def comparison_cash_flow_rows(comparison):
 
 def scenario_input_differences(comparison):
     """Return leaf-level input differences between effective comparison configs."""
+    missing = object()
+
     def flatten(value, path=""):
         if isinstance(value, dict):
+            if not value:
+                return {path: {}}
             rows = {}
             for key in sorted(value):
                 rows.update(flatten(value[key], f"{path}.{key}" if path else key))
             return rows
         if isinstance(value, list):
+            if not value:
+                return {path: []}
             rows = {}
             for index, item in enumerate(value):
                 rows.update(flatten(item, f"{path}[{index}]"))
@@ -561,9 +593,14 @@ def scenario_input_differences(comparison):
     alternative = flatten(asdict(comparison.alternative_config))
     rows = []
     for path in sorted(set(baseline) | set(alternative)):
-        a_value, b_value = baseline.get(path), alternative.get(path)
+        a_value = baseline.get(path, missing)
+        b_value = alternative.get(path, missing)
         if a_value != b_value:
-            rows.append({"Input": path, "Baseline A": a_value, "Alternative B": b_value})
+            rows.append({
+                "Input": path,
+                "Baseline A": "(not present)" if a_value is missing else a_value,
+                "Alternative B": "(not present)" if b_value is missing else b_value,
+            })
     return rows
 
 

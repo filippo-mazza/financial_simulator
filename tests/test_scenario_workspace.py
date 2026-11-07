@@ -176,6 +176,64 @@ def test_paired_comparison_reports_changed_income_and_input_difference():
     )
 
 
+def test_comparison_warns_when_bonus_changes_draws():
+    workspace = ScenarioWorkspace.from_config(_config())
+    alternative = workspace.config_for(ALTERNATIVE_ID)
+    alternative.incomes[0].bonus_pct = 10
+    workspace = workspace.save(ALTERNATIVE_ID, alternative)
+
+    comparison = run_paired_scenario_comparison(workspace, 1)
+
+    assert any("structure differs" in warning.lower() for warning in comparison.warnings)
+
+
+def test_comparison_warns_when_additional_unexpected_expense_changes_draws():
+    workspace = ScenarioWorkspace.from_config(_config())
+    alternative = workspace.config_for(ALTERNATIVE_ID)
+    alternative.additional_expenses.append(
+        ExpenseConfig("Emergencies", "unexpected", 0)
+    )
+    workspace = workspace.save(ALTERNATIVE_ID, alternative)
+
+    comparison = run_paired_scenario_comparison(workspace, 1)
+
+    assert any("structure differs" in warning.lower() for warning in comparison.warnings)
+
+
+def test_input_differences_preserve_empty_none_and_missing_values():
+    baseline = SimulationConfig(
+        years=1, investments=None, incomes=[], expenses=[], loans=[],
+    )
+    workspace = ScenarioWorkspace.from_config(baseline)
+    alternative = workspace.config_for(ALTERNATIVE_ID)
+    alternative.investments = []
+    workspace = workspace.save(ALTERNATIVE_ID, alternative)
+
+    comparison = run_paired_scenario_comparison(workspace, 1)
+    differences = scenario_input_differences(comparison)
+
+    assert {
+        "Input": "investments", "Baseline A": None, "Alternative B": [],
+    } in differences
+
+    baseline = replace(baseline, investments=[
+        InvestmentConfig("Savings", "safe", 1_000, 0, linked_loan_name=None),
+    ])
+    workspace = ScenarioWorkspace.from_config(baseline)
+    alternative = workspace.config_for(ALTERNATIVE_ID)
+    alternative.investments = []
+    workspace = workspace.save(ALTERNATIVE_ID, alternative)
+
+    differences = scenario_input_differences(
+        run_paired_scenario_comparison(workspace, 1)
+    )
+    assert {
+        "Input": "investments[0].linked_loan_name",
+        "Baseline A": None,
+        "Alternative B": "(not present)",
+    } in differences
+
+
 def test_paired_comparison_handles_purchase_and_no_purchase_without_overlap():
     assumptions = FinancialAssumptions()
     means = dict.fromkeys(assumptions.investment_return_means, 0)
