@@ -410,6 +410,9 @@ assert {{item.label for item in panel.file_uploader}} == {{
         "Import single-scenario JSON",
         "Import A/B workspace JSON",
     }}
+assert "Single-scenario export filename" in {{
+        item.label for item in panel.text_input
+    }}
 assert {{item.label for item in panel.button}} >= {{
         "Import parameters",
         "Import A/B workspace",
@@ -423,6 +426,10 @@ panel = next(item for item in app.sidebar.expander if item.key == 'sidebar_impor
 assert {{item.label for item in panel.download_button}} == {{
         "Export single-scenario JSON",
         "Export A/B workspace JSON",
+    }}
+assert {{item.label for item in panel.text_input}} >= {{
+        "Single-scenario export filename",
+        "A/B workspace export filename",
     }}
 """
     environment = dict(os.environ)
