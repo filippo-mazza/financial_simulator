@@ -369,21 +369,25 @@ def test_real_estate_panel_exposes_ownership_and_exact_links(monkeypatch, tmp_pa
     ).click().run(timeout=30)
 
     assert not app.exception
-    assert any(item.label == "Ownership share (%)" for item in app.number_input)
     assert any(
-        item.label == "Mortgage / loan linked to this property"
+        item.label.endswith(": Ownership share (%)")
+        and item.label.startswith("Investment 2")
+        for item in app.number_input
+    )
+    assert any(
+        item.label.endswith(": Mortgage / loan linked to this property")
         for item in app.selectbox
     )
     assert any(
-        item.label == "Rental income linked to this property"
+        item.label.endswith(": Rental income linked to this property")
         for item in app.selectbox
     )
     assert any(
-        item.label == "Property jurisdiction estimate profile"
+        item.label.endswith(": Property jurisdiction estimate profile")
         for item in app.selectbox
     )
     assert any(
-        item.label.startswith("Acquisition costs")
+        "Acquisition costs" in item.label
         for item in app.number_input
     )
 
