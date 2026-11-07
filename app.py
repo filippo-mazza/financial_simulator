@@ -2555,7 +2555,7 @@ def main():
         return st.session_state.get("active_card") == card_id
 
     def add_expense():
-        st.session_state.expenses.append({
+        st.session_state.expenses.insert(0, {
             "name": f"Expense {len(st.session_state.expenses) + 1}",
             "expense_type": "miscellaneous", "monthly_amount": 100.0,
             "_id": uuid.uuid4().hex,
@@ -3401,7 +3401,11 @@ def main():
                         "costs from the editable profile to the fixed amounts below."
                     ),
                 )
-                purchase["purchase_price"] = st.number_input("Target property price", min_value=1.0, value=float(purchase["purchase_price"]), step=1000.0, key="purchase_price")
+                purchase["purchase_price"] = st.number_input(
+                    "Target property price", min_value=1.0,
+                    value=float(purchase["purchase_price"]), step=1000.0,
+                    format="%.0f", key="purchase_price",
+                )
                 purchase["down_payment_percentage"] = st.number_input("Down payment (%)", min_value=0.0, max_value=100.0, value=float(purchase["down_payment_percentage"]), key="purchase_down_pct")
                 purchase_profile = jurisdiction_profile_from_state(
                     st.session_state.purchase_jurisdiction_profile)
