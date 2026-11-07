@@ -10,6 +10,7 @@ from app import (
     SimulationConfig,
     comparison_balance_rows,
     comparison_cash_flow_rows,
+    comparison_explanation,
     create_scenario_workspace_export,
     create_simulation_export,
     deterministic_ab_suggestions,
@@ -187,6 +188,9 @@ def test_paired_comparison_of_identical_variants_has_zero_differences():
         row["B minus A"] == 0 for row in comparison_cash_flow_rows(comparison)
     )
     assert scenario_input_differences(comparison) == []
+    explanation = comparison_explanation(comparison)
+    assert "approximately the same average net worth" in explanation
+    assert "inputs are identical" in explanation
 
 
 def test_paired_comparison_reports_changed_income_and_input_difference():
@@ -207,6 +211,51 @@ def test_paired_comparison_reports_changed_income_and_input_difference():
         row["Input"].endswith("incomes[0].monthly_amount")
         for row in scenario_input_differences(comparison)
     )
+    explanation = comparison_explanation(comparison)
+    assert "Salary's monthly amount" in explanation
+    assert "Net income received" in explanation
+
+
+def test_comparison_explanation_uses_popup_suggestion_name():
+    config = _config()
+    suggestion = deterministic_ab_suggestions(config)[0]
+    workspace = ScenarioWorkspace.from_config(config).rename(
+        BASELINE_ID, "Current scenario",
+    ).rename(ALTERNATIVE_ID, suggestion.title).save(
+        ALTERNATIVE_ID, suggestion.config,
+    )
+
+    explanation = comparison_explanation(run_paired_scenario_comparison(workspace, 1))
+
+    assert suggestion.title in explanation
+    assert "property purchase" in explanation
+
+
+def test_comparison_explanation_treats_sub_dollar_delta_as_negligible():
+    workspace = ScenarioWorkspace.from_config(_config())
+    alternative = workspace.config_for(ALTERNATIVE_ID)
+    alternative.initial_cash += 0.1
+    workspace = workspace.save(ALTERNATIVE_ID, alternative)
+
+    explanation = comparison_explanation(run_paired_scenario_comparison(workspace, 1))
+
+    assert "approximately the same average net worth" in explanation
+
+
+def test_comparison_explanation_handles_added_removed_and_multiple_inputs():
+    config = _config()
+    workspace = ScenarioWorkspace.from_config(config)
+    alternative = workspace.config_for(ALTERNATIVE_ID)
+    alternative.investments = []
+    alternative.initial_cash += 1_000
+    alternative.expenses = [ExpenseConfig("Food", "groceries", 200)]
+    workspace = workspace.save(ALTERNATIVE_ID, alternative)
+
+    explanation = comparison_explanation(run_paired_scenario_comparison(workspace, 1))
+
+    assert "starting cash" in explanation
+    assert "Savings" in explanation
+    assert "Food" in explanation
 
 
 def test_comparison_warns_when_bonus_changes_draws():
