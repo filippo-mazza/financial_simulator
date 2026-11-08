@@ -1646,8 +1646,10 @@ def monte_carlo_view_explanation(view_mode, simulation_count):
             f"{simulation_count} simulated runs. These are estimates based on the "
             f"selected run count, not a guaranteed "
             "or individually realizable household path. Average cash and net worth can "
-            "hide liquidity shortfalls in individual runs. Quantitative downside metrics "
-            "and uncertainty shading are tracked in "
+            "hide liquidity shortfalls in individual runs. The lowest-cash value shown "
+            "below is the lowest observed month-end cash in this batch, not a statistical "
+            "estimate of downside risk. Quantitative downside-risk estimates and "
+            "uncertainty shading are tracked in "
             "[issue #25](https://github.com/filippo-mazza/financial_simulator/issues/25) "
             "and [issue #67](https://github.com/filippo-mazza/financial_simulator/issues/67)."
         )
