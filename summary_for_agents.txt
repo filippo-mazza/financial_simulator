@@ -128,15 +128,18 @@ childcare is charged until the configured school_start_age, then school cost
 starts in the following month. None preserves the legacy AgeBasedExpense
 behavior for older configurations. SimulationConfig.curveballs is a list of
 independent CurveballConfig events. The Streamlit panel exposes predefined
-checkbox events (temporary job loss, reduced working hours, and extended illness
-leave) with fixed documented defaults instead of the lower-level event editor.
+checkbox events (temporary job loss, reduced working hours, extended illness
+leave, and expense shocks for medical bills, car/home repairs, school trips,
+lost-phone replacement, emergency travel, and unexpected tax bills) with fixed
+documented defaults instead of the lower-level event editor.
 Older custom curveballs remain importable and are preserved but are not editable
 in that simplified panel. Enabled events are sampled once per
 trajectory with the seeded standard-library RNG; disabled events and zero-
 probability events consume no random draws. Each event records trigger/start/end,
 pre-event cash and net worth, cash drawdown, and the first month both thresholds
 recover. Income reductions apply to targeted or all income sources; overlapping
-events multiply factors, and monthly adjustment amounts are exported.
+income events multiply factors, while expense shocks are recorded as named
+expense flows (one-off or temporary) and monthly adjustment amounts are exported.
 
 Collection semantics matter:
   - None uses the legacy single-item defaults in SimulationConfig.

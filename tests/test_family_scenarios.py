@@ -165,6 +165,58 @@ def test_overlapping_curveballs_stack_income_reductions():
     assert result[2]["curveball_income_adjustments"]["Salary"][0] == 525
 
 
+def test_expense_curveball_is_seeded_recorded_and_charged_once():
+    config = family_config(
+        years=1,
+        initial_cash=10_000,
+        curveballs=[CurveballConfig(
+            "Medical emergency", enabled=True, probability=1.0,
+            start_month_min=2, start_month_max=2, duration_months=1,
+            event_kind="expense_shock", expense_type="healthcare",
+            expense_amount=900,
+        )],
+    )
+
+    result = run_simulation(config)
+    details = result[2]
+
+    assert details["bank_account"][0] == 10_000
+    assert details["bank_account"][1] == 9_100
+    assert details["expense_values"]["Medical emergency"] == [0, 900] + [0] * 10
+    event = details["curveball_events"][0]
+    assert event["event_kind"] == "expense_shock"
+    assert event["expense_name"] == "Medical emergency"
+    assert event["start_month"] == 2
+
+
+def test_legacy_unexpected_expense_type_remains_available():
+    result = run_simulation(family_config(
+        years=1, initial_cash=10_000,
+        expenses=[ExpenseConfig("Unexpected", "unexpected", 0)],
+    ))
+
+    assert "Unexpected" in result[2]["expense_values"]
+
+
+def test_expense_curveball_amount_range_is_reproducible():
+    config = family_config(
+        years=1, initial_cash=10_000, seed=42,
+        curveballs=[CurveballConfig(
+            "Repair range", enabled=True, probability=1.0,
+            start_month_min=1, start_month_max=1, duration_months=1,
+            event_kind="expense_shock", expense_amount=100,
+            expense_amount_max=200,
+        )],
+    )
+
+    first = run_simulation(config)
+    second = run_simulation(config)
+    amount = first[2]["expense_values"]["Repair range"][0]
+
+    assert first == second
+    assert 100 <= amount <= 200
+
+
 def test_starting_level_orders_ending_level_for_same_family_setup():
     low = run_simulation(family_config(initial_cash=10000, years=5))
     high = run_simulation(family_config(initial_cash=30000, years=5))

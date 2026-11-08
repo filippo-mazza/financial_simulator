@@ -90,7 +90,11 @@ class DependentConfig:
 
 @dataclass
 class CurveballConfig:
-    """One optional, temporary adverse event in a trajectory."""
+    """One optional, temporary adverse event in a trajectory.
+
+    ``event_kind`` keeps the original income-reduction curveballs backwards
+    compatible while allowing one-off or temporary expense shocks.
+    """
 
     name: str
     enabled: bool = False
@@ -101,6 +105,10 @@ class CurveballConfig:
     affected_income_name: str | None = None
     income_reduction_pct: float = 100.0
     recovery_months: int = 0
+    event_kind: str = "income_reduction"
+    expense_type: str = "miscellaneous"
+    expense_amount: float = 0.0
+    expense_amount_max: float | None = None
 
 
 PREDEFINED_CURVEBALLS = (
@@ -130,6 +138,90 @@ PREDEFINED_CURVEBALLS = (
         "duration_months": 3,
         "income_reduction_pct": 60.0,
         "recovery_months": 3,
+    },
+    {
+        "key": "medical_bill",
+        "name": "Unexpected medical bill",
+        "description": "6% chance of a one-off $900 healthcare bill.",
+        "probability_pct": 6.0,
+        "duration_months": 1,
+        "income_reduction_pct": 0.0,
+        "recovery_months": 0,
+        "event_kind": "expense_shock",
+        "expense_type": "healthcare",
+        "expense_amount": 900.0,
+    },
+    {
+        "key": "car_repair",
+        "name": "Unexpected car repair",
+        "description": "6% chance of a one-off $500 transportation bill.",
+        "probability_pct": 6.0,
+        "duration_months": 1,
+        "income_reduction_pct": 0.0,
+        "recovery_months": 0,
+        "event_kind": "expense_shock",
+        "expense_type": "transportation",
+        "expense_amount": 500.0,
+    },
+    {
+        "key": "house_repair",
+        "name": "Unexpected home repair",
+        "description": "6% chance of a one-off $1,200 housing bill.",
+        "probability_pct": 6.0,
+        "duration_months": 1,
+        "income_reduction_pct": 0.0,
+        "recovery_months": 0,
+        "event_kind": "expense_shock",
+        "expense_type": "housing",
+        "expense_amount": 1200.0,
+    },
+    {
+        "key": "school_trip",
+        "name": "Unexpected school trip",
+        "description": "6% chance of a one-off $180 education bill.",
+        "probability_pct": 6.0,
+        "duration_months": 1,
+        "income_reduction_pct": 0.0,
+        "recovery_months": 0,
+        "event_kind": "expense_shock",
+        "expense_type": "education",
+        "expense_amount": 180.0,
+    },
+    {
+        "key": "lost_phone",
+        "name": "Lost phone replacement",
+        "description": "6% chance of a one-off $600 miscellaneous bill.",
+        "probability_pct": 6.0,
+        "duration_months": 1,
+        "income_reduction_pct": 0.0,
+        "recovery_months": 0,
+        "event_kind": "expense_shock",
+        "expense_type": "miscellaneous",
+        "expense_amount": 600.0,
+    },
+    {
+        "key": "emergency_travel",
+        "name": "Emergency travel",
+        "description": "6% chance of a one-off $1,600 miscellaneous bill.",
+        "probability_pct": 6.0,
+        "duration_months": 1,
+        "income_reduction_pct": 0.0,
+        "recovery_months": 0,
+        "event_kind": "expense_shock",
+        "expense_type": "miscellaneous",
+        "expense_amount": 1600.0,
+    },
+    {
+        "key": "unexpected_tax_bill",
+        "name": "Unexpected tax bill",
+        "description": "5% chance of a one-off $2,000 tax or administrative bill.",
+        "probability_pct": 5.0,
+        "duration_months": 1,
+        "income_reduction_pct": 0.0,
+        "recovery_months": 0,
+        "event_kind": "expense_shock",
+        "expense_type": "miscellaneous",
+        "expense_amount": 2000.0,
     },
 )
 
@@ -2576,7 +2668,7 @@ def main():
             st.session_state.pop(f"curveball_preset_{preset['key']}", None)
             for suffix in (
                 "probability", "income", "start_min", "start_max", "duration",
-                "reduction", "recovery",
+                "reduction", "recovery", "expense_amount", "expense_amount_max",
             ):
                 st.session_state.pop(
                     f"curveball_{suffix}_{preset['key']}", None
@@ -3505,7 +3597,12 @@ def main():
         predefined_names = {preset["name"] for preset in PREDEFINED_CURVEBALLS}
         for preset in PREDEFINED_CURVEBALLS:
             existing = configured.get(preset["name"])
+            event_kind = preset.get("event_kind", "income_reduction")
             if existing is not None:
+                existing.setdefault("event_kind", event_kind)
+                existing.setdefault("expense_type", preset.get("expense_type", "miscellaneous"))
+                existing.setdefault("expense_amount", preset.get("expense_amount", 0.0))
+                existing.setdefault("expense_amount_max", preset.get("expense_amount_max"))
                 existing["start_month_min"] = min(
                     max_month, max(1, int(existing.get("start_month_min", 1)))
                 )
@@ -3530,6 +3627,10 @@ def main():
                     "affected_income_name": None,
                     "income_reduction_pct": preset["income_reduction_pct"],
                     "recovery_months": preset["recovery_months"],
+                    "event_kind": event_kind,
+                    "expense_type": preset.get("expense_type", "miscellaneous"),
+                    "expense_amount": preset.get("expense_amount", 0.0),
+                    "expense_amount_max": preset.get("expense_amount_max"),
                     "_id": uuid.uuid4().hex,
                 }
                 st.session_state.curveballs.insert(0, existing)
@@ -3553,19 +3654,20 @@ def main():
                         max_value=100.0, value=float(existing["probability"]),
                         step=5.0, key=f"curveball_probability_{preset['key']}",
                     )
-                    income_options = ["All incomes"] + [
-                        item["name"] for item in st.session_state.incomes
-                    ]
-                    target = existing.get("affected_income_name")
-                    target_label = target if target in income_options else "All incomes"
-                    selected_target = st.selectbox(
-                        f"{preset['name']} — Affected income", income_options,
-                        index=income_options.index(target_label),
-                        key=f"curveball_income_{preset['key']}",
-                    )
-                    existing["affected_income_name"] = (
-                        None if selected_target == "All incomes" else selected_target
-                    )
+                    if event_kind == "income_reduction":
+                        income_options = ["All incomes"] + [
+                            item["name"] for item in st.session_state.incomes
+                        ]
+                        target = existing.get("affected_income_name")
+                        target_label = target if target in income_options else "All incomes"
+                        selected_target = st.selectbox(
+                            f"{preset['name']} — Affected income", income_options,
+                            index=income_options.index(target_label),
+                            key=f"curveball_income_{preset['key']}",
+                        )
+                        existing["affected_income_name"] = (
+                            None if selected_target == "All incomes" else selected_target
+                        )
                     start_left, start_right = st.columns(2)
                     existing["start_month_min"] = start_left.number_input(
                         f"{preset['name']} — Earliest start month", min_value=1,
@@ -3581,26 +3683,67 @@ def main():
                     )
                     if existing["start_month_max"] < existing["start_month_min"]:
                         existing["start_month_max"] = existing["start_month_min"]
+                    duration_label = (
+                        "Expense-shock duration (months)"
+                        if event_kind == "expense_shock"
+                        else "Income-reduction duration (months)"
+                    )
                     existing["duration_months"] = st.number_input(
-                        f"{preset['name']} — Income-reduction duration (months)", min_value=1,
+                        f"{preset['name']} — {duration_label}", min_value=1,
                         value=int(existing["duration_months"]), step=1,
                         key=f"curveball_duration_{preset['key']}",
                     )
-                    existing["income_reduction_pct"] = st.number_input(
-                        f"{preset['name']} — Income reduction (%)", min_value=0.0,
-                        max_value=100.0,
-                        value=float(existing["income_reduction_pct"]), step=5.0,
-                        key=f"curveball_reduction_{preset['key']}",
-                    )
-                    existing["recovery_months"] = st.number_input(
-                        f"{preset['name']} — Recovery period (months)", min_value=0,
-                        value=int(existing["recovery_months"]), step=1,
-                        key=f"curveball_recovery_{preset['key']}",
-                    )
-                    st.caption(
-                        "Recovery tapers the reduction linearly; overlapping events "
-                        "multiply their income factors."
-                    )
+                    if event_kind == "income_reduction":
+                        existing["income_reduction_pct"] = st.number_input(
+                            f"{preset['name']} — Income reduction (%)", min_value=0.0,
+                            max_value=100.0,
+                            value=float(existing["income_reduction_pct"]), step=5.0,
+                            key=f"curveball_reduction_{preset['key']}",
+                        )
+                        existing["recovery_months"] = st.number_input(
+                            f"{preset['name']} — Recovery period (months)", min_value=0,
+                            value=int(existing["recovery_months"]), step=1,
+                            key=f"curveball_recovery_{preset['key']}",
+                        )
+                        st.caption(
+                            "Recovery tapers the reduction linearly; overlapping events "
+                            "multiply their income factors."
+                        )
+                    else:
+                        existing["expense_amount"] = st.number_input(
+                            f"{preset['name']} — Amount per affected month ($)",
+                            min_value=0.0, value=float(existing.get("expense_amount", 0.0)),
+                            step=50.0, format="%.0f",
+                            key=f"curveball_expense_amount_{preset['key']}",
+                            help=(
+                                "A one-month event is a one-off bill. Longer durations "
+                                "charge this amount once per affected month."
+                            ),
+                        )
+                        current_max = existing.get("expense_amount_max")
+                        maximum = st.number_input(
+                            f"{preset['name']} — Maximum amount per affected month ($)",
+                            min_value=float(existing["expense_amount"]),
+                            value=max(
+                                float(existing["expense_amount"]),
+                                float(current_max) if current_max is not None else 0.0,
+                            ),
+                            step=50.0, format="%.0f",
+                            key=f"curveball_expense_amount_max_{preset['key']}",
+                            help=(
+                                "Set this above the amount to sample a deterministic "
+                                "uniform amount range for each triggered trajectory."
+                            ),
+                        )
+                        existing["expense_amount_max"] = (
+                            maximum if maximum > existing["expense_amount"] else None
+                        )
+                        existing["expense_type"] = preset.get(
+                            "expense_type", existing.get("expense_type", "miscellaneous")
+                        )
+                        st.caption(
+                            f"Recorded as a {existing['expense_type']} expense in monthly details."
+                        )
         custom_count = sum(
             item.get("name") not in predefined_names
             for item in st.session_state.curveballs
