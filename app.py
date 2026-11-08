@@ -5111,6 +5111,12 @@ def main():
             f"({simulation_count} simulations)"
         )
         detail_prefix = "Average"
+    month_selector_key = (
+        f"selected_month_{run_id}_{view_mode}_"
+        f"{getattr(selected_trajectory, 'run_number', 0)}"
+    )
+    if month_selector_key not in st.session_state:
+        st.session_state[month_selector_key] = len(net_worth)
 
     selected_outcome = purchase_outcome_from_details(details)
     timing_explanation = purchase_timing_explanation(selected_outcome)
@@ -5190,7 +5196,8 @@ def main():
 
     month_selection = alt.selection_point(
         name="selected_month", fields=["month"], nearest=True,
-        on="click", clear=False, value=[{"month": len(net_worth)}],
+        on="click", clear=False,
+        value=[{"month": st.session_state[month_selector_key]}],
     )
     month_data = alt.Data(values=[
         {"month": month} for month in range(1, len(net_worth) + 1)
@@ -5269,11 +5276,27 @@ def main():
             f"month {event['month']}: {event['label']}" for event in events
         ))
     selected = chart_state.selection.get("selected_month", [])
-    selected_month = len(net_worth)
+    selected_month = st.session_state[month_selector_key]
     if selected:
         selection = selected[0] if isinstance(selected, list) else selected
         selected_month = int(round(selection["month"]))
     selected_month = min(max(selected_month, 1), len(net_worth))
+    st.session_state[month_selector_key] = selected_month
+    selected_month = st.number_input(
+        "Simulation month",
+        min_value=1,
+        max_value=len(net_worth),
+        step=1,
+        key=month_selector_key,
+        help="Select a month to inspect its details without using the chart.",
+    )
+    selected_events = [
+        event for event in events if event["month"] == selected_month
+    ]
+    if selected_events:
+        st.caption("Events in this month: " + " · ".join(
+            event["label"] for event in selected_events
+        ))
     balances, flows = get_month_details(net_worth, details, selected_month)
     st.subheader(f"{detail_prefix} detail for month {selected_month}")
     balance_column, flow_column = st.columns(2, gap="large")
