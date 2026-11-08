@@ -12,7 +12,8 @@ from app import (CHART_EVENT_COLORS, SimulationTrajectory, _consume_run_request,
                  FinancialAssumptions, IncomeConfig, InvestmentConfig, LoanConfig, SimulationConfig,
                  build_components, build_simulation_events, create_simulation_export,
                  get_month_details, monte_carlo_sample_guidance,
-                 monte_carlo_view_explanation, select_representative_trajectories,
+                 monte_carlo_view_explanation, select_downside_trajectory,
+                 select_representative_trajectories,
                  read_simulation_export, run_simulation,
                  run_simulation_batch, run_simulations)
 from investment import Investment
@@ -893,3 +894,27 @@ def test_representative_selection_breaks_ties_by_run_number():
 def test_representative_selection_requires_trajectories():
     with pytest.raises(ValueError):
         select_representative_trajectories([])
+
+
+def _cash_trajectories(*cash_paths):
+    return [
+        SimulationTrajectory(i, i, [0] * len(cash), [], {"bank_account": cash})
+        for i, cash in enumerate(cash_paths, start=1)
+    ]
+
+
+def test_downside_selection_uses_lowest_cash_over_horizon():
+    trajectory, month, cash = select_downside_trajectory(
+        _cash_trajectories([100, 50, 200], [90, 80, 10], [500, 5, 400, 5]))
+    assert (trajectory.run_number, month, cash) == (3, 2, 5)
+
+
+def test_downside_selection_breaks_ties_by_run_then_month():
+    trajectory, month, cash = select_downside_trajectory(
+        list(reversed(_cash_trajectories([9, 1, 1], [1, 9, 9]))))
+    assert (trajectory.run_number, month, cash) == (1, 2, 1)
+
+
+def test_downside_selection_requires_trajectories():
+    with pytest.raises(ValueError):
+        select_downside_trajectory([])
