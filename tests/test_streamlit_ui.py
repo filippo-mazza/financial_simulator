@@ -14,6 +14,14 @@ def _expander(app, key):
     return next(expander for expander in app.expander if expander.key == key)
 
 
+def _curveball_card_button(app, name):
+    panel = _expander(app, "sidebar_curveballs")
+    return next(
+        button for button in panel.button
+        if button.label.endswith(name) and button.label.startswith(("▸ ", "▾ "))
+    )
+
+
 def test_sidebar_expanders_keep_stable_identity_when_summary_changes(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
@@ -77,7 +85,7 @@ def test_curveballs_panel_exposes_predefined_event_checkboxes(monkeypatch, tmp_p
     assert app.session_state["curveballs"][0]["enabled"] is True
 
 
-def test_selected_curveball_can_be_customized_in_collapsed_expander(monkeypatch, tmp_path):
+def test_selected_curveball_opens_its_item_keyed_card(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
@@ -85,16 +93,30 @@ def test_selected_curveball_can_be_customized_in_collapsed_expander(monkeypatch,
     _expander(app, "sidebar_curveballs").checkbox(
         key="curveball_preset_temporary_job_loss"
     ).set_value(True).run(timeout=30)
-    customize = next(
-        item for item in app.expander
-        if item.key == "curveball_customize_temporary_job_loss"
-    )
-    customize.number_input(
+    curveball_id = app.session_state["curveballs"][0]["_id"]
+    card_button = _curveball_card_button(app, "Temporary job loss")
+    assert card_button.key == f"toggle_curveball_{curveball_id}"
+    assert card_button.label.startswith("▾ ")
+    assert app.session_state["expanded_cards"][
+        f"curveball:{curveball_id}"
+    ] is True
+    app.number_input(
         key="curveball_probability_temporary_job_loss"
     ).set_value(50.0).run(timeout=30)
 
     assert not app.exception
     assert app.session_state["curveballs"][0]["probability"] == 50.0
+    assert _curveball_card_button(app, "Temporary job loss").label.startswith("▾ ")
+
+    _expander(app, "sidebar_curveballs").checkbox(
+        key="curveball_preset_reduced_working_hours"
+    ).set_value(True).run(timeout=30)
+    assert app.session_state["curveballs"][0]["name"] == "Reduced working hours"
+    new_curveball_id = app.session_state["curveballs"][0]["_id"]
+    new_card_button = _curveball_card_button(app, "Reduced working hours")
+    assert new_card_button.key == f"toggle_curveball_{new_curveball_id}"
+    assert new_card_button.label.startswith("▾ ")
+    assert _curveball_card_button(app, "Temporary job loss").label.startswith("▾ ")
 
 
 def test_curveball_preset_state_is_isolated_between_ab_variants(monkeypatch, tmp_path):
@@ -137,18 +159,11 @@ def test_curveball_custom_start_range_survives_variant_switch(monkeypatch, tmp_p
     curveballs.checkbox(
         key="curveball_preset_temporary_job_loss"
     ).set_value(True).run(timeout=30)
-    customize = next(
-        item for item in app.expander
-        if item.key == "curveball_customize_temporary_job_loss"
-    )
-    customize.number_input(key="curveball_start_min_temporary_job_loss").set_value(24).run(
+    _curveball_card_button(app, "Temporary job loss")
+    app.number_input(key="curveball_start_min_temporary_job_loss").set_value(24).run(
         timeout=30
     )
-    customize = next(
-        item for item in app.expander
-        if item.key == "curveball_customize_temporary_job_loss"
-    )
-    customize.number_input(key="curveball_start_max_temporary_job_loss").set_value(36).run(
+    app.number_input(key="curveball_start_max_temporary_job_loss").set_value(36).run(
         timeout=30
     )
     app.button(key="create_scenario_workspace").click().run(timeout=30)
@@ -198,6 +213,175 @@ def test_new_expense_is_inserted_at_top_of_expense_list(monkeypatch, tmp_path):
     ]
     assert expense_buttons[0].endswith("Expense 2")
     assert expense_buttons[1].endswith("Living expenses")
+
+
+def test_added_cards_open_independently_and_survive_edit_and_rerun(tmp_path):
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+
+collections = (
+    ('investment', 'sidebar_investments', 'Portfolio'),
+    ('income', 'sidebar_income', 'Salary'),
+    ('expense', 'sidebar_expenses', 'Living expenses'),
+)
+initial_ids = {{}}
+for collection, panel_key, name in collections:
+    item = app.session_state[f'{{collection}}s'][0]
+    initial_ids[collection] = item['_id']
+    panel = next(expander for expander in app.expander if expander.key == panel_key)
+    next(button for button in panel.button if button.label == f'▸ {{name}}').click().run(timeout=30)
+
+for collection, panel_key, add_label in (
+    ('investment', 'sidebar_investments', '＋ Add investment'),
+    ('income', 'sidebar_income', '＋ Add income'),
+    ('expense', 'sidebar_expenses', '＋ Add expense'),
+):
+    panel = next(expander for expander in app.expander if expander.key == panel_key)
+    next(button for button in panel.button if button.label == add_label).click().run(timeout=30)
+    item = app.session_state[f'{{collection}}s'][0]
+    assert app.session_state['expanded_cards'][f'{{collection}}:{{item["_id"]}}'] is True
+    assert app.session_state['expanded_cards'][f'{{collection}}:{{initial_ids[collection]}}'] is True
+
+income = app.session_state['incomes'][0]
+app.text_input(key=f'income_name_{{income["_id"]}}').set_value('Side income').run(timeout=30)
+assert app.session_state['incomes'][0]['name'] == 'Side income'
+assert all(
+    app.session_state['expanded_cards'][f'{{singular}}:{{item["_id"]}}']
+    for singular, plural in (
+        ('investment', 'investments'), ('income', 'incomes'), ('expense', 'expenses'),
+    )
+    for item in app.session_state[plural]
+)
+
+next(item for item in app.number_input if item.label == 'Number of simulations').set_value(1).run(timeout=30)
+next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=60)
+assert not app.exception
+assert all(
+    app.session_state['expanded_cards'][f'{{singular}}:{{item["_id"]}}']
+    for singular, plural in (
+        ('investment', 'investments'), ('income', 'incomes'), ('expense', 'expenses'),
+    )
+    for item in app.session_state[plural]
+)
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=90,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_scenario_import_preserves_expansion_for_matching_items(monkeypatch, tmp_path):
+    from app import (
+        CurveballConfig, ExpenseConfig, IncomeConfig, InvestmentConfig, SimulationConfig,
+        create_simulation_export, run_simulation,
+    )
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+    for collection, panel_key, name in (
+        ("investment", "sidebar_investments", "Portfolio"),
+        ("income", "sidebar_income", "Salary"),
+        ("expense", "sidebar_expenses", "Living expenses"),
+    ):
+        panel = _expander(app, panel_key)
+        next(button for button in panel.button
+             if button.label == f"▸ {name}").click().run(timeout=30)
+    _expander(app, "sidebar_curveballs").checkbox(
+        key="curveball_preset_temporary_job_loss"
+    ).set_value(True).run(timeout=30)
+    existing_ids = {
+        collection: app.session_state[f"{collection}s"][0]["_id"]
+        for collection in ("investment", "income", "expense")
+    }
+    existing_curveball_id = app.session_state["curveballs"][0]["_id"]
+
+    config = SimulationConfig(
+        years=1, seed=7,
+        investments=[InvestmentConfig("Portfolio", "stock", 2000, 200)],
+        incomes=[IncomeConfig("Salary", "salary", 4000)],
+        expenses=[ExpenseConfig("Living expenses", "housing", 1800)],
+        curveballs=[CurveballConfig(
+            "Temporary job loss", True, 0.2, 1, 12, 6, None, 100, 6,
+        )],
+        loans=[],
+    )
+    payload = create_simulation_export(config, *run_simulation(config)).encode()
+    app.sidebar.file_uploader(key="scenario_import_file_0").upload(
+        "scenario.json", payload, "application/json",
+    ).run(timeout=60)
+
+    assert not app.exception
+    for collection, item in zip(
+        ("investment", "income", "expense"),
+        (app.session_state["investments"][0], app.session_state["incomes"][0],
+         app.session_state["expenses"][0]),
+    ):
+        assert item["_id"] == existing_ids[collection]
+        assert app.session_state["expanded_cards"][
+            f"{collection}:{existing_ids[collection]}"
+        ] is True
+    assert app.session_state["investments"][0]["initial_amount"] == 2000
+    assert app.session_state["incomes"][0]["monthly_amount"] == 4000
+    assert app.session_state["expenses"][0]["monthly_amount"] == 1800
+    assert app.session_state["curveballs"][0]["_id"] == existing_curveball_id
+    assert app.session_state["expanded_cards"][
+        f"curveball:{existing_curveball_id}"
+    ] is True
+    assert _curveball_card_button(app, "Temporary job loss").label.startswith("▾ ")
+
+
+def test_scenario_import_assigns_unique_ids_to_duplicate_curveballs(
+        monkeypatch, tmp_path):
+    script = f"""
+from app import (
+    CurveballConfig, SimulationConfig, create_simulation_export, run_simulation,
+)
+from streamlit.testing.v1 import AppTest
+
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+app.session_state['curveballs'] = [{{
+    'name': 'Imported custom event', 'enabled': True, 'probability': 25.0,
+    'start_month_min': 1, 'start_month_max': 120, 'duration_months': 3,
+    'affected_income_name': None, 'income_reduction_pct': 100.0,
+    'recovery_months': 3, '_id': 'existing-curveball',
+}}]
+app.run(timeout=30)
+
+config = SimulationConfig(
+    years=1, seed=7, investments=[], incomes=[], expenses=[], loans=[],
+    curveballs=[
+        CurveballConfig('Imported custom event', True, 0.25, 1, 12, 3),
+        CurveballConfig('Imported custom event', True, 0.25, 1, 12, 3),
+    ],
+)
+payload = create_simulation_export(config, *run_simulation(config)).encode()
+app.sidebar.file_uploader(key='scenario_import_file_0').upload(
+    'duplicate-curveballs.json', payload, 'application/json',
+).run(timeout=60)
+
+assert not app.exception
+curveballs = app.session_state['curveballs']
+ids = [item['_id'] for item in curveballs]
+assert ids[0] == 'existing-curveball'
+assert len(set(ids)) == 2
+remove_buttons = [button for button in app.button if button.label == 'Remove']
+assert len(remove_buttons) == 2
+assert len({{button.key for button in remove_buttons}}) == 2
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=90,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_streamlit_minimum_supports_persistent_keyed_expanders():
@@ -387,14 +571,13 @@ def test_real_estate_panel_exposes_ownership_and_exact_links(monkeypatch, tmp_pa
     next(
         item for item in app.button if item.label == "＋ Add investment"
     ).click().run(timeout=30)
-    next(
-        item for item in app.button if item.label.endswith("Investment 2")
-    ).click().run(timeout=30)
 
     assert not app.exception
+    assert next(
+        item for item in app.button if item.label.endswith("Investment 2")
+    ).label.startswith("▾ ")
     assert any(
         item.label.endswith(": Ownership share (%)")
-        and item.label.startswith("Investment 2")
         for item in app.number_input
     )
     assert any(

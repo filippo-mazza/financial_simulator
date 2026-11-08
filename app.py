@@ -2331,7 +2331,9 @@ def main():
         "annual_maintenance_percentage": 0.0,
     })
     st.session_state.purchase_fields.setdefault("annual_maintenance_percentage", 0.0)
-    for collection_name in ("investments", "incomes", "expenses", "loans", "dependents"):
+    for collection_name in (
+        "investments", "incomes", "expenses", "loans", "dependents", "curveballs",
+    ):
         for item in st.session_state[collection_name]:
             item.setdefault("_id", uuid.uuid4().hex)
             if collection_name == "investments":
@@ -2357,6 +2359,15 @@ def main():
 
     def item_key(item):
         return item["_id"]
+
+    def card_state_key(collection, item):
+        return f"{collection}:{item_key(item)}"
+
+    st.session_state.setdefault("expanded_cards", {})
+    if "active_card" in st.session_state:
+        legacy_card = st.session_state.pop("active_card")
+        if legacy_card:
+            st.session_state.expanded_cards.setdefault(legacy_card, True)
 
     def item_context(item, collection, index):
         """Return a stable, human-readable context for repeated UI controls."""
@@ -2405,13 +2416,24 @@ def main():
             item.get("ownership_percentage", 100.0),
         )
 
-    def editable_items(items, money_fields=()):
+    def editable_items(items, money_fields=(), existing_items=()):
         editable = []
+        existing_ids = {}
+        for existing in existing_items:
+            existing_ids.setdefault(existing.get("name"), []).append(
+                existing.get("_id")
+            )
         for item in items:
             values = asdict(item)
             for field_name in money_fields:
                 values[field_name] = float(_whole_amount(values[field_name]))
-            editable.append({**values, "_id": uuid.uuid4().hex})
+            previous_ids = existing_ids.get(values.get("name"), [])
+            item_id = previous_ids.pop(0) if previous_ids else None
+            if item_id is not None:
+                for key in list(st.session_state):
+                    if key.endswith(f"_{item_id}") and not key.startswith("toggle_"):
+                        st.session_state.pop(key, None)
+            editable.append({**values, "_id": item_id or uuid.uuid4().hex})
         return editable
 
     def import_config(imported, run_after_load=True):
@@ -2536,18 +2558,18 @@ def main():
             ], (
                 "initial_amount", "monthly_contribution", "monthly_expenses", "yearly_tax",
                 "auto_invest_min_cash",
-            )
+            ), st.session_state.investments,
         )
         st.session_state.incomes = editable_items(
             imported.incomes if imported.incomes is not None else [
                 IncomeConfig("Primary income", imported.income_type, imported.monthly_income,
                              imported.tax_rate, imported.bonus_pct)
-            ], ("monthly_amount",)
+            ], ("monthly_amount",), st.session_state.incomes,
         )
         st.session_state.expenses = editable_items(
             imported.expenses if imported.expenses is not None else [
                 ExpenseConfig("Living expenses", imported.expense_type, imported.monthly_expense)
-            ], ("monthly_amount",)
+            ], ("monthly_amount",), st.session_state.expenses,
         )
         st.session_state.loans = editable_items(
             imported.loans if imported.loans is not None else [
@@ -2565,12 +2587,20 @@ def main():
         )
         for item, dependent in zip(st.session_state.dependents, imported.dependents):
             item["childcare_monthly_cost"] = dependent.childcare_monthly_cost
-        st.session_state.curveballs = [
-            {**asdict(item), "probability": item.probability * 100,
-             "_id": uuid.uuid4().hex}
-            for item in imported.curveballs
-        ]
-        st.session_state.active_card = None
+        existing_curveball_ids = {}
+        for item in st.session_state.curveballs:
+            existing_curveball_ids.setdefault(item.get("name"), []).append(
+                item.get("_id")
+            )
+        imported_curveballs = []
+        for item in imported.curveballs:
+            matching_ids = existing_curveball_ids.get(item.name, [])
+            item_id = matching_ids.pop(0) if matching_ids else uuid.uuid4().hex
+            imported_curveballs.append({
+                **asdict(item), "probability": item.probability * 100,
+                "_id": item_id,
+            })
+        st.session_state.curveballs = imported_curveballs
         st.session_state.pop("simulation_result", None)
         if run_after_load:
             st.session_state.run_after_import = True
@@ -2720,23 +2750,25 @@ def main():
         st.session_state["sidebar_import"] = False
 
     def card_is_open(collection, item):
-        active = st.session_state.get("active_card")
-        card_id = f"{collection}:{item_key(item)}"
+        card_id = card_state_key(collection, item)
+        expanded_cards = st.session_state.expanded_cards
         if st.button(
-            f"{'▾' if active == card_id else '▸'} {item['name']}",
+            f"{'▾' if expanded_cards.get(card_id) else '▸'} {item['name']}",
             key=f"toggle_{collection}_{item_key(item)}",
             use_container_width=True,
         ):
-            st.session_state.active_card = None if active == card_id else card_id
+            expanded_cards[card_id] = not expanded_cards.get(card_id, False)
             st.rerun()
-        return st.session_state.get("active_card") == card_id
+        return expanded_cards.get(card_id, False)
 
     def add_expense():
-        st.session_state.expenses.insert(0, {
+        item = {
             "name": f"Expense {len(st.session_state.expenses) + 1}",
             "expense_type": "miscellaneous", "monthly_amount": 100.0,
             "_id": uuid.uuid4().hex,
-        })
+        }
+        st.session_state.expenses.insert(0, item)
+        st.session_state.expanded_cards[card_state_key("expense", item)] = True
 
     def add_dependent():
         number = len(st.session_state.dependents) + 1
@@ -2749,17 +2781,19 @@ def main():
 
     def add_curveball():
         number = len(st.session_state.curveballs) + 1
-        st.session_state.curveballs.append({
+        item = {
             "name": f"Curveball {number}", "enabled": False,
             "probability": 25.0, "start_month_min": 1,
             "start_month_max": max(1, int(st.session_state.get("scenario_years", 10)) * 12),
             "duration_months": 3, "affected_income_name": None,
             "income_reduction_pct": 100.0, "recovery_months": 3,
             "_id": uuid.uuid4().hex,
-        })
+        }
+        st.session_state.curveballs.insert(0, item)
+        st.session_state.expanded_cards[card_state_key("curveball", item)] = True
 
     def add_investment(investment_type):
-        st.session_state.investments.append({
+        item = {
             "name": f"Investment {len(st.session_state.investments) + 1}",
             "investment_type": investment_type, "initial_amount": 1000.0,
             "monthly_contribution": 0.0 if investment_type == "real_estate" else 100.0,
@@ -2772,15 +2806,19 @@ def main():
             "rental_income_name": None,
             "jurisdiction_profile_name": None,
             "_id": uuid.uuid4().hex,
-        })
+        }
+        st.session_state.investments.insert(0, item)
+        st.session_state.expanded_cards[card_state_key("investment", item)] = True
 
     def add_income(income_type):
-        st.session_state.incomes.append({
+        item = {
             "name": f"Income {len(st.session_state.incomes) + 1}",
             "income_type": income_type, "monthly_amount": 2000.0,
             "tax_rate": 0.0, "bonus_pct": 0.0,
             "_id": uuid.uuid4().hex,
-        })
+        }
+        st.session_state.incomes.insert(0, item)
+        st.session_state.expanded_cards[card_state_key("income", item)] = True
 
     def add_loan():
         st.session_state.loans.append({
@@ -3446,7 +3484,7 @@ def main():
             if existing is not None:
                 existing["enabled"] = selected
             if selected and existing is None:
-                st.session_state.curveballs.append({
+                existing = {
                     "name": preset["name"], "enabled": True,
                     "probability": preset["probability_pct"],
                     "start_month_min": 1, "start_month_max": max_month,
@@ -3455,7 +3493,11 @@ def main():
                     "income_reduction_pct": preset["income_reduction_pct"],
                     "recovery_months": preset["recovery_months"],
                     "_id": uuid.uuid4().hex,
-                })
+                }
+                st.session_state.curveballs.insert(0, existing)
+                st.session_state.expanded_cards[
+                    card_state_key("curveball", existing)
+                ] = True
             elif not selected and existing is not None:
                 st.session_state.curveballs = [
                     item for item in st.session_state.curveballs
@@ -3467,11 +3509,7 @@ def main():
                     item for item in st.session_state.curveballs
                     if item.get("name") == preset["name"]
                 )
-                with st.expander(
-                    f"Customize {preset['name']}",
-                    expanded=False,
-                    key=f"curveball_customize_{preset['key']}",
-                ):
+                if card_is_open("curveball", existing):
                     existing["probability"] = st.number_input(
                         f"{preset['name']} — Probability per trajectory (%)", min_value=0.0,
                         max_value=100.0, value=float(existing["probability"]),
