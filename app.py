@@ -2378,9 +2378,9 @@ def main():
             st.session_state.expanded_cards.setdefault(legacy_card, True)
 
     def item_context(item, collection, index):
-        """Return a stable, human-readable context for repeated UI controls."""
+        """Return a name-based context that stays correct when items are reordered."""
         name = str(item.get("name", "")).strip()
-        return f"{collection.title()} {index + 1}" + (f" — {name}" if name else "")
+        return f"{collection.title()} — {name}" if name else f"{collection.title()} {index + 1}"
 
     def field_label(context, label):
         """Prefix repeated field labels so browser agents can identify the target."""
@@ -3022,8 +3022,8 @@ def main():
                     "rental_expense_percentage", "rental_expense_basis", "rental",
                 )
                 if st.button(
-                    f"Remove {profile_context}", key=f"remove_jurisdiction_{profile_key}",
-                    help="Remove this jurisdiction profile from the scenario.",
+                    "🗑️", key=f"remove_jurisdiction_{profile_key}",
+                    help=f"Remove {profile_context} from the scenario.",
                 ):
                     remove_item(st.session_state.jurisdiction_profiles, index)
                     st.rerun()
@@ -3257,8 +3257,8 @@ def main():
                             "$50 investment fee."
                         )
                 if st.button(
-                    f"Remove {context}", key=f"remove_investment_{item_key(item)}",
-                    help="Remove this investment from the scenario.",
+                    "🗑️", key=f"remove_investment_{item_key(item)}",
+                    help=f"Remove {context} from the scenario.",
                 ):
                     remove_item(st.session_state.investments, index)
                     st.rerun()
@@ -3301,8 +3301,8 @@ def main():
                     key=f"income_bonus_{item_key(item)}",
                 )
                 if st.button(
-                    f"Remove {context}", key=f"remove_income_{item_key(item)}",
-                    help="Remove this income source from the scenario.",
+                    "🗑️", key=f"remove_income_{item_key(item)}",
+                    help=f"Remove {context} from the scenario.",
                 ):
                     remove_item(st.session_state.incomes, index)
                     st.rerun()
@@ -3335,8 +3335,8 @@ def main():
                     step=25.0, format="%.0f", key=f"expense_amount_{item_key(item)}",
                 )
                 if st.button(
-                    f"Remove {context}", key=f"remove_expense_{item_key(item)}",
-                    help="Remove this expense from the scenario.",
+                    "🗑️", key=f"remove_expense_{item_key(item)}",
+                    help=f"Remove {context} from the scenario.",
                 ):
                     remove_item(st.session_state.expenses, index)
                     st.rerun()
@@ -3397,8 +3397,8 @@ def main():
                     step=100.0, format="%.0f", key=f"loan_paid_{item_key(item)}",
                 )
                 if st.button(
-                    f"Remove {context}", key=f"remove_loan_{item_key(item)}",
-                    help="Remove this loan from the scenario.",
+                    "🗑️", key=f"remove_loan_{item_key(item)}",
+                    help=f"Remove {context} from the scenario.",
                 ):
                     remove_item(st.session_state.loans, index)
                     st.rerun()
@@ -3458,8 +3458,8 @@ def main():
                 )
                 st.caption("* Illustrative assumption; adjust or disable for your situation.")
                 if st.button(
-                    f"Remove {context}", key=f"remove_dependent_{item_key(item)}",
-                    help="Remove this child from the scenario.",
+                    "🗑️", key=f"remove_dependent_{item_key(item)}",
+                    help=f"Remove {context} from the scenario.",
                 ):
                     remove_item(st.session_state.dependents, index)
                     st.rerun()
@@ -3585,7 +3585,8 @@ def main():
                     continue
                 remove_col, label_col = st.columns([1, 3])
                 if remove_col.button(
-                    "Remove", key=f"remove_imported_curveball_{item_key(item)}",
+                    "🗑️", key=f"remove_imported_curveball_{item_key(item)}",
+                    help=f"Remove imported curveball {item.get('name', '')}.",
                 ):
                     st.session_state.curveballs.remove(item)
                     st.rerun()

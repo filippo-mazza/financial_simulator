@@ -194,7 +194,7 @@ def test_imported_custom_curveball_can_be_removed(monkeypatch, tmp_path):
     app.run(timeout=30)
 
     curveballs = _expander(app, "sidebar_curveballs")
-    next(item for item in curveballs.button if item.label == "Remove").click().run(
+    next(item for item in curveballs.button if item.label == "🗑️").click().run(
         timeout=30
     )
 
@@ -219,6 +219,11 @@ def test_new_expense_is_inserted_at_top_of_expense_list(monkeypatch, tmp_path):
     ]
     assert expense_buttons[0].endswith("Expense 2")
     assert expense_buttons[1].endswith("Living expenses")
+    assert any(
+        item.label == "Expense — Expense 2: Name"
+        for item in _expander(app, "sidebar_expenses").text_input
+    )
+    assert not any("Expense 1 — Expense 2" in item.label for item in app.text_input)
 
 
 def test_added_cards_open_independently_and_survive_edit_and_rerun(tmp_path):
@@ -376,7 +381,7 @@ curveballs = app.session_state['curveballs']
 ids = [item['_id'] for item in curveballs]
 assert ids[0] == 'existing-curveball'
 assert len(set(ids)) == 2
-remove_buttons = [button for button in app.button if button.label == 'Remove']
+remove_buttons = [button for button in app.button if button.label == '🗑️']
 assert len(remove_buttons) == 2
 assert len({{button.key for button in remove_buttons}}) == 2
 """
