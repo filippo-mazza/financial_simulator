@@ -48,8 +48,14 @@ def test_getting_started_guidance_is_hidden_after_running_simulations(
 from streamlit.testing.v1 import AppTest
 app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
 guidance = next(item.value for item in app.info if "Start here" in item.value)
+assert "tap the **expand sidebar** button at the top left" in guidance
+assert "left menu" in guidance
 assert "not financial advice" in guidance
 assert "qualified professional" in guidance
+styles = next(item.value for item in app.markdown if "stExpandSidebarButton" in item.value)
+assert "max-width: 768px" in styles
+assert "prefers-reduced-motion: no-preference" in styles
+assert "sidebar-nudge 0.8s ease-in-out 3" in styles
 next(item for item in app.number_input if item.label == "Number of simulations").set_value(1).run(timeout=30)
 next(item for item in app.button if item.label == "▶ Run simulations").click().run(timeout=60)
 assert not app.exception

@@ -2248,6 +2248,14 @@ def main():
     <style>
     .block-container { max-width: 1200px; padding-top: 2rem; }
     [data-testid="stMetricValue"] { color: #35c99a; }
+    @media (max-width: 768px) and (prefers-reduced-motion: no-preference) {
+        [data-testid="stExpandSidebarButton"] {
+            animation: sidebar-nudge 0.8s ease-in-out 3;
+        }
+        @keyframes sidebar-nudge {
+            50% { transform: translateX(4px); }
+        }
+    }
     </style>
     """, unsafe_allow_html=True)
     st.title("📈 Financial Simulator")
@@ -4141,6 +4149,8 @@ def main():
     ):
         welcome_placeholder.info(
             "**Start here**\n\n"
+            "On mobile, tap the **expand sidebar** button at the top left to open "
+            "the left menu.\n\n"
             "- **Set up a scenario:** review or edit the starting cash, income, "
             "expenses, investments, loans, and assumptions in the **Scenario** "
             "controls in the left sidebar. Add optional details such as dependents, "
