@@ -701,6 +701,31 @@ assert not any('Frequencies and other summary values' in item.value for item in 
     assert result.returncode == 0, result.stderr
 
 
+def test_numeric_month_selector_has_bounds_default_and_updates_details(tmp_path):
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=60)
+assert not app.exception
+month = next(item for item in app.number_input if item.label == 'Simulation month')
+assert month.min == 1
+assert month.max == 120
+assert month.value == 120
+assert any(item.value == 'Average detail for month 120' for item in app.subheader)
+month.set_value(1).run(timeout=30)
+assert not app.exception
+assert any(item.value == 'Average detail for month 1' for item in app.subheader)
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=90,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_monte_carlo_low_sample_warning_is_visible(tmp_path):
     script = f"""
 from streamlit.testing.v1 import AppTest
