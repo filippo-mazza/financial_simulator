@@ -78,6 +78,12 @@ def _prepare_curveball_events(curveballs, income_names, months, random_source):
         recovery = int(getattr(curveball, "recovery_months", 0))
         reduction = float(getattr(curveball, "income_reduction_pct", 0.0))
         affected = getattr(curveball, "affected_income_name", None)
+        event_kind = getattr(curveball, "event_kind", "income_reduction")
+        expense_type = getattr(curveball, "expense_type", "miscellaneous")
+        expense_amount = float(getattr(curveball, "expense_amount", 0.0))
+        expense_amount_max = getattr(curveball, "expense_amount_max", None)
+        if expense_amount_max is not None:
+            expense_amount_max = float(expense_amount_max)
         if not name.strip():
             raise ValueError("Curveball names cannot be empty")
         if not 0 <= probability <= 1:
@@ -90,18 +96,33 @@ def _prepare_curveball_events(curveballs, income_names, months, random_source):
             raise ValueError(f"Curveball '{name}' recovery must be nonnegative")
         if not 0 <= reduction <= 100:
             raise ValueError(f"Curveball '{name}' income reduction must be 0–100%")
-        if affected is not None and affected not in income_names:
+        if event_kind not in ("income_reduction", "expense_shock"):
+            raise ValueError(
+                f"Curveball '{name}' has unsupported event kind '{event_kind}'"
+            )
+        if event_kind == "income_reduction" and affected is not None and affected not in income_names:
             raise ValueError(
                 f"Curveball '{name}' targets unknown income '{affected}'"
             )
+        if event_kind == "expense_shock":
+            if expense_amount < 0:
+                raise ValueError(f"Curveball '{name}' expense amount must be nonnegative")
+            if expense_amount_max is not None and expense_amount_max < expense_amount:
+                raise ValueError(
+                    f"Curveball '{name}' maximum expense amount must be at least its minimum"
+                )
         event = {
             "name": name,
+            "event_kind": event_kind,
             "enabled": enabled,
             "probability": probability,
             "affected_income_name": affected,
             "income_reduction_pct": reduction,
             "duration_months": duration,
             "recovery_months": recovery,
+            "expense_type": expense_type,
+            "expense_amount": expense_amount,
+            "expense_amount_max": expense_amount_max,
             "start_month_min": start_min,
             "start_month_max": start_max,
             "triggered": False,
@@ -118,12 +139,17 @@ def _prepare_curveball_events(curveballs, income_names, months, random_source):
             event["triggered"] = True
             event["start_month"] = random_source.randint(start_min, start_max)
             event["end_month"] = event["start_month"] + duration + recovery - 1
+            if event_kind == "expense_shock" and expense_amount_max is not None:
+                event["expense_amount"] = random_source.uniform(
+                    expense_amount, expense_amount_max,
+                )
         events.append(event)
     return events
 
 
 def _curveball_income_factor(event, month_number, income_name):
-    if (not event["triggered"]
+    if (event.get("event_kind", "income_reduction") != "income_reduction"
+            or not event["triggered"]
             or (event["affected_income_name"] is not None
                 and event["affected_income_name"] != income_name)
             or month_number < event["start_month"]):
@@ -140,6 +166,17 @@ def _curveball_income_factor(event, month_number, income_name):
     else:
         severity = 0.0
     return 1.0 - event["income_reduction_pct"] / 100 * severity
+
+
+def _curveball_expense_amount(event, month_number):
+    """Return the expense shock due in a one-based simulation month."""
+    if (event.get("event_kind") != "expense_shock"
+            or not event["triggered"]
+            or event["start_month"] is None
+            or month_number < event["start_month"]
+            or month_number >= event["start_month"] + event["duration_months"]):
+        return 0.0
+    return event["expense_amount"]
 
 
 def compute_net_worth_over_time(years, bank_account, investments, loans, income_sources,
@@ -236,6 +273,16 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             name: [] for name in income_names
         }
         monthly_details["curveball_events"] = curveball_events
+        used_expense_names = set(expense_names)
+        for event in curveball_events:
+            if event.get("event_kind") != "expense_shock":
+                continue
+            expense_name = event["name"]
+            if expense_name in used_expense_names:
+                expense_name = f"{expense_name} (curveball)"
+            event["expense_name"] = expense_name
+            used_expense_names.add(expense_name)
+            monthly_details["expense_values"][expense_name] = []
     monthly_net_worth = []
     loan_repayment_dates = {}
     scheduled_purchase = None
@@ -328,6 +375,19 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 _withdraw_for_simulation(
                     bank_account, monthly_expense, current_month,
                     f"expense '{expense_name}'",
+                )
+            for event in curveball_events:
+                shock = _curveball_expense_amount(event, month_number)
+                if not shock:
+                    continue
+                expense_name = event["expense_name"]
+                year_expense += shock
+                month_expense_values[expense_name] = (
+                    month_expense_values.get(expense_name, 0) + shock
+                )
+                _withdraw_for_simulation(
+                    bank_account, shock, current_month,
+                    f"curveball expense '{expense_name}'",
                 )
             
             # Loan Repayments

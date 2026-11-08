@@ -91,6 +91,24 @@ def test_curveballs_panel_exposes_predefined_event_checkboxes(monkeypatch, tmp_p
     assert app.session_state["curveballs"][0]["enabled"] is True
 
 
+def test_expense_curveball_preset_exposes_expense_amount(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+    curveballs = _expander(app, "sidebar_curveballs")
+    medical = next(item for item in curveballs.checkbox
+                   if item.label == "Unexpected medical bill")
+    medical.set_value(True).run(timeout=30)
+
+    assert not app.exception
+    assert app.session_state["curveballs"][0]["event_kind"] == "expense_shock"
+    assert any(
+        item.label == "Unexpected medical bill — Amount per affected month ($)"
+        for item in app.number_input
+    )
+
+
 def test_selected_curveball_opens_its_item_keyed_card(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
