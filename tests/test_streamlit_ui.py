@@ -690,7 +690,12 @@ app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
 next(item for item in app.number_input if item.label == 'Number of simulations').set_value(2)
 next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=30)
 assert not app.exception
-assert any('not a guaranteed or individually realizable household path' in item.value and 'hide liquidity shortfalls' in item.value for item in app.info)
+assert any(
+    'not a guaranteed or individually realizable household path' in item.value
+    and 'lowest observed month-end cash in this batch' in item.value
+    and 'not a statistical estimate of downside risk' in item.value
+    for item in app.info
+)
 next(item for item in app.radio if item.label == 'Result view').set_value('Individual run').run(timeout=30)
 assert not app.exception
 assert any('one simulated trajectory rather than an average' in item.value for item in app.info)

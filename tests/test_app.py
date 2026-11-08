@@ -247,6 +247,9 @@ def test_monte_carlo_view_explanations_distinguish_average_and_individual_paths(
     assert "Arithmetic-average overview" in overview
     assert "not a guaranteed or individually realizable household path" in overview
     assert "hide liquidity shortfalls" in overview
+    assert "lowest observed month-end cash in this batch" in overview
+    assert "not a statistical estimate of downside risk" in overview
+    assert "Quantitative downside-risk estimates" in overview
     assert "issue #25" in overview and "issue #67" in overview
     assert "arithmetic average is the same as Run 1" in single_run
     assert "does not hide differences between runs" in single_run
