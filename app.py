@@ -1702,6 +1702,36 @@ def select_representative_trajectories(trajectories):
     return entries
 
 
+DOWNSIDE_SCENARIO_LABEL = "Illustrative downside scenario"
+
+
+def select_downside_trajectory(trajectories):
+    """Pick the actual run whose month-end cash balance falls lowest over the horizon.
+
+    Ties are broken by run number, then by the earliest month.  Returns
+    ``(trajectory, month, lowest_cash)`` with a one-based month.
+    """
+    if not trajectories:
+        raise ValueError("at least one trajectory is required")
+    best = None
+    for trajectory in sorted(trajectories, key=lambda t: t.run_number):
+        cash = trajectory.result[2]["bank_account"]
+        month_index = min(range(len(cash)), key=lambda i: (cash[i], i))
+        if best is None or cash[month_index] < best[2]:
+            best = (trajectory, month_index + 1, cash[month_index])
+    return best
+
+
+def downside_scenario_explanation(simulation_count):
+    """Explain how the illustrative downside scenario is selected."""
+    return (
+        f"Among the {simulation_count} simulated run(s), this is the actual run whose "
+        "month-end cash balance reaches the lowest value at any month over the full "
+        "horizon (ties go to the lower run number, then the earlier month). It is one "
+        "illustrative sample path, not a percentile or a worst-case guarantee."
+    )
+
+
 def monte_carlo_compare_explanation(simulation_count):
     """Explain that Compare shows actual runs rather than percentile curves."""
     return (
@@ -5148,11 +5178,22 @@ def main():
 
     final_net_worth = net_worth[-1]
     starting_net_worth = net_worth[0]
-    columns = st.columns(4)
+    columns = st.columns(5)
     columns[0].metric(f"{label_prefix}final net worth", _money(final_net_worth), f"{final_net_worth - starting_net_worth:+,.0f}")
-    columns[1].metric(f"{label_prefix}final cash", _money(details["bank_account"][-1]))
-    columns[2].metric(f"{label_prefix}final investments", _money(details["investments"][-1]))
-    columns[3].metric("Loans repaid", len(repayment_dates))
+    downside_trajectory, downside_month, downside_cash = select_downside_trajectory(
+        trajectories
+    )
+    columns[1].metric(
+        "Lowest month-end cash",
+        _money(downside_cash),
+        f"Month {downside_month} · run {downside_trajectory.run_number}",
+        delta_color="off",
+        help=f"**{DOWNSIDE_SCENARIO_LABEL}.** "
+        + downside_scenario_explanation(int(simulation_count)),
+    )
+    columns[2].metric(f"{label_prefix}final cash", _money(details["bank_account"][-1]))
+    columns[3].metric(f"{label_prefix}final investments", _money(details["investments"][-1]))
+    columns[4].metric("Loans repaid", len(repayment_dates))
 
     single_export_download_name = build_export_filename(
         st.session_state.get("single_export_filename", single_export_filename),
@@ -5179,16 +5220,32 @@ def main():
             {"month": month, "amount": cash, "series": f"{label_prefix}cash"},
             {"month": month, "amount": investments, "series": f"{label_prefix}investments"},
         ])
+    downside_series = f"{DOWNSIDE_SCENARIO_LABEL} cash"
+    chart_values.extend(
+        {"month": month, "amount": cash, "series": downside_series}
+        for month, cash in enumerate(
+            downside_trajectory.result[2]["bank_account"], start=1)
+        if month <= len(net_worth)
+    )
 
     lines = alt.Chart(alt.Data(values=chart_values)).mark_line(strokeWidth=2.5).encode(
+        strokeDash=alt.StrokeDash(
+            "series:N",
+            scale=alt.Scale(
+                domain=[f"{label_prefix}net worth", f"{label_prefix}cash",
+                        f"{label_prefix}investments", downside_series],
+                range=[[1, 0], [1, 0], [1, 0], [6, 4]],
+            ),
+            legend=None,
+        ),
         x=alt.X("month:Q", title="Month", scale=alt.Scale(domain=[1, len(net_worth)])),
         y=alt.Y("amount:Q", title="Amount", axis=alt.Axis(format="$,.0f")),
         color=alt.Color(
             "series:N", title="Financial series",
             scale=alt.Scale(
                 domain=[f"{label_prefix}net worth", f"{label_prefix}cash",
-                        f"{label_prefix}investments"],
-                range=["#35c99a", "#5b8def", "#f4b942"],
+                        f"{label_prefix}investments", downside_series],
+                range=["#35c99a", "#5b8def", "#f4b942", "#e5484d"],
             ),
             legend=alt.Legend(orient="top", direction="horizontal"),
         ),
@@ -5285,6 +5342,19 @@ def main():
         selection = selected[0] if isinstance(selected, list) else selected
         selected_month = int(round(selection["month"]))
     selected_month = min(max(selected_month, 1), len(net_worth))
+    st.caption(
+        f"The dashed red line is the {DOWNSIDE_SCENARIO_LABEL}: run "
+        f"{downside_trajectory.run_number}, whose cash falls lowest "
+        f"({_money(downside_cash)}) in month {downside_month}."
+    )
+    if st.checkbox(
+        f"Inspect {DOWNSIDE_SCENARIO_LABEL} lowest-cash month (month {downside_month})",
+        key=f"inspect_downside_{run_id}_{view_mode}",
+        help=downside_scenario_explanation(int(simulation_count)),
+    ):
+        net_worth, _, details = downside_trajectory.result
+        selected_month = min(max(downside_month, 1), len(net_worth))
+        detail_prefix = f"{DOWNSIDE_SCENARIO_LABEL} (run {downside_trajectory.run_number})"
     balances, flows = get_month_details(net_worth, details, selected_month)
     st.subheader(f"{detail_prefix} detail for month {selected_month}")
     balance_column, flow_column = st.columns(2, gap="large")
