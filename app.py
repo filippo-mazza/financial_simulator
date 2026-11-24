@@ -2271,6 +2271,61 @@ def read_simulation_export(data, include_warnings=False):
     return (config, import_warnings) if include_warnings else config
 
 
+def build_expense_analysis_prompt():
+    categories = sorted(Expense("Prompt category", "housing", 0).expense_growth)
+    monthly_categories = {category: None for category in categories}
+    monthly_categories["uncategorized"] = None
+    schema_example = {
+        "format": "financial-simulator-aggregated-expenses",
+        "schema_version": 1,
+        "currency": None,
+        "period": {"start": "YYYY-MM", "end": "YYYY-MM"},
+        "monthly_totals": [{
+            "month": "YYYY-MM",
+            "categories": monthly_categories,
+            "expenses_total": None,
+            "excluded_debits_total": None,
+            "excluded_income_total": None,
+            "excluded_transfer_credits_total": None,
+            "refunds_total": None,
+            "other_excluded_credits_total": None,
+        }],
+        "reconciliation": {
+            "source_debits_total": None,
+            "expenses_total": None,
+            "excluded_debits_total": None,
+            "debits_difference": None,
+            "source_credits_total": None,
+            "excluded_income_total": None,
+            "excluded_transfer_credits_total": None,
+            "refunds_total": None,
+            "other_excluded_credits_total": None,
+            "credits_difference": None,
+            "status": "reconciled or unreconciled",
+        },
+    }
+    return f"""Convert the attached bank statement CSV into a privacy-minimized monthly expense summary for the Financial Simulator. Do not return or retain transaction-level data in the output.
+
+Interpretation and classification:
+- Treat a negative amount as money leaving the account and a positive amount as money entering it, unless the CSV clearly documents a different sign convention. Explain the convention you used.
+- Use the transaction date as printed in the statement for the YYYY-MM month. Do not infer missing dates or silently substitute a posting date.
+- Count ordinary purchases and bills as expenses. Exclude income and transfers between the user's own accounts from expenses; do not mistake a transfer or card payment for a new expense.
+- Treat credits as income, transfers, or refunds only when the statement supports that interpretation. Track refunds separately from gross expense categories; do not net them against expenses. Put credits you cannot confidently identify in other_excluded_credits_total.
+- Map expenses to the closest applicable simulator category from this list: {", ".join(categories)}. Put uncertain or unclassifiable expenses in "uncategorized"; explain material ambiguities and do not guess.
+- Never invent a value, currency, date, category, transaction, or missing month. Use null where the schema permits an unknown value; otherwise state what is missing and do not claim reconciliation.
+
+Reconciliation:
+- Sum source debits and credits separately for the covered period. expenses_total is the sum of all category totals, including uncategorized; reconcile it plus excluded_debits_total against source_debits_total. Reconcile excluded_income_total, excluded_transfer_credits_total, refunds_total, and other_excluded_credits_total against source_credits_total. Report both differences and set status to "reconciled" only when both reconcile exactly to the available precision. Explain any unresolved difference; do not force totals to match.
+- Include a month only when the statement covers it. Report the actual covered start and end months, and do not fabricate zero-activity months.
+
+Privacy and output:
+- The CSV is being shared with ChatGPT under the user's ChatGPT account settings and data controls. Minimize the output: include only monthly aggregates, currency, covered period, and reconciliation metadata. Do not include names, account/card numbers, merchant names, descriptions, transaction IDs, or individual transaction dates/amounts.
+- Return exactly one valid JSON object, with no Markdown fences or prose around it. Use format "financial-simulator-aggregated-expenses" and schema_version 1. Use numeric totals in the CSV's currency, and use null for genuinely unavailable values. Include a monthly_totals entry only for a month covered by the statement; use zero only for a verified zero, not a missing value.
+
+{json.dumps(schema_example, indent=2)}
+"""
+
+
 def main():
     import altair as alt
     import streamlit as st
@@ -2904,6 +2959,69 @@ def main():
         for profile in configured_jurisdiction_profiles():
             with st.expander(profile.name):
                 st.markdown(describe_profile_assumptions(profile))
+
+    @st.dialog("Bank statement analysis prompt", width="large")
+    def show_bank_analysis_prompt():
+        st.markdown(
+            "1. Export a CSV from your bank and open your own ChatGPT account.\n"
+            "2. Paste the prompt below and upload the CSV **directly to ChatGPT**.\n"
+            "3. Review its categories, dates, exclusions, and reconciliation. "
+            "Correct errors before asking it to attach a downloadable `.json` file. "
+            "If it only displays the JSON, copy the full object into a text editor "
+            "and save it as `analyzed-expenses.json`.\n"
+            "4. Keep the JSON on your device. When the expense-summary "
+            "import is available, return here and import it through that flow. "
+            "The existing Scenario import accepts simulator scenario files only; "
+            "do not upload this summary there."
+        )
+        st.warning(
+            "Your bank data is shared with ChatGPT under your ChatGPT account "
+            "settings and data controls. Review those settings before uploading. "
+            "This simulator does not receive or upload your CSV."
+        )
+        prompt = build_expense_analysis_prompt()
+        prompt_json = json.dumps(prompt).replace("</", "<\\/")
+
+        st.iframe(
+            f"""
+            <button id="copy-prompt" type="button">Copy prompt</button>
+            <span id="copy-status" role="status" aria-live="polite"></span>
+            <script>
+            const promptText = {prompt_json};
+            const button = document.getElementById("copy-prompt");
+            const status = document.getElementById("copy-status");
+            button.addEventListener("click", async () => {{
+              try {{
+                await navigator.clipboard.writeText(promptText);
+                status.textContent = "Prompt copied.";
+              }} catch (error) {{
+                status.textContent =
+                  "Clipboard access is unavailable. Select and copy the full prompt below.";
+              }}
+            }});
+            </script>
+            <style>
+            button {{
+              border: 1px solid #888;
+              border-radius: 0.4rem;
+              background: transparent;
+              color: inherit;
+              cursor: pointer;
+              font: inherit;
+              padding: 0.45rem 0.8rem;
+            }}
+            #copy-status {{ margin-left: 0.6rem; }}
+            </style>
+            """,
+            height=48,
+        )
+        st.text_area(
+            "Full prompt (select and copy manually if needed)",
+            value=prompt,
+            height=400,
+            disabled=True,
+            key="bank_analysis_prompt_text",
+        )
 
     def render_jurisdiction_profiles():
         if st.button("? Assumptions, sources and limitations",
@@ -3625,6 +3743,15 @@ def main():
                 label_col.caption(item.get("name", "Imported curveball"))
 
     with st.sidebar:
+        with st.expander("Tools & AI", key="sidebar_tools_ai"):
+            if st.button(
+                "Bank statement analysis prompt",
+                key="bank_analysis_prompt_button",
+                use_container_width=True,
+            ):
+                show_bank_analysis_prompt()
+            st.caption("Manual workflow; this simulator never uploads bank CSVs.")
+
         st.header("Scenario")
         scenario_controls_placeholder = st.empty()
 

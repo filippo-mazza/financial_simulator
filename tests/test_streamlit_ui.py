@@ -28,11 +28,15 @@ def test_sidebar_expanders_keep_stable_identity_when_summary_changes(monkeypatch
     app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
 
     expected_keys = {
-        "sidebar_import", "sidebar_cash", "sidebar_investments", "sidebar_income",
+        "sidebar_tools_ai", "sidebar_import", "sidebar_cash",
+        "sidebar_investments", "sidebar_income",
         "sidebar_expenses", "sidebar_loans", "sidebar_assumptions", "sidebar_family",
         "sidebar_jurisdictions", "sidebar_curveballs",
     }
     assert {expander.key for expander in app.expander} == expected_keys
+    assert _expander(app.sidebar, "sidebar_tools_ai").label == "Tools & AI"
+    assert app.sidebar.expander[0].key == "sidebar_tools_ai"
+    assert not app.session_state.get("sidebar_tools_ai", False)
     assert _expander(app, "sidebar_cash").label.startswith("Cash · $5,000")
 
     app.number_input(key="scenario_initial_cash").set_value(7500).run(timeout=30)
@@ -816,6 +820,44 @@ def _fresh_app(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     return AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+
+def test_bank_analysis_dialog_preserves_active_scenario_and_results(tmp_path):
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+app.button(key="create_scenario_workspace").click().run(timeout=30)
+next(
+    item for item in app.number_input
+    if item.label == "Number of simulations"
+).set_value(1).run(timeout=30)
+next(item for item in app.button if item.label == "▶ Run simulations").click().run(
+    timeout=60,
+)
+saved_run_id = app.session_state["simulation_result"]["run_id"]
+active_scenario_id = app.session_state["scenario_workspace"].active_id
+next(
+    item for item in app.button
+    if item.key == "bank_analysis_prompt_button"
+).click().run(timeout=30)
+assert not app.exception
+assert app.session_state["simulation_result"]["run_id"] == saved_run_id
+assert app.session_state["scenario_workspace"].active_id == active_scenario_id
+assert app.text_area(key="bank_analysis_prompt_text").disabled
+prompt = app.text_area(key="bank_analysis_prompt_text").value
+assert '"schema_version": 1' in prompt
+assert "Do not include names, account/card numbers" in prompt
+assert any("shared with ChatGPT" in item.value for item in app.warning)
+assert any("attach a downloadable" in item.value for item in app.markdown)
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_scenario_json_actions_are_grouped_in_sidebar(monkeypatch, tmp_path):

@@ -6,18 +6,39 @@ import math
 import pytest
 
 from bank_account import InsufficientFundsException
+from expense import Expense
 from app import (CHART_EVENT_COLORS, SimulationTrajectory, _consume_run_request,
                  _whole_amount, aggregate_purchase_events,
                  DependentConfig, ExpenseConfig,
                  FinancialAssumptions, IncomeConfig, InvestmentConfig, LoanConfig, SimulationConfig,
                  build_components, build_simulation_events, create_simulation_export,
-                 get_month_details, monte_carlo_sample_guidance,
+                 build_expense_analysis_prompt, get_month_details,
+                 monte_carlo_sample_guidance,
                  monte_carlo_view_explanation, select_downside_trajectory,
                  select_representative_trajectories,
                  read_simulation_export, run_simulation,
                  run_simulation_batch, run_simulations)
 from investment import Investment
 from property_purchase import AutomaticPurchasePolicy, PropertyPurchase
+
+
+def test_expense_analysis_prompt_uses_versioned_aggregate_schema():
+    prompt = build_expense_analysis_prompt()
+    schema = json.loads("{" + prompt.split("\n\n{", 1)[1])
+
+    assert schema["format"] == "financial-simulator-aggregated-expenses"
+    assert schema["schema_version"] == 1
+    assert set(schema["monthly_totals"][0]["categories"]) == {
+        *Expense("Prompt category", "housing", 0).expense_growth,
+        "uncategorized",
+    }
+    assert "YYYY-MM" in schema["monthly_totals"][0]["month"]
+    assert "merchant names" in prompt
+    assert "account/card numbers" in prompt
+    assert "do not force totals to match" in prompt
+    assert "do not guess" in prompt
+    assert "under the user's ChatGPT account settings" in prompt
+    assert "transaction-level data" in prompt
 
 
 def test_build_components_exposes_all_model_options():
