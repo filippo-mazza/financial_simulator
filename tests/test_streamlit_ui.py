@@ -843,7 +843,7 @@ next(
 assert not app.exception
 assert app.session_state["simulation_result"]["run_id"] == saved_run_id
 assert app.session_state["scenario_workspace"].active_id == active_scenario_id
-assert app.text_area(key="bank_analysis_prompt_text").disabled
+assert not app.text_area(key="bank_analysis_prompt_text").disabled
 prompt = app.text_area(key="bank_analysis_prompt_text").value
 assert '"schema_version": 1' in prompt
 assert "Do not include names, account/card numbers" in prompt

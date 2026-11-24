@@ -3019,7 +3019,6 @@ def main():
             "Full prompt (select and copy manually if needed)",
             value=prompt,
             height=400,
-            disabled=True,
             key="bank_analysis_prompt_text",
         )
 
