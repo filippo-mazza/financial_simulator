@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Financial Simulator aggregated expenses, version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "schema_version", "currency", "period", "monthly_totals", "reconciliation"],
+  "properties": {
+    "format": {"const": "financial-simulator-aggregated-expenses"},
+    "schema_version": {"const": 1},
+    "currency": {"anyOf": [{"type": "string", "pattern": "^[A-Z]{3}$"}, {"type": "null"}]},
+    "period": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"$ref": "#/$defs/month"},
+        "end": {"$ref": "#/$defs/month"}
+      }
+    },
+    "monthly_totals": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/monthly"}
+    },
+    "reconciliation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_debits_total", "expenses_total", "excluded_debits_total", "debits_difference",
+        "source_credits_total", "excluded_income_total", "excluded_transfer_credits_total",
+        "refunds_total", "other_excluded_credits_total", "credits_difference", "status"
+      ],
+      "properties": {
+        "source_debits_total": {"$ref": "#/$defs/amount"},
+        "expenses_total": {"$ref": "#/$defs/amount"},
+        "excluded_debits_total": {"$ref": "#/$defs/amount"},
+        "debits_difference": {"$ref": "#/$defs/difference"},
+        "source_credits_total": {"$ref": "#/$defs/amount"},
+        "excluded_income_total": {"$ref": "#/$defs/amount"},
+        "excluded_transfer_credits_total": {"$ref": "#/$defs/amount"},
+        "refunds_total": {"$ref": "#/$defs/amount"},
+        "other_excluded_credits_total": {"$ref": "#/$defs/amount"},
+        "credits_difference": {"$ref": "#/$defs/difference"},
+        "status": {"enum": ["reconciled", "unreconciled"]}
+      }
+    }
+  },
+  "$defs": {
+    "month": {"type": "string", "pattern": "^(?!0000)[0-9]{4}-(0[1-9]|1[0-2])$"},
+    "amount": {"anyOf": [{"type": "number", "minimum": 0}, {"type": "null"}]},
+    "difference": {"type": ["number", "null"]},
+    "monthly": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "month", "categories", "expenses_total", "excluded_debits_total",
+        "excluded_income_total", "excluded_transfer_credits_total", "refunds_total",
+        "other_excluded_credits_total"
+      ],
+      "properties": {
+        "month": {"$ref": "#/$defs/month"},
+        "categories": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "clothing", "education", "entertainment", "groceries", "healthcare",
+            "housing", "miscellaneous", "transportation", "unexpected", "utilities",
+            "vacations", "uncategorized"
+          ],
+          "properties": {
+            "clothing": {"$ref": "#/$defs/amount"},
+            "education": {"$ref": "#/$defs/amount"},
+            "entertainment": {"$ref": "#/$defs/amount"},
+            "groceries": {"$ref": "#/$defs/amount"},
+            "healthcare": {"$ref": "#/$defs/amount"},
+            "housing": {"$ref": "#/$defs/amount"},
+            "miscellaneous": {"$ref": "#/$defs/amount"},
+            "transportation": {"$ref": "#/$defs/amount"},
+            "unexpected": {"$ref": "#/$defs/amount"},
+            "utilities": {"$ref": "#/$defs/amount"},
+            "vacations": {"$ref": "#/$defs/amount"},
+            "uncategorized": {"$ref": "#/$defs/amount"}
+          }
+        },
+        "expenses_total": {"$ref": "#/$defs/amount"},
+        "excluded_debits_total": {"$ref": "#/$defs/amount"},
+        "excluded_income_total": {"$ref": "#/$defs/amount"},
+        "excluded_transfer_credits_total": {"$ref": "#/$defs/amount"},
+        "refunds_total": {"$ref": "#/$defs/amount"},
+        "other_excluded_credits_total": {"$ref": "#/$defs/amount"}
+      }
+    }
+  }
+}

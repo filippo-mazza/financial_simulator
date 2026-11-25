@@ -1,0 +1,51 @@
+{
+  "format": "financial-simulator-aggregated-expenses",
+  "schema_version": 1,
+  "currency": "EUR",
+  "period": {"start": "2025-01", "end": "2025-02"},
+  "monthly_totals": [
+    {
+      "month": "2025-01",
+      "categories": {
+        "clothing": 0, "education": 0, "entertainment": 0, "groceries": 200,
+        "healthcare": 0, "housing": 800, "miscellaneous": 20,
+        "transportation": 0, "unexpected": 0, "utilities": 0,
+        "vacations": 0, "uncategorized": 30
+      },
+      "expenses_total": 1050,
+      "excluded_debits_total": 200,
+      "excluded_income_total": 2000,
+      "excluded_transfer_credits_total": 100,
+      "refunds_total": 50,
+      "other_excluded_credits_total": 10
+    },
+    {
+      "month": "2025-02",
+      "categories": {
+        "clothing": 0, "education": 0, "entertainment": 0, "groceries": 250,
+        "healthcare": 100, "housing": 800, "miscellaneous": 0,
+        "transportation": 0, "unexpected": 0, "utilities": 0,
+        "vacations": 0, "uncategorized": 0
+      },
+      "expenses_total": 1150,
+      "excluded_debits_total": 100,
+      "excluded_income_total": 2000,
+      "excluded_transfer_credits_total": 50,
+      "refunds_total": 20,
+      "other_excluded_credits_total": 5
+    }
+  ],
+  "reconciliation": {
+    "source_debits_total": 2500,
+    "expenses_total": 2200,
+    "excluded_debits_total": 300,
+    "debits_difference": 0,
+    "source_credits_total": 4235,
+    "excluded_income_total": 4000,
+    "excluded_transfer_credits_total": 150,
+    "refunds_total": 70,
+    "other_excluded_credits_total": 15,
+    "credits_difference": 0,
+    "status": "reconciled"
+  }
+}

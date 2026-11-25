@@ -2301,26 +2301,27 @@ def build_expense_analysis_prompt():
             "refunds_total": None,
             "other_excluded_credits_total": None,
             "credits_difference": None,
-            "status": "reconciled or unreconciled",
+            "status": "unreconciled",
         },
     }
     return f"""Convert the attached bank statement CSV into a privacy-minimized monthly expense summary for the Financial Simulator. Do not return or retain transaction-level data in the output.
 
 Interpretation and classification:
-- Treat a negative amount as money leaving the account and a positive amount as money entering it, unless the CSV clearly documents a different sign convention. Explain the convention you used.
+- Treat a negative amount as money leaving the account and a positive amount as money entering it, unless the CSV clearly documents a different sign convention. Review the convention with the user.
 - Use the transaction date as printed in the statement for the YYYY-MM month. Do not infer missing dates or silently substitute a posting date.
 - Count ordinary purchases and bills as expenses. Exclude income and transfers between the user's own accounts from expenses; do not mistake a transfer or card payment for a new expense.
 - Treat credits as income, transfers, or refunds only when the statement supports that interpretation. Track refunds separately from gross expense categories; do not net them against expenses. Put credits you cannot confidently identify in other_excluded_credits_total.
-- Map expenses to the closest applicable simulator category from this list: {", ".join(categories)}. Put uncertain or unclassifiable expenses in "uncategorized"; explain material ambiguities and do not guess.
-- Never invent a value, currency, date, category, transaction, or missing month. Use null where the schema permits an unknown value; otherwise state what is missing and do not claim reconciliation.
+- Map expenses to the closest applicable simulator category from this list: {", ".join(categories)}. Put uncertain or unclassifiable expenses in "uncategorized"; do not guess. The user may override classifications after reviewing them; do not include transaction details or free-text explanations in the JSON.
+- Never invent a value, currency, date, category, transaction, or missing month. Use null where the schema permits an unknown value; if a required date is unknown, ask the user before producing JSON.
 
 Reconciliation:
-- Sum source debits and credits separately for the covered period. expenses_total is the sum of all category totals, including uncategorized; reconcile it plus excluded_debits_total against source_debits_total. Reconcile excluded_income_total, excluded_transfer_credits_total, refunds_total, and other_excluded_credits_total against source_credits_total. Report both differences and set status to "reconciled" only when both reconcile exactly to the available precision. Explain any unresolved difference; do not force totals to match.
-- Include a month only when the statement covers it. Report the actual covered start and end months, and do not fabricate zero-activity months.
+- Sum source debits and credits separately for the covered period as nonnegative magnitudes. expenses_total is the sum of all category totals, including uncategorized; period totals are sums of the corresponding monthly totals, or null if a contributing month or value is missing. debits_difference is source_debits_total minus expenses_total minus excluded_debits_total; credits_difference is source_credits_total minus excluded_income_total, excluded_transfer_credits_total, refunds_total, and other_excluded_credits_total. A difference with an unknown operand is null. Set status to "reconciled" only when every amount and currency is known, every month in the period is included, and both differences are exactly zero; do not force totals to match.
+- Include a month only when the statement covers it. Report the actual covered start and end months, and do not fabricate zero-activity months. A missing month or unknown value requires an unreconciled status.
+- Use one ISO 4217 currency code per document. Never sum different currencies or silently convert them; for mixed currencies prepare one document per currency, with reconciliation restricted to that currency. If currency is unknown use null and unreconciled.
 
 Privacy and output:
 - The CSV is being shared with ChatGPT under the user's ChatGPT account settings and data controls. Minimize the output: include only monthly aggregates, currency, covered period, and reconciliation metadata. Do not include names, account/card numbers, merchant names, descriptions, transaction IDs, or individual transaction dates/amounts.
-- Return exactly one valid JSON object, with no Markdown fences or prose around it. Use format "financial-simulator-aggregated-expenses" and schema_version 1. Use numeric totals in the CSV's currency, and use null for genuinely unavailable values. Include a monthly_totals entry only for a month covered by the statement; use zero only for a verified zero, not a missing value.
+- Return exactly one valid JSON object for the currency being summarized, with no Markdown fences or prose around it. Use format "financial-simulator-aggregated-expenses" and schema_version 1. Use numeric totals in that currency, and use null for genuinely unavailable values. Include a monthly_totals entry only for a month covered by the statement; use zero only for a verified zero, not a missing value.
 
 {json.dumps(schema_example, indent=2)}
 """
