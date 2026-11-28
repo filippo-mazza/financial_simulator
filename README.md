@@ -388,12 +388,14 @@ For a new child, **Childcare monthly cost (until school)** is charged until the
 existing school-start milestone; it stops in the transition month and the
 configured school cost starts in the following month. Older exports without
 this field retain the legacy recurring child-cost behavior. The **Curveballs**
-panel offers predefined checkbox stress events (temporary job loss, reduced
-working hours, and extended illness leave) rather than a long parameter editor.
+panel offers predefined checkbox stress events (income shocks plus unexpected
+medical bills, car repairs, home repairs, school trips, lost-phone replacement,
+emergency travel, and an unexpected tax bill) rather than a long parameter editor.
 Their documented probabilities, durations, reductions, and recovery periods are
 fixed defaults. Events are sampled once per trajectory from the simulation seed,
-recorded in monthly details/export, and overlapping events multiply their income
-factors. Unselected events consume no random draws and never trigger. Cash and
+recorded in monthly details/export, and overlapping income events multiply their
+income factors. Expense shocks are recorded as named one-off or temporary
+expenses. Unselected events consume no random draws and never trigger. Cash and
 net-worth recovery are reported against pre-event levels; these are stress-test
 assumptions, not forecasts or financial advice.
 
