@@ -4232,14 +4232,20 @@ def main():
                         "costs from the editable profile to the fixed amounts below."
                     ),
                 )
+                purchase_profile = jurisdiction_profile_from_state(
+                    st.session_state.purchase_jurisdiction_profile)
+                if purchase_profile is not None:
+                    st.caption(
+                        "A $0 profile estimate can mean unknown or not modeled; it "
+                        "does not mean tax-exempt. Manual amounts below are additional "
+                        "to the profile estimate and are preserved when you switch profiles."
+                    )
                 purchase["purchase_price"] = st.number_input(
                     "Target property price", min_value=1.0,
                     value=float(purchase["purchase_price"]), step=1000.0,
                     format="%.0f", key="purchase_price",
                 )
                 purchase["down_payment_percentage"] = st.number_input("Down payment (%)", min_value=0.0, max_value=100.0, value=float(purchase["down_payment_percentage"]), key="purchase_down_pct")
-                purchase_profile = jurisdiction_profile_from_state(
-                    st.session_state.purchase_jurisdiction_profile)
                 if purchase_profile is not None:
                     needs = {c.base for c in purchase_profile.acquisition_components}
                     if "cadastral_value" in needs:
@@ -4251,7 +4257,14 @@ def main():
                             help="Only for the prezzo-valore regime. If not entered, the "
                                  "sale price is used as an indicative proxy.",
                         )
-                    if "higher_of_price_and_assessed" in needs:
+                    needs_assessed_value = (
+                        "higher_of_price_and_assessed" in needs
+                        or (
+                            purchase_profile.property_tax_base == "assessed_value"
+                            and purchase_profile.annual_property_tax_percentage > 0
+                        )
+                    )
+                    if needs_assessed_value:
                         st.session_state.purchase_assessed_value = st.number_input(
                             "Assessed value (e.g. Portuguese VPT; 0 = not entered)",
                             min_value=0.0,
@@ -4270,18 +4283,71 @@ def main():
                         st.warning(warning)
                     if purchase_profile.unsupported_cases:
                         st.warning(f"Not covered: {purchase_profile.unsupported_cases}")
-                purchase["transaction_fees"] = st.number_input("Additional fixed one-off transaction fees", min_value=0.0, value=float(purchase["transaction_fees"]), step=500.0, key="purchase_fees")
+                has_purchase_profile = purchase_profile is not None
+                purchase["transaction_fees"] = st.number_input(
+                    (
+                        "Additional one-off costs not included in profile estimate"
+                        if has_purchase_profile else
+                        "Additional fixed one-off transaction fees"
+                    ),
+                    min_value=0.0, value=float(purchase["transaction_fees"]),
+                    step=500.0, key="purchase_fees",
+                    help=(
+                        "Only enter distinct costs not already represented by the "
+                        "profile's acquisition breakdown. The value is preserved when "
+                        "the profile changes."
+                        if has_purchase_profile else
+                        "One-off purchase fees entered manually."
+                    ),
+                )
                 purchase["mortgage_interest_rate"] = st.number_input("Mortgage annual interest (%)", min_value=0.0, value=float(purchase["mortgage_interest_rate"]), step=0.1, key="purchase_rate")
                 purchase["mortgage_duration_years"] = st.number_input("Mortgage term (years)", min_value=1, value=int(purchase["mortgage_duration_years"]), key="purchase_term")
                 purchase["fixed_rate"] = st.checkbox("Fixed-rate mortgage", value=bool(purchase["fixed_rate"]), key="purchase_fixed")
-                purchase["monthly_expenses"] = st.number_input("Additional fixed monthly ownership costs", min_value=0.0, value=float(purchase["monthly_expenses"]), step=25.0, key="purchase_monthly_cost")
-                purchase["yearly_tax"] = st.number_input("Additional fixed annual ownership tax", min_value=0.0, value=float(purchase["yearly_tax"]), step=100.0, key="purchase_yearly_tax")
+                purchase["monthly_expenses"] = st.number_input(
+                    (
+                        "Additional monthly ownership costs on top of profile estimate"
+                        if has_purchase_profile else
+                        "Additional fixed monthly ownership costs"
+                    ),
+                    min_value=0.0, value=float(purchase["monthly_expenses"]),
+                    step=25.0, key="purchase_monthly_cost",
+                    help=(
+                        "Enter only distinct fixed monthly costs not covered by the "
+                        "profile's estimated maintenance and operating costs."
+                        if has_purchase_profile else
+                        "Fixed monthly ownership costs entered manually."
+                    ),
+                )
+                purchase["yearly_tax"] = st.number_input(
+                    (
+                        "Additional annual property tax on top of profile estimate"
+                        if has_purchase_profile else
+                        "Additional fixed annual ownership tax"
+                    ),
+                    min_value=0.0, value=float(purchase["yearly_tax"]),
+                    step=100.0, key="purchase_yearly_tax",
+                    help=(
+                        "Enter only tax amounts not represented by the profile. A "
+                        "$0 profile estimate may mean unknown, not tax-exempt."
+                        if has_purchase_profile else
+                        "Annual ownership tax entered manually."
+                    ),
+                )
                 purchase["annual_maintenance_percentage"] = st.number_input(
-                    "Annual maintenance / upkeep (% of original purchase price)",
+                    (
+                        "Additional annual maintenance / upkeep on top of profile "
+                        "estimate (% of original purchase price)"
+                        if has_purchase_profile else
+                        "Annual maintenance / upkeep (% of original purchase price)"
+                    ),
                     min_value=0.0, max_value=100.0,
                     value=float(purchase.get("annual_maintenance_percentage", 0.0)),
                     step=0.1, key="purchase_maintenance_percentage",
                     help=(
+                        "Planning allowance charged monthly after closing, based on the "
+                        "original purchase price. Add only upkeep beyond the profile "
+                        "estimate; it does not compound with appreciation."
+                        if has_purchase_profile else
                         "Planning allowance charged monthly after closing. It is based "
                         "on the original purchase price and does not compound with "
                         "property appreciation."
@@ -4488,6 +4554,56 @@ def main():
                 estimated_tax = (
                     profile_estimate.annual_property_tax if profile_estimate else 0
                 )
+                additional_monthly = preview.effective_monthly_expenses
+                profile_tax_base = (
+                    "assessed value"
+                    if selected_profile
+                    and selected_profile.property_tax_base == "assessed_value"
+                    else "starting purchase price"
+                )
+                if (selected_profile
+                        and selected_profile.property_tax_base == "assessed_value"
+                        and not st.session_state.purchase_assessed_value):
+                    profile_tax_base += " (sale price proxy; assessed value not entered)"
+                st.markdown("**Live purchase-cost breakdown**")
+                st.markdown(
+                    f"- **Upfront fees:** from jurisdiction profile "
+                    f"${estimated_fees:,.0f} + additional manual amounts "
+                    f"${preview.transaction_fees:,.0f} = combined fees "
+                    f"${estimated_fees + preview.transaction_fees:,.0f}; "
+                    f"down payment ${preview.down_payment:,.0f}.\n"
+                    f"- **Monthly ownership costs:** from jurisdiction profile "
+                    f"${estimated_monthly:,.0f} + additional manual amounts "
+                    f"${additional_monthly:,.0f} = combined "
+                    f"${estimated_monthly + additional_monthly:,.0f}. Profile "
+                    f"maintenance is "
+                    f"{selected_profile.annual_maintenance_percentage:g}% of the "
+                    f"starting purchase price per year"
+                    f"{' (indicative allowance)' if selected_profile.maintenance_basis == 'indicative' else ''}; "
+                    f"manual upkeep is "
+                    f"{preview.annual_maintenance_percentage:g}% of starting price "
+                    "per year.\n"
+                    f"- **Annual property tax:** from jurisdiction profile "
+                    f"${estimated_tax:,.0f} + additional manual amount "
+                    f"${preview.yearly_tax:,.0f} = combined "
+                    f"${estimated_tax + preview.yearly_tax:,.0f} "
+                    f"({profile_tax_base if selected_profile else 'no profile estimate'})."
+                )
+                if selected_profile:
+                    st.caption(
+                        f"Profile {selected_profile.name} · "
+                        f"{selected_profile.verification_status} · recurring property "
+                        f"tax uses {profile_tax_base}; maintenance uses the starting "
+                        "purchase price and does not compound. Acquisition bases and "
+                        "estimate warnings are listed above. A zero estimate is not "
+                        "evidence of exemption."
+                    )
+                else:
+                    st.caption(
+                        "No jurisdiction profile selected. Manual costs are the only "
+                        "modeled purchase costs; maintenance uses the starting price "
+                        "and does not compound."
+                    )
                 st.info(
                     f"Configuration estimate: upfront cash **${preview.down_payment + preview.transaction_fees + estimated_fees:,.0f}**, "
                     f"mortgage principal **${preview.mortgage_principal:,.0f}**, estimated "
@@ -4497,6 +4613,19 @@ def main():
                     "purchase is stochastic and may not occur. Profile estimates use the "
                     "starting purchase price and do not predict future law or reassessment."
                 )
+                if st.session_state.purchase_mode.startswith("Automatic"):
+                    combined_fees = preview.transaction_fees + estimated_fees
+                    required_cash = max(
+                        st.session_state.purchase_min_cash,
+                        preview.down_payment + combined_fees
+                        + st.session_state.purchase_reserve,
+                    )
+                    st.caption(
+                        "Automatic affordability uses these same combined fees at "
+                        "eligibility and closing: max(minimum available cash, down "
+                        f"payment + combined fees + reserve) = "
+                        f"${required_cash:,.0f}."
+                    )
                 if (st.session_state.purchase_mode.startswith("Automatic")
                         and st.session_state.purchase_delay_enabled):
                     if st.session_state.purchase_delay_mode == "Fixed":

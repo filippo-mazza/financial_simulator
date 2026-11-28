@@ -228,6 +228,68 @@ def test_purchase_profile_resolves_to_dollar_costs_without_mutating_input():
     assert purchase.transaction_fees == 1_000
 
 
+def test_purchase_profile_switch_preserves_manual_costs_and_updates_cash_threshold():
+    first_profile = PropertyJurisdictionProfile(
+        "Fictional First District", acquisition_cost_percentage=1,
+    )
+    second_profile = PropertyJurisdictionProfile(
+        "Fictional Second District", acquisition_cost_percentage=4,
+    )
+    purchase = PropertyPurchase(
+        100_000, 20, transaction_fees=500, monthly_expenses=25, yearly_tax=100,
+    )
+    policy = AutomaticPurchasePolicy(purchase, 0, 1_000)
+    base = SimulationConfig(property_purchase=policy)
+
+    manual_only = resolved_property_purchase(base)
+    first = resolved_property_purchase(_replace(
+        base,
+        jurisdiction_profiles=[first_profile],
+        property_purchase_jurisdiction_profile=first_profile.name,
+    ))
+    second = resolved_property_purchase(_replace(
+        base,
+        jurisdiction_profiles=[second_profile],
+        property_purchase_jurisdiction_profile=second_profile.name,
+    ))
+    profile_only = resolved_property_purchase(_replace(
+        base,
+        property_purchase=_replace(policy, purchase=_replace(
+            purchase, transaction_fees=0,
+        )),
+        jurisdiction_profiles=[first_profile],
+        property_purchase_jurisdiction_profile=first_profile.name,
+    ))
+
+    assert manual_only.purchase.transaction_fees == 500
+    assert first.purchase.transaction_fees == 1_500
+    assert second.purchase.transaction_fees == 4_500
+    assert profile_only.purchase.transaction_fees == 1_000
+    assert manual_only.minimum_required_cash == 21_500
+    assert first.minimum_required_cash == 22_500
+    assert second.minimum_required_cash == 25_500
+    assert first.purchase.monthly_expenses == purchase.monthly_expenses
+    assert first.purchase.yearly_tax == purchase.yearly_tax
+    assert purchase.transaction_fees == 500
+
+
+def test_assessed_value_profile_tax_uses_assessed_value_or_warns_on_price_proxy():
+    profile = PropertyJurisdictionProfile(
+        "Fictional Assessed District",
+        annual_property_tax_percentage=1,
+        property_tax_base="assessed_value",
+    )
+
+    entered = estimate_property_costs(
+        profile, 200_000, ownership_percentage=50, assessed_value=100_000,
+    )
+    proxy = estimate_property_costs(profile, 200_000, ownership_percentage=50)
+
+    assert entered.annual_property_tax == 500
+    assert proxy.annual_property_tax == 1_000
+    assert any("sale price is used as a proxy" in warning for warning in proxy.warnings)
+
+
 def test_jurisdiction_configuration_round_trips_and_legacy_export_defaults_empty():
     profile = PropertyJurisdictionProfile("Fictional Export", 2, 0.5, 1, 5)
     config = SimulationConfig(

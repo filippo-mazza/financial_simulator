@@ -673,6 +673,59 @@ def test_purchase_panel_exposes_optional_mortgage_affordability(monkeypatch, tmp
     assert len(affordability_help) == 7
     assert all(affordability_help.values())
     assert "living costs" in affordability_help["Base monthly living buffer"]
+
+
+def test_purchase_profile_cost_breakdown_updates_without_discarding_manual_amounts(
+        monkeypatch, tmp_path):
+    app = _fresh_app(monkeypatch, tmp_path)
+    next(
+        item for item in app.checkbox
+        if item.label == "Enable future property purchase"
+    ).set_value(True).run(timeout=30)
+
+    app.number_input(key="purchase_fees").set_value(1_000).run(timeout=30)
+    app.number_input(key="purchase_monthly_cost").set_value(250).run(timeout=30)
+    app.number_input(key="purchase_yearly_tax").set_value(1_200).run(timeout=30)
+    app.number_input(key="purchase_maintenance_percentage").set_value(0.5).run(timeout=30)
+
+    assert not app.exception
+    labels = " ".join(item.label for item in app.number_input)
+    assert "Additional fixed one-off transaction fees" in labels
+    assert "from jurisdiction profile $0 + additional manual amounts $1,000" in (
+        " ".join(item.value for item in app.markdown)
+    )
+
+    app.selectbox(key="purchase_jurisdiction_profile_input").set_value(
+        "Austria — resale, ordinary purchase"
+    ).run(timeout=30)
+
+    assert not app.exception
+    labels = " ".join(item.label for item in app.number_input)
+    assert "not included in profile estimate" in labels
+    assert "on top of profile estimate" in labels
+    assert app.number_input(key="purchase_fees").value == 1_000
+    assert app.number_input(key="purchase_monthly_cost").value == 250
+    assert app.number_input(key="purchase_yearly_tax").value == 1_200
+    assert app.number_input(key="purchase_maintenance_percentage").value == 0.5
+    assert any("unknown or not modeled" in item.value for item in app.caption)
+
+    app.selectbox(key="purchase_jurisdiction_profile_input").set_value(
+        "Madrid (Spain) — resale, general rate"
+    ).run(timeout=30)
+    assert not app.exception
+    assert app.number_input(key="purchase_fees").value == 1_000
+    assert "from jurisdiction profile $6,000" in " ".join(
+        item.value for item in app.markdown
+    )
+
+    app.selectbox(key="purchase_jurisdiction_profile_input").set_value(None).run(
+        timeout=30
+    )
+    assert not app.exception
+    labels = " ".join(item.label for item in app.number_input)
+    assert "Additional fixed one-off transaction fees" in labels
+    assert app.number_input(key="purchase_fees").value == 1_000
+    assert app.number_input(key="purchase_yearly_tax").value == 1_200
     assert "Buffer per adult" in labels
     assert "Buffer per dependent" in labels
     assert "Months from eligibility to closing" in labels
