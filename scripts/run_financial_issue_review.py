@@ -14,17 +14,7 @@ from scripts.run_technical_review import (
 from scripts.technical_review_quota import GitHubStateStore, QuotaError
 from scripts.financial_review_state import FinancialReviewLimiter
 
-WAKE_INPUT = (
-    "Start ISSUE_REVIEW. Discover at most one open non-PR issue labeled "
-    "needs-financial-review through GitHub MCP; never select a pull request. "
-    "Use the saved issue-review instructions. Do not send a duplicate review "
-    "for unchanged requirements. After posting a completed verdict and "
-    "rechecking the issue is unchanged and eligible, manage issue labels: "
-    "for PASS or PASS WITH WARNINGS add Financial reviewed and remove "
-    "needs-financial-review; for CHANGES REQUESTED leave the request label "
-    "and do not add Financial reviewed. For UNABLE TO REVIEW or any failure "
-    "leave the request pending. If no eligible issue exists, exit without changes."
-)
+WAKE_INPUT = "Start ISSUE_REVIEW."
 
 
 def run(client, limiter, agent_id, vault_id, server_label, run_id):
