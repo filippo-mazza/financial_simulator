@@ -14,7 +14,15 @@ from scripts.run_technical_review import (
 from scripts.technical_review_quota import GitHubStateStore, QuotaError
 from scripts.financial_review_state import FinancialReviewLimiter
 
-WAKE_INPUT = "Start ISSUE_REVIEW."
+WAKE_INPUT = (
+    "Start ISSUE_REVIEW. "
+    "After successfully posting a review of unchanged eligible requirements, "
+    "PASS, PASS WITH WARNINGS and CHANGES REQUESTED all count as completed reviews: "
+    "add Financial reviewed and remove needs-financial-review. "
+    "For UNABLE TO REVIEW retain needs-financial-review and do not mark completion. "
+    "Financial reviewed means review completed, not financial approval. "
+    "Verify the resulting labels via GitHub MCP."
+)
 
 
 def run(client, limiter, agent_id, vault_id, server_label, run_id):
