@@ -21,7 +21,11 @@ def test_issue_wake_has_no_target_data_and_shares_quota(monkeypatch):
     limiter = FinancialReviewLimiter(store)
     assert issue.run(client, limiter, "agent", "vault", "github", "123")
     payload = client.stream_session.call_args.args[0]
-    assert payload["input"] == "Start ISSUE_REVIEW."
+    assert payload["input"] == issue.WAKE_INPUT
+    assert payload["input"].startswith("Start ISSUE_REVIEW.")
+    assert "CHANGES REQUESTED all count as completed reviews" in payload["input"]
+    assert "For UNABLE TO REVIEW retain needs-financial-review" in payload["input"]
+    assert "Verify the resulting labels" in payload["input"]
     assert store.state["active"] is None
     assert store.state["completed"] == []
     assert not limiter.reserve(33, "a" * 40).allowed
