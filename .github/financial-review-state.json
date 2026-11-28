@@ -1,9 +1,5 @@
 {
-  "active": {
-    "head_sha": "ffe1874121c5e057edc7335d19ebcf786a8e5e6f",
-    "pr_number": 1,
-    "started_at": "2026-11-28T15:47:53.008829Z"
-  },
+  "active": null,
   "completed": [
     {
       "head_sha": "8b877b844fb0adb82fa874c461bf5db4e1a433dd",
