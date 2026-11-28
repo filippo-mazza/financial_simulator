@@ -3,8 +3,8 @@
 The [JSON Schema](aggregated-expenses.schema.json) specifies the document's
 structure. The [synthetic example](../tests/fixtures/aggregated-expenses-v1.json)
 contains no real banking data. This contract describes the output of the
-existing bank-statement prompt, not an implemented import feature. The simulator
-does not accept this document through its scenario importer.
+bank-statement prompt and the separate expense-summary import. The scenario
+importer accepts simulator scenario files, not expense summaries.
 
 The `format` discriminator is `financial-simulator-aggregated-expenses` and
 `schema_version` is the integer `1`. Like scenario exports, the format and
@@ -55,8 +55,8 @@ simulator mapping. The user must review and explicitly choose a destination or
 leave it unapplied. The user may override any category's proposed destination
 or amount before applying it, without silently replacing existing expenses.
 Overrides are user decisions outside this aggregate JSON, not transaction
-details or additional schema fields. The future importer must provide preview
-and confirmation; this contract does not implement either.
+details or additional schema fields. Review the preview and explicitly confirm
+any changes before applying them.
 
 The simulator's `unexpected` type is stochastic and does **not** spend its
 configured monthly amount like a normal recurring expense. Historical
@@ -99,5 +99,6 @@ Otherwise the status is `unreconciled`. An unreconciled document may preserve
 known mismatches for review, but must not claim a computed sum or difference
 that disagrees with its operands. Structural JSON Schema validation alone
 cannot enforce these cross-field rules, date ordering, ISO currency membership,
-or source completeness; a future importer must validate them separately and
-show actionable errors or warnings without guessing.
+or missing months; the importer checks them separately and shows errors or
+warnings without guessing. It cannot verify the completeness of the original
+statement or detect partial coverage within an included month.

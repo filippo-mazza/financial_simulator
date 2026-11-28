@@ -1,4 +1,6 @@
 altair>=5,<7
+jsonschema>=4.25.1,<5
 matplotlib>=3.7,<4
 numpy>=1.24,<3
+pycountry>=24.6.1,<25
 streamlit>=1.56,<2
