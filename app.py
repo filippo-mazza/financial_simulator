@@ -4270,15 +4270,60 @@ def main():
                             min_value=0.0,
                             value=float(st.session_state.purchase_assessed_value),
                             key="purchase_assessed_value_input",
-                            help="The tax base is the higher of price and assessed value.",
+                            help=(
+                                "Used as the recurring property-tax base. Acquisition "
+                                "components that use this input may instead use the "
+                                "higher of price and assessed value."
+                            ),
                         )
                     purchase_estimate = purchase_cost_estimate(
                         purchase_profile, PropertyPurchase(**purchase),
                         st.session_state.purchase_cadastral_income or None,
                         st.session_state.purchase_assessed_value or None,
                     )
+                    acquisition_components = {
+                        component.label: component
+                        for component in purchase_profile.acquisition_components
+                    }
                     for label, amount, basis in purchase_estimate.acquisition_breakdown:
-                        st.caption(f"{label}: ${amount:,.0f} ({_BASIS_LABELS[basis]})")
+                        component = acquisition_components.get(label)
+                        if component is None:
+                            base_description = (
+                                "fixed profile amount"
+                                if label == "Fixed fees" else
+                                f"purchase price ${purchase['purchase_price']:,.0f}"
+                            )
+                        elif component.method == "fixed":
+                            base_description = "fixed profile amount"
+                        elif component.base == "mortgage_amount":
+                            base_description = (
+                                f"mortgage principal "
+                                f"${PropertyPurchase(**purchase).mortgage_principal:,.0f}"
+                            )
+                        elif component.base == "cadastral_value":
+                            base_description = (
+                                f"cadastral income "
+                                f"${st.session_state.purchase_cadastral_income:,.0f} "
+                                f"× {component.base_multiplier:g}"
+                                if st.session_state.purchase_cadastral_income else
+                                f"sale price proxy ${purchase['purchase_price']:,.0f}"
+                            )
+                        elif component.base == "higher_of_price_and_assessed":
+                            base_description = (
+                                f"higher of purchase price "
+                                f"${purchase['purchase_price']:,.0f} and assessed value "
+                                f"${st.session_state.purchase_assessed_value:,.0f}"
+                                if st.session_state.purchase_assessed_value else
+                                f"purchase price proxy ${purchase['purchase_price']:,.0f}"
+                            )
+                        else:
+                            base_description = (
+                                f"purchase price ${purchase['purchase_price']:,.0f}"
+                            )
+                        st.caption(
+                            f"{label}: ${amount:,.0f} ({_BASIS_LABELS[basis]}; "
+                            f"{base_description})"
+                        )
                     for warning in purchase_estimate.warnings:
                         st.warning(warning)
                     if purchase_profile.unsupported_cases:
@@ -4555,16 +4600,28 @@ def main():
                     profile_estimate.annual_property_tax if profile_estimate else 0
                 )
                 additional_monthly = preview.effective_monthly_expenses
+                profile_maintenance_basis = (
+                    f"Profile maintenance is "
+                    f"{selected_profile.annual_maintenance_percentage:g}% of the "
+                    f"starting purchase price ${preview.purchase_price:,.0f} per year"
+                    f"{' (indicative allowance)' if selected_profile.maintenance_basis == 'indicative' else ''}"
+                    if selected_profile else
+                    "No profile maintenance estimate"
+                )
                 profile_tax_base = (
-                    "assessed value"
+                    f"assessed value "
+                    f"${st.session_state.purchase_assessed_value:,.0f}"
                     if selected_profile
                     and selected_profile.property_tax_base == "assessed_value"
-                    else "starting purchase price"
+                    else f"starting purchase price ${preview.purchase_price:,.0f}"
                 )
                 if (selected_profile
                         and selected_profile.property_tax_base == "assessed_value"
                         and not st.session_state.purchase_assessed_value):
-                    profile_tax_base += " (sale price proxy; assessed value not entered)"
+                    profile_tax_base = (
+                        f"starting purchase price ${preview.purchase_price:,.0f} "
+                        "(sale-price proxy; assessed value not entered)"
+                    )
                 st.markdown("**Live purchase-cost breakdown**")
                 st.markdown(
                     f"- **Upfront fees:** from jurisdiction profile "
@@ -4575,14 +4632,11 @@ def main():
                     f"- **Monthly ownership costs:** from jurisdiction profile "
                     f"${estimated_monthly:,.0f} + additional manual amounts "
                     f"${additional_monthly:,.0f} = combined "
-                    f"${estimated_monthly + additional_monthly:,.0f}. Profile "
-                    f"maintenance is "
-                    f"{selected_profile.annual_maintenance_percentage:g}% of the "
-                    f"starting purchase price per year"
-                    f"{' (indicative allowance)' if selected_profile.maintenance_basis == 'indicative' else ''}; "
+                    f"${estimated_monthly + additional_monthly:,.0f}. "
+                    f"{profile_maintenance_basis}; "
                     f"manual upkeep is "
                     f"{preview.annual_maintenance_percentage:g}% of starting price "
-                    "per year.\n"
+                    f"${preview.purchase_price:,.0f} per year.\n"
                     f"- **Annual property tax:** from jurisdiction profile "
                     f"${estimated_tax:,.0f} + additional manual amount "
                     f"${preview.yearly_tax:,.0f} = combined "
@@ -4594,9 +4648,11 @@ def main():
                         f"Profile {selected_profile.name} · "
                         f"{selected_profile.verification_status} · recurring property "
                         f"tax uses {profile_tax_base}; maintenance uses the starting "
-                        "purchase price and does not compound. Acquisition bases and "
-                        "estimate warnings are listed above. A zero estimate is not "
-                        "evidence of exemption."
+                        "purchase price and does not compound. Acquisition estimates "
+                        f"use starting price ${preview.purchase_price:,.0f} and mortgage "
+                        f"principal ${preview.mortgage_principal:,.0f} where applicable; "
+                        "component details and estimate warnings are listed above. A "
+                        "zero estimate is not evidence of exemption."
                     )
                 else:
                     st.caption(
