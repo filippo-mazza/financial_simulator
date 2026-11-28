@@ -1304,8 +1304,309 @@ def aggregate_purchase_events(trajectories):
     }]
 
 
+def _field_error(context, field_name, value, requirement, correction):
+    return (
+        f"{context} — {field_name}: received {value!r}; {requirement}. "
+        f"{correction}"
+    )
+
+
+def scenario_validation_errors(config):
+    """Return all recognizable, field-specific errors without mutating config."""
+    errors = []
+    income_specs = (
+        config.incomes
+        if config.incomes is not None
+        else [IncomeConfig(
+            "Primary income", config.income_type, config.monthly_income,
+            config.tax_rate, config.bonus_pct,
+        )]
+    )
+    investment_specs = (
+        config.investments
+        if config.investments is not None
+        else [InvestmentConfig(
+            "Portfolio", config.investment_type, config.investment_initial,
+            config.investment_contribution,
+        )]
+    )
+    loan_specs = (
+        config.loans
+        if config.loans is not None
+        else [LoanConfig(
+            "Loan", config.loan_amount, config.loan_rate,
+            config.loan_duration, config.fixed_rate, config.loan_already_paid,
+        )]
+    )
+    expense_specs = (
+        config.expenses
+        if config.expenses is not None
+        else [ExpenseConfig("Living expenses", config.expense_type,
+                            config.monthly_expense)]
+    )
+
+    for item in income_specs:
+        context = f"Income — {item.name or '(unnamed)'}"
+        if not math.isfinite(item.monthly_amount) or item.monthly_amount < 0:
+            errors.append(_field_error(
+                context, "Monthly amount ($)", item.monthly_amount,
+                "must be a finite nonnegative amount",
+                "Enter 0 or a positive monthly income amount.",
+            ))
+        if not 0 <= item.tax_rate <= 100:
+            errors.append(_field_error(
+                context, "Custom tax rate (%)", item.tax_rate,
+                "Taxation must be between 0 and 100",
+                "Use a percentage from 0 to 100, or 0 to apply the default rate.",
+            ))
+        if not 0 <= item.bonus_pct <= 100:
+            errors.append(_field_error(
+                context, "Bonus cap (%)", item.bonus_pct,
+                "must be between 0 and 100",
+                "Enter the percentage of an annual salary paid as a bonus.",
+            ))
+
+    seen_investments = {}
+    for item in investment_specs:
+        seen_investments.setdefault(item.name, 0)
+        seen_investments[item.name] += 1
+        context = f"Investment — {item.name or '(unnamed)'}"
+        if not 0 < item.ownership_percentage <= 100:
+            errors.append(_field_error(
+                context, "Ownership share (%)", item.ownership_percentage,
+                "Property ownership percentage must be above 0 and at most 100",
+                "Enter a percentage greater than 0 and no greater than 100.",
+            ))
+        if not 0 < item.liability_share_percentage <= 100:
+            errors.append(_field_error(
+                context, "Your share of the linked loan (%)",
+                item.liability_share_percentage,
+                "Property liability share must be above 0 and at most 100",
+                "Enter a percentage greater than 0 and no greater than 100.",
+            ))
+        if item.auto_invest_min_cash < 0:
+            errors.append(_field_error(
+                context, "Automatic contribution cash threshold ($)",
+                item.auto_invest_min_cash,
+                "Automatic contribution minimum cash cannot be negative",
+                "Enter 0 or a positive cash threshold.",
+            ))
+        if not 0 < item.auto_invest_percentage <= 100:
+            errors.append(_field_error(
+                context, "Automatic contribution (% of current cash)",
+                item.auto_invest_percentage,
+                "Automatic contribution percentage must be between 0 and 100",
+                "Enter a percentage greater than 0 and no greater than 100.",
+            ))
+        if item.auto_invest_max_per_year < 1:
+            errors.append(_field_error(
+                context, "Maximum automatic contributions per year",
+                item.auto_invest_max_per_year,
+                "Automatic contribution maximum per year must be positive",
+                "Enter at least 1 contribution per year.",
+            ))
+        if item.auto_invest_enabled and item.investment_type not in AUTO_INVEST_TYPES:
+            errors.append(_field_error(
+                context, "Enable automatic cash-sweep contributions",
+                item.auto_invest_enabled,
+                "Automatic contributions are only supported for stock and safe investments",
+                "Disable automatic contributions or change the investment type.",
+            ))
+    for name, count in seen_investments.items():
+        if count > 1:
+            errors.append(_field_error(
+                "Investments", "Name", name,
+                "Investment names must be unique",
+                f"Rename all but one of the {count} investments named {name!r}.",
+            ))
+
+    income_by_name = {}
+    for item in income_specs:
+        income_by_name.setdefault(item.name, []).append(item)
+    loan_name_counts = {}
+    for item in loan_specs:
+        loan_name_counts[item.name] = loan_name_counts.get(item.name, 0) + 1
+        context = f"Loan — {item.name or '(unnamed)'}"
+        if not math.isfinite(item.amount) or item.amount < 0:
+            errors.append(_field_error(
+                context, "Principal amount ($)", item.amount,
+                "must be a finite nonnegative amount",
+                "Enter 0 or a positive principal amount.",
+            ))
+        if not 0 <= item.already_paid <= item.amount:
+            errors.append(_field_error(
+                context, "Already paid ($)", item.already_paid,
+                "already_paid must be between 0 and the loan amount",
+                f"Enter a value from 0 to {item.amount}.",
+            ))
+        if item.duration_years < 1:
+            errors.append(_field_error(
+                context, "Duration (years)", item.duration_years,
+                "must be positive",
+                "Enter a duration of at least 1 year.",
+            ))
+        if not math.isfinite(item.interest_rate) or item.interest_rate < 0:
+            errors.append(_field_error(
+                context, "Interest rate (%)", item.interest_rate,
+                "must be a finite nonnegative percentage",
+                "Enter 0 or a positive interest rate.",
+            ))
+
+    linked_loans, linked_rents = [], []
+    for item in investment_specs:
+        context = f"Investment — {item.name or '(unnamed)'}"
+        if item.linked_loan_name:
+            linked_loans.append(item.linked_loan_name)
+            if loan_name_counts.get(item.linked_loan_name) != 1:
+                errors.append(_field_error(
+                    context, "Mortgage / loan linked to this property",
+                    item.linked_loan_name,
+                    "must identify exactly one configured loan",
+                    "Select a configured loan or choose No linked loan.",
+                ))
+        if item.rental_income_name:
+            linked_rents.append(item.rental_income_name)
+            matches = income_by_name.get(item.rental_income_name, [])
+            if len(matches) != 1 or matches[0].income_type != "rent":
+                errors.append(_field_error(
+                    context, "Rental income linked to this property",
+                    item.rental_income_name,
+                    "must identify exactly one rent income source",
+                    "Select a rent income source or choose No linked rental income.",
+                ))
+    for linked_name in {name for name in linked_loans if linked_loans.count(name) > 1}:
+        errors.append(_field_error(
+            "Investments", "Linked loan", linked_name,
+            "A loan can be linked to only one property",
+            "Remove the duplicate loan link from all but one property.",
+        ))
+    for linked_name in {name for name in linked_rents if linked_rents.count(name) > 1}:
+        errors.append(_field_error(
+            "Investments", "Linked rental income", linked_name,
+            "A rental income source can be linked to only one property",
+            "Remove the duplicate rental income link from all but one property.",
+        ))
+
+    for item in [*expense_specs, *config.additional_expenses]:
+        if not math.isfinite(item.monthly_amount) or item.monthly_amount < 0:
+            errors.append(_field_error(
+                f"Expense — {item.name or '(unnamed)'}", "Monthly amount ($)",
+                item.monthly_amount, "must be a finite nonnegative amount",
+                "Enter 0 or a positive monthly expense amount.",
+            ))
+
+    for item in config.curveballs:
+        context = f"Curveball — {item.name or '(unnamed)'}"
+        if not 0 <= item.probability <= 1:
+            errors.append(_field_error(
+                context, "Probability", item.probability,
+                "must be between 0 and 1",
+                "Use a probability from 0 to 1 in programmatic scenarios.",
+            ))
+        if item.start_month_min < 1:
+            errors.append(_field_error(
+                context, "Earliest start month", item.start_month_min,
+                "must be at least 1",
+                "Enter a positive one-based start month.",
+            ))
+        if item.start_month_max < item.start_month_min:
+            errors.append(_field_error(
+                context, "Latest start month", item.start_month_max,
+                f"must be no earlier than earliest start {item.start_month_min}",
+                "Set the latest start to the earliest start or a later month. "
+                "Starts beyond the simulation horizon have no effect.",
+            ))
+        if item.duration_months < 1:
+            errors.append(_field_error(
+                context, "Duration (months)", item.duration_months,
+                "must be at least 1",
+                "Enter a positive event duration.",
+            ))
+
+    if config.property_purchase is not None:
+        purchase_policy = config.property_purchase
+        purchase = (
+            purchase_policy.purchase
+            if isinstance(purchase_policy, AutomaticPurchasePolicy)
+            else purchase_policy
+        )
+        purchase_context = "Future property purchase"
+        for label, value, requirement, correction in (
+            (
+                "Target property price ($)", purchase.purchase_price,
+                "must be a finite positive amount", "Enter a price greater than 0.",
+            ),
+            (
+                "Down payment (%)", purchase.down_payment_percentage,
+                "must be between 0 and 100", "Enter a percentage from 0 to 100.",
+            ),
+            (
+                "Additional fixed one-off transaction fees ($)",
+                purchase.transaction_fees,
+                "must be a finite nonnegative amount", "Enter 0 or a positive fee.",
+            ),
+            (
+                "Mortgage term (years)", purchase.mortgage_duration_years,
+                "must be at least 1", "Enter a term of at least 1 year.",
+            ),
+        ):
+            valid = (
+                value > 0 if label.startswith("Target property")
+                else (
+                    0 <= value <= 100
+                    if label == "Down payment (%)"
+                    else value >= 0
+                    if label.startswith("Additional")
+                    else value >= 1
+                )
+            )
+            if not math.isfinite(value) or not valid:
+                errors.append(_field_error(
+                    purchase_context, label, value, requirement, correction,
+                ))
+        if isinstance(purchase_policy, AutomaticPurchasePolicy):
+            if purchase_policy.minimum_available_cash < 0:
+                errors.append(_field_error(
+                    purchase_context, "Minimum cash threshold",
+                    purchase_policy.minimum_available_cash,
+                    "minimum available cash must be a finite nonnegative amount",
+                    "Enter 0 or a positive cash threshold.",
+                ))
+            if purchase_policy.minimum_cash_reserve < 0:
+                errors.append(_field_error(
+                    purchase_context, "Minimum cash retained at closing",
+                    purchase_policy.minimum_cash_reserve,
+                    "minimum cash reserve must be a finite nonnegative amount",
+                    "Enter 0 or a positive reserve.",
+                ))
+            delay = purchase_policy.completion_delay
+            if delay is not None:
+                if not isinstance(delay.minimum_months, int) or delay.minimum_months < 0:
+                    errors.append(_field_error(
+                        purchase_context, "Minimum delay (months)",
+                        delay.minimum_months,
+                        "must be a nonnegative integer",
+                        "Enter a whole number of 0 or more months.",
+                    ))
+                if not isinstance(delay.maximum_months, int) or (
+                        delay.maximum_months < delay.minimum_months):
+                    errors.append(_field_error(
+                        purchase_context, "Maximum delay (months)",
+                        delay.maximum_months,
+                        "must be no less than the minimum delay",
+                        "Increase the maximum or lower the minimum delay.",
+                    ))
+    return errors
+
+
 def build_components(config: SimulationConfig):
     """Create fresh model objects from UI/configuration values."""
+    errors = scenario_validation_errors(config)
+    if errors:
+        raise ValueError(
+            "Scenario validation failed. Correct the following field(s):\n"
+            + "\n".join(f"- {error}" for error in errors)
+        )
     profile_lookup = _jurisdiction_lookup(config)
     if config.incomes is None:
         income_specs = [IncomeConfig("Primary income", config.income_type,
@@ -1917,10 +2218,19 @@ def get_month_details(net_worth, details, month):
         raise ValueError("month is outside the simulation range")
     index = month - 1
     balances = [
-        {"Category": "Overview", "Item": "Net worth", "Amount": net_worth[index]},
-        {"Category": "Overview", "Item": "Cash", "Amount": details["bank_account"][index]},
+        {
+            "Month": month, "Category": "Overview", "Item": "Net worth",
+            "Amount": net_worth[index], "Unit": "USD",
+            "Sign convention": "Assets minus liabilities",
+        },
+        {
+            "Month": month, "Category": "Overview", "Item": "Cash",
+            "Amount": details["bank_account"][index], "Unit": "USD",
+            "Sign convention": "Ending balance",
+        },
         {"Category": "Overview", "Item": "Investments total",
-         "Amount": details["investments"][index]},
+         "Amount": details["investments"][index], "Month": month, "Unit": "USD",
+         "Sign convention": "Ending asset value"},
     ]
     balances.extend(
         {"Category": "Investment", "Item": name, "Amount": values[index]}
@@ -1940,6 +2250,10 @@ def get_month_details(net_worth, details, month):
             {"Category": category, "Item": name, "Amount": values[index]}
             for name, values in details.get(detail_name, {}).items()
         )
+    for row in balances:
+        row.setdefault("Month", month)
+        row.setdefault("Unit", "USD")
+        row.setdefault("Sign convention", "Ending balance or asset/liability value")
 
     flows = []
     for category, detail_name in (
@@ -1954,10 +2268,57 @@ def get_month_details(net_worth, details, month):
         ("Property operating costs (linked)", "property_operating_costs"),
     ):
         flows.extend(
-            {"Category": category, "Item": name, "Amount": values[index]}
+            {
+                "Month": month, "Category": category, "Item": name,
+                "Amount": values[index], "Unit": "USD",
+                "Sign convention": (
+                    "Positive amount shown as a cost/outflow"
+                    if category in {
+                        "Automatic investment contribution",
+                        "Automatic contribution fee", "Expense paid",
+                        "Loan payment", "Property operating costs (linked)",
+                    }
+                    else (
+                        "Positive amount is income lost because of the curveball"
+                        if category == "Curveball income reduction"
+                    else "Positive amount shown as income or balance"
+                    )
+                ),
+            }
             for name, values in details.get(detail_name, {}).items()
         )
     return balances, flows
+
+
+def inspectable_monthly_rows(net_worth, details, result_identity):
+    """Flatten one result path into UI- and export-friendly table rows."""
+    rows = []
+    for index, net_worth_value in enumerate(net_worth, start=1):
+        rows.append({
+            "Month": index,
+            "Scenario / run": result_identity,
+            "Series": "Net worth",
+            "Amount": net_worth_value,
+            "Unit": "USD",
+            "Sign convention": "Assets minus liabilities; positive is a net asset.",
+        })
+        rows.append({
+            "Month": index,
+            "Scenario / run": result_identity,
+            "Series": "Available cash",
+            "Amount": details["bank_account"][index - 1],
+            "Unit": "USD",
+            "Sign convention": "Ending balance; positive is cash available.",
+        })
+        rows.append({
+            "Month": index,
+            "Scenario / run": result_identity,
+            "Series": "Investments",
+            "Amount": details["investments"][index - 1],
+            "Unit": "USD",
+            "Sign convention": "Ending asset value.",
+        })
+    return rows
 
 
 def _monthly_results(net_worth, details):
@@ -2086,6 +2447,9 @@ def create_simulation_export(config, net_worth, repayment_dates, details,
                 "loans_repaid": len(repayment_dates),
             },
             "monthly": _monthly_results(net_worth, details),
+            "inspectable_monthly": inspectable_monthly_rows(
+                net_worth, details, "Average/exported result",
+            ),
             "loan_repayments": [
                 {"name": name, "month": month_index + 1}
                 for name, month_index in repayment_dates.items()
@@ -2337,6 +2701,12 @@ def read_simulation_export(data, include_warnings=False):
         config = SimulationConfig(**parameters)
     except TypeError as error:
         raise ValueError(f"The exported parameters are invalid: {error}") from error
+    import_errors = scenario_validation_errors(config)
+    if import_errors:
+        raise ValueError(
+            "The exported scenario contains invalid field values:\n"
+            + "\n".join(f"- {error}" for error in import_errors)
+        )
 
     trajectory_version = features.get("monte_carlo_trajectories")
     if trajectory_version is not None:
@@ -2480,16 +2850,25 @@ def render_aggregated_expense_import(st):
         f"{document['period']['start']} to {document['period']['end']}. "
         "A listed month may cover only part of that month; review before using it as a monthly amount."
     )
-    st.write("Monthly expense totals", [
-        {"Month": item["month"], "Total": str(item["expenses_total"])
-         if item["expenses_total"] is not None else "Unknown"}
-        for item in document["monthly_totals"]
-    ])
+    st.markdown("**Monthly expense totals**")
+    st.dataframe(
+        [
+            {
+                "Month": item["month"],
+                "Expenses total": item["expenses_total"],
+                "Unit": currency or "unknown currency",
+            }
+            for item in document["monthly_totals"]
+        ],
+        hide_index=True, use_container_width=True,
+    )
     reconciliation = document["reconciliation"]
-    st.write("Reconciliation", {
-        key: str(value) if value is not None else "Unknown"
-        for key, value in reconciliation.items()
-    })
+    st.markdown("**Reconciliation**")
+    st.dataframe(
+        [{"Field": key, "Value": str(value) if value is not None else "Unknown"}
+         for key, value in reconciliation.items()],
+        hide_index=True, use_container_width=True,
+    )
     for warning in warnings:
         st.warning(str(warning))
     if reconciliation["status"] != "reconciled":
@@ -2505,10 +2884,17 @@ def render_aggregated_expense_import(st):
     if month is None:
         return
     monthly = next(item for item in document["monthly_totals"] if item["month"] == month)
-    st.write("Category totals", [
-        {"Category": category, "Total": str(value) if value is not None else "Unknown"}
-        for category, value in monthly["categories"].items()
-    ])
+    st.markdown("**Category totals**")
+    st.dataframe(
+        [
+            {
+                "Month": month, "Category": category,
+                "Total": value, "Unit": currency or "unknown currency",
+            }
+            for category, value in monthly["categories"].items()
+        ],
+        hide_index=True, use_container_width=True,
+    )
     st.caption(
         "Map each category or skip it. Amounts are truncated to whole dollars in the "
         "scenario; the applied amounts are shown below. Zero amounts are omitted, "
@@ -2640,6 +3026,17 @@ def main():
     """, unsafe_allow_html=True)
     st.title("📈 Financial Simulator")
     st.caption("Explore a simple, stochastic projection of cash, investments, income, expenses, and debt.")
+    action_notice = st.session_state.pop("action_success_notice", None)
+    if action_notice:
+        st.toast(action_notice, icon="✅", duration=5)
+
+    def announce_action(message):
+        st.toast(message, icon="✅", duration=5)
+        st.session_state.pop("action_success_notice", None)
+
+    def queue_action(message):
+        st.session_state.action_success_notice = message
+
     active_workspace = st.session_state.get("scenario_workspace")
     welcome_placeholder = st.empty()
     if isinstance(active_workspace, ScenarioWorkspace):
@@ -3004,6 +3401,9 @@ def main():
         workspace = workspace.activate(selected)
         st.session_state.scenario_workspace = workspace
         import_config(workspace.config_for(selected), run_after_load=False)
+        queue_action(
+            f"Switched to scenario {workspace.active_variant.name}; its saved inputs are loaded."
+        )
 
     def reset_alternative_scenario():
         workspace = st.session_state.get("scenario_workspace")
@@ -3020,6 +3420,7 @@ def main():
             import_config(workspace.config_for(ALTERNATIVE_ID), run_after_load=False)
         st.session_state.pop("simulation_result", None)
         st.session_state.pop("scenario_comparison_result", None)
+        queue_action("Alternative B was reset from Baseline A.")
 
     def add_tertiary_scenario():
         workspace = st.session_state.get("scenario_workspace")
@@ -3043,6 +3444,7 @@ def main():
         import_config(workspace.config_for(TERTIARY_ID), run_after_load=False)
         st.session_state.pop("simulation_result", None)
         st.session_state.pop("scenario_comparison_result", None)
+        queue_action(f"Added {workspace.variant(TERTIARY_ID).name} to the scenario workspace.")
 
     def import_scenario_workspace():
         uploaded = st.session_state.get(
@@ -3168,6 +3570,7 @@ def main():
         }
         st.session_state.expenses.insert(0, item)
         st.session_state.expanded_cards[card_state_key("expense", item)] = True
+        announce_action(f"Added expense {item['name']} and opened it for editing.")
 
     def add_dependent():
         number = len(st.session_state.dependents) + 1
@@ -3177,6 +3580,10 @@ def main():
             "school_start_age": 6, "school_monthly_cost": 250.0,
             "_id": uuid.uuid4().hex,
         })
+        announce_action(f"Added Child {number} and opened it for editing.")
+        st.session_state.expanded_cards[
+            card_state_key("dependent", st.session_state.dependents[-1])
+        ] = True
 
     def add_curveball():
         number = len(st.session_state.curveballs) + 1
@@ -3190,6 +3597,7 @@ def main():
         }
         st.session_state.curveballs.insert(0, item)
         st.session_state.expanded_cards[card_state_key("curveball", item)] = True
+        announce_action(f"Added curveball {item['name']} and opened it for editing.")
 
     def add_investment(investment_type):
         item = {
@@ -3208,6 +3616,9 @@ def main():
         }
         st.session_state.investments.insert(0, item)
         st.session_state.expanded_cards[card_state_key("investment", item)] = True
+        announce_action(
+            f"Added {investment_type} investment {item['name']} and opened it for editing."
+        )
 
     def add_income(income_type):
         item = {
@@ -3218,24 +3629,30 @@ def main():
         }
         st.session_state.incomes.insert(0, item)
         st.session_state.expanded_cards[card_state_key("income", item)] = True
+        announce_action(f"Added {income_type} income {item['name']} and opened it for editing.")
 
     def add_loan():
-        st.session_state.loans.append({
+        item = {
             "name": f"Loan {len(st.session_state.loans) + 1}", "amount": 10000.0,
             "interest_rate": 2.0, "duration_years": 25, "fixed_rate": False,
             "already_paid": 0.0,
             "_id": uuid.uuid4().hex,
-        })
+        }
+        st.session_state.loans.insert(0, item)
+        st.session_state.expanded_cards[card_state_key("loan", item)] = True
+        announce_action(f"Added loan {item['name']} and opened it for editing.")
 
     def add_jurisdiction_profile():
-        st.session_state.jurisdiction_profiles.append({
+        item = {
             "name": f"Custom jurisdiction {len(st.session_state.jurisdiction_profiles) + 1}",
             "acquisition_cost_percentage": 0.0,
             "annual_property_tax_percentage": 0.0,
             "annual_maintenance_percentage": 0.0,
             "rental_expense_percentage": 0.0,
             "_id": uuid.uuid4().hex,
-        })
+        }
+        st.session_state.jurisdiction_profiles.insert(0, item)
+        queue_action(f"Added jurisdiction profile {item['name']}.")
 
     @st.dialog("Jurisdiction presets: assumptions, sources and limitations",
                width="large")
@@ -3352,6 +3769,7 @@ def main():
                 st.session_state.jurisdiction_profiles.append({
                     **asdict(catalog[chosen]), "_id": uuid.uuid4().hex,
                 })
+                queue_action(f"Added jurisdiction preset {chosen}.")
                 st.rerun()
         if st.button("＋ Add jurisdiction profile", use_container_width=True):
             add_jurisdiction_profile()
@@ -3475,9 +3893,11 @@ def main():
                     "rental_expense_percentage", "rental_expense_basis", "rental",
                 )
                 if st.button(
-                    "🗑️", key=f"remove_jurisdiction_{profile_key}",
+                    f"🗑️ Remove {profile['name'] or profile_context}",
+                    key=f"remove_jurisdiction_{profile_key}",
                     help=f"Remove {profile_context} from the scenario.",
                 ):
+                    queue_action(f"Removed jurisdiction profile {profile['name']}.")
                     remove_item(st.session_state.jurisdiction_profiles, index)
                     st.rerun()
 
@@ -3710,9 +4130,11 @@ def main():
                             "$50 investment fee."
                         )
                 if st.button(
-                    "🗑️", key=f"remove_investment_{item_key(item)}",
+                    f"🗑️ Remove {item['name']}",
+                    key=f"remove_investment_{item_key(item)}",
                     help=f"Remove {context} from the scenario.",
                 ):
+                    queue_action(f"Removed investment {item['name']}.")
                     remove_item(st.session_state.investments, index)
                     st.rerun()
 
@@ -3754,9 +4176,11 @@ def main():
                     key=f"income_bonus_{item_key(item)}",
                 )
                 if st.button(
-                    "🗑️", key=f"remove_income_{item_key(item)}",
+                    f"🗑️ Remove {item['name']}",
+                    key=f"remove_income_{item_key(item)}",
                     help=f"Remove {context} from the scenario.",
                 ):
+                    queue_action(f"Removed income {item['name']}.")
                     remove_item(st.session_state.incomes, index)
                     st.rerun()
 
@@ -3788,9 +4212,11 @@ def main():
                     step=25.0, format="%.0f", key=f"expense_amount_{item_key(item)}",
                 )
                 if st.button(
-                    "🗑️", key=f"remove_expense_{item_key(item)}",
+                    f"🗑️ Remove {item['name']}",
+                    key=f"remove_expense_{item_key(item)}",
                     help=f"Remove {context} from the scenario.",
                 ):
+                    queue_action(f"Removed expense {item['name']}.")
                     remove_item(st.session_state.expenses, index)
                     st.rerun()
 
@@ -3850,9 +4276,11 @@ def main():
                     step=100.0, format="%.0f", key=f"loan_paid_{item_key(item)}",
                 )
                 if st.button(
-                    "🗑️", key=f"remove_loan_{item_key(item)}",
+                    f"🗑️ Remove {item['name']}",
+                    key=f"remove_loan_{item_key(item)}",
                     help=f"Remove {context} from the scenario.",
                 ):
+                    queue_action(f"Removed loan {item['name']}.")
                     remove_item(st.session_state.loans, index)
                     st.rerun()
 
@@ -3911,9 +4339,11 @@ def main():
                 )
                 st.caption("* Illustrative assumption; adjust or disable for your situation.")
                 if st.button(
-                    "🗑️", key=f"remove_dependent_{item_key(item)}",
+                    f"🗑️ Remove {item['name']}",
+                    key=f"remove_dependent_{item_key(item)}",
                     help=f"Remove {context} from the scenario.",
                 ):
+                    queue_action(f"Removed child {item['name']}.")
                     remove_item(st.session_state.dependents, index)
                     st.rerun()
 
@@ -3968,11 +4398,13 @@ def main():
                 st.session_state.expanded_cards[
                     card_state_key("curveball", existing)
                 ] = True
+                announce_action(f"Added curveball {existing['name']} to the scenario.")
             elif not selected and existing is not None:
                 st.session_state.curveballs = [
                     item for item in st.session_state.curveballs
                     if item.get("name") != preset["name"]
                 ]
+                announce_action(f"Removed curveball {existing['name']} from the scenario.")
             st.caption(preset["description"])
             if selected:
                 existing = next(
@@ -4089,9 +4521,13 @@ def main():
                     continue
                 remove_col, label_col = st.columns([1, 3])
                 if remove_col.button(
-                    "🗑️", key=f"remove_imported_curveball_{item_key(item)}",
+                    f"🗑️ Remove {item.get('name', 'Imported curveball')}",
+                    key=f"remove_imported_curveball_{item_key(item)}",
                     help=f"Remove imported curveball {item.get('name', '')}.",
                 ):
+                    queue_action(
+                        f"Removed curveball {item.get('name', 'Imported curveball')}."
+                    )
                     st.session_state.curveballs.remove(item)
                     st.rerun()
                 label_col.caption(item.get("name", "Imported curveball"))
@@ -5052,6 +5488,7 @@ def main():
                     _new_aggregate_workspace(st.session_state, source_scope, clone_all=True)
                     st.session_state.pop("simulation_result", None)
                     st.session_state.pop("scenario_variant_selector", None)
+                    queue_action("Created Baseline A and Alternative B.")
                     st.rerun()
             else:
                 # Every rerun first saves the visible editor into only the active
@@ -5132,6 +5569,8 @@ def main():
                     ),
                     mime="application/json",
                     use_container_width=True,
+                    on_click=queue_action,
+                    args=("Exported the A/B workspace JSON.",),
                     help=(
                         "Exports all saved named input configurations without simulation results."
                     ),
@@ -5188,6 +5627,9 @@ def main():
         }
         st.session_state.active_result_mode = "comparison"
         st.session_state.focus_comparison_results = True
+        announce_action(
+            f"Comparison completed for {comparison.simulation_count} paired runs."
+        )
 
     scenario_fingerprint = json.dumps(asdict(config), sort_keys=True)
     if run_requested:
@@ -5207,6 +5649,10 @@ def main():
             "trajectories": batch.trajectories,
         }
         st.session_state.active_result_mode = "single"
+        announce_action(
+            f"Simulation completed: {int(simulation_count)} run(s), "
+            f"{config.years * 12} month(s) per run."
+        )
 
     if st.session_state.active_result_mode == "comparison":
         comparison_record = st.session_state.get("scenario_comparison_result")
@@ -5307,6 +5753,23 @@ def main():
             comparison_chart, use_container_width=True,
             key="paired_scenario_balances",
         )
+        with st.expander("Monthly comparison values as a table", expanded=False):
+            st.dataframe(
+                [
+                    {
+                        "Month": row["month"],
+                        "Scenario / run": "Paired average",
+                        "Series": row["series"],
+                        "Amount": row["amount"],
+                        "Unit": "USD",
+                    }
+                    for row in comparison_chart_values
+                ],
+                hide_index=True, use_container_width=True,
+                column_config={
+                    "Amount": st.column_config.NumberColumn(format="$%.0f"),
+                },
+            )
 
         delta_rows = paired_delta_quantiles(comparison)
         delta_data = alt.Data(values=delta_rows)
@@ -5344,6 +5807,29 @@ def main():
             use_container_width=True,
             key="paired_scenario_delta",
         )
+        with st.expander("Paired difference statistics as a table", expanded=False):
+            st.dataframe(
+                [
+                    {
+                        "Month": row["month"],
+                        "Scenario / run": (
+                            f"{comparison.baseline_name} vs {comparison.alternative_name}"
+                        ),
+                        "Statistic": statistic,
+                        "B minus A": row[field],
+                        "Unit": "USD",
+                    }
+                    for row in delta_rows
+                    for statistic, field in (
+                        ("Mean", "mean"), ("Median", "median"),
+                        ("10th percentile", "p10"), ("90th percentile", "p90"),
+                    )
+                ],
+                hide_index=True, use_container_width=True,
+                column_config={
+                    "B minus A": st.column_config.NumberColumn(format="$%+.0f"),
+                },
+            )
         final_delta = delta_rows[-1]
         st.caption(
             f"At month {final_delta['month']}, paired B−A net worth: mean "
@@ -5423,7 +5909,7 @@ def main():
             st.markdown(f"**{suggestion.title}**")
             st.caption(suggestion.description)
             if st.button(
-                "Apply and compare",
+                f"Apply and compare {suggestion.title}",
                 key=f"apply_ab_suggestion_{suggestion.key}",
                 use_container_width=True,
             ):
@@ -5464,6 +5950,7 @@ def main():
                         "comparison": comparison,
                     }
                     st.session_state.active_result_mode = "comparison"
+                    queue_action(f"Applied and compared {suggestion.title}.")
                     st.rerun()
 
     if config.property_purchase is not None:
@@ -5544,6 +6031,10 @@ def main():
                     "fingerprint": scenario_fingerprint,
                     "result": sensitivity_result,
                 }
+                announce_action(
+                    f"Sensitivity analysis completed for "
+                    f"{sensitivity_result['simulation_count']} runs per variant."
+                )
 
         stored_sensitivity = st.session_state.get("sensitivity_result")
         if stored_sensitivity is not None:
@@ -5685,6 +6176,10 @@ def main():
                         "fingerprint": abc_fingerprint,
                         "result": abc_result,
                     }
+                    announce_action(
+                        f"A/B/C sensitivity completed for "
+                        f"{abc_result['simulation_count']} runs per scenario."
+                    )
 
             stored_abc = st.session_state.get("abc_sensitivity_result")
             if stored_abc is not None:
@@ -5794,6 +6289,24 @@ def main():
         ).properties(height=420, title="Net worth of representative actual runs")
         st.altair_chart(compare_chart, use_container_width=True,
                         key=f"compare_chart_{run_id}")
+        with st.expander("Representative run values as a table", expanded=False):
+            st.dataframe(
+                [
+                    {
+                        "Month": row["month"],
+                        "Scenario / run": row["series"],
+                        "Role": row["role"],
+                        "Series": "Net worth",
+                        "Amount": row["amount"],
+                        "Unit": "USD",
+                    }
+                    for row in chart_rows
+                ],
+                hide_index=True, use_container_width=True,
+                column_config={
+                    "Amount": st.column_config.NumberColumn(format="$%.0f"),
+                },
+            )
         st.caption("Illustrative projection only — this is not financial advice.")
         return
     st.info(monte_carlo_view_explanation(view_mode, int(simulation_count)))
@@ -5894,6 +6407,8 @@ def main():
         file_name=single_export_download_name,
         key="single_scenario_export_download",
         mime="application/json",
+        on_click=queue_action,
+        args=("Exported the single-scenario JSON with results.",),
         help="Download the scenario inputs and month-by-month results as JSON.",
     )
 
@@ -6018,10 +6533,37 @@ def main():
         key=f"projection_chart_{run_id}_{view_mode}_{getattr(selected_trajectory, 'run_number', 0)}",
         on_select="rerun", selection_mode="selected_month",
     )
+    with st.expander("All chart series as a table", expanded=False):
+        st.dataframe(
+            [
+                {
+                    "Month": row["month"],
+                    "Scenario / run": detail_prefix,
+                    "Series": row["series"],
+                    "Amount": row["amount"],
+                    "Unit": "USD",
+                }
+                for row in chart_values
+            ],
+            hide_index=True, use_container_width=True,
+            column_config={
+                "Amount": st.column_config.NumberColumn(format="$%.0f"),
+            },
+        )
     if events:
-        st.caption("Events: " + " · ".join(
-            f"month {event['month']}: {event['label']}" for event in events
-        ))
+        with st.expander("Simulation events as a table", expanded=False):
+            st.dataframe(
+                [
+                    {
+                        "Month": event["month"],
+                        "Scenario / run": detail_prefix,
+                        "Event": event["label"],
+                        "Event type": event["event_type"],
+                    }
+                    for event in events
+                ],
+                hide_index=True, use_container_width=True,
+            )
     selected = chart_state.selection.get("selected_month", [])
     selected_month = st.session_state[month_state_key]
     if selected:
