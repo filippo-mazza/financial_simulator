@@ -1,13 +1,20 @@
 name: Financial review
 
 on:
+  issues:
+    types: [labeled]
   pull_request:
     types: [labeled]
   workflow_dispatch:
     inputs:
+      review_mode:
+        description: Review target type
+        type: choice
+        options: [pr, issue]
+        default: pr
       pr_number:
         description: Open PR number targeting main and labeled needs-financial-review
-        required: true
+        required: false
         type: number
 
 permissions: {}
@@ -18,7 +25,7 @@ concurrency:
 
 jobs:
   validate:
-    if: github.actor == github.repository_owner && (github.event_name == 'workflow_dispatch' || github.event.label.name == 'needs-financial-review')
+    if: github.actor == github.repository_owner && ((github.event_name == 'workflow_dispatch' && inputs.review_mode == 'pr') || (github.event_name == 'pull_request' && github.event.label.name == 'needs-financial-review'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -101,3 +108,25 @@ jobs:
           FINANCIAL_REPORT_PATH: ${{ runner.temp }}/financial-review-input/financial-review-report.json
         # Run as a package module so repository-root `scripts.*` imports resolve.
         run: python -m scripts.run_financial_review
+
+  issue-review:
+    if: github.actor == github.repository_owner && ((github.event_name == 'issues' && github.event.label.name == 'needs-financial-review') || (github.event_name == 'workflow_dispatch' && inputs.review_mode == 'issue'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      issues: read
+    steps:
+      - name: Check out trusted automation
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Wake saved Financial Review Agent for autonomous issue discovery
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_FINANCIAL_REVIEW_AGENT_ID: ${{ vars.OPENAI_FINANCIAL_REVIEW_AGENT_ID }}
+          OPENAI_MCP_VAULT_ID: ${{ vars.OPENAI_MCP_VAULT_ID }}
+          OPENAI_GITHUB_MCP_SERVER_LABEL: ${{ vars.OPENAI_GITHUB_MCP_SERVER_LABEL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m scripts.run_financial_issue_review

@@ -129,6 +129,9 @@ class GitHubPRClient:
                         self.last_verdict_issue = str(error)
                 continue
             if reviewed_commit == head_sha.lower():
+                if _verdict == "UNABLE TO REVIEW":
+                    self.last_verdict_issue = "agent was unable to complete the review"
+                    continue
                 return True
             self.last_verdict_issue = "review comment references a different commit SHA"
         return False
