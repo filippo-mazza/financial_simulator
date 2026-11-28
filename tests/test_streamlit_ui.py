@@ -216,7 +216,10 @@ def test_imported_custom_curveball_can_be_removed(monkeypatch, tmp_path):
     app.run(timeout=30)
 
     curveballs = _expander(app, "sidebar_curveballs")
-    next(item for item in curveballs.button if item.label == "🗑️").click().run(
+    next(
+        item for item in curveballs.button
+        if item.label == "🗑️ Remove Old custom event"
+    ).click().run(
         timeout=30
     )
 
@@ -403,7 +406,10 @@ curveballs = app.session_state['curveballs']
 ids = [item['_id'] for item in curveballs]
 assert ids[0] == 'existing-curveball'
 assert len(set(ids)) == 2
-remove_buttons = [button for button in app.button if button.label == '🗑️']
+remove_buttons = [
+    button for button in app.button
+    if button.label.startswith('🗑️ Remove Imported custom event')
+]
 assert len(remove_buttons) == 2
 assert len({{button.key for button in remove_buttons}}) == 2
 """
@@ -703,6 +709,64 @@ def test_purchase_panel_exposes_optional_mortgage_affordability(monkeypatch, tmp
     assert "Maximum delay (months)" in labels
 
 
+def test_purchase_profile_cost_breakdown_updates_without_discarding_manual_amounts(
+        monkeypatch, tmp_path):
+    app = _fresh_app(monkeypatch, tmp_path)
+    next(
+        item for item in app.checkbox
+        if item.label == "Enable future property purchase"
+    ).set_value(True).run(timeout=30)
+
+    app.number_input(key="purchase_price").set_value(100_000).run(timeout=30)
+    app.number_input(key="purchase_fees").set_value(1_000).run(timeout=30)
+    app.number_input(key="purchase_monthly_cost").set_value(250).run(timeout=30)
+    app.number_input(key="purchase_yearly_tax").set_value(1_200).run(timeout=30)
+    app.number_input(key="purchase_maintenance_percentage").set_value(0.5).run(timeout=30)
+
+    assert not app.exception
+    labels = " ".join(item.label for item in app.number_input)
+    assert "Additional fixed one-off transaction fees" in labels
+    assert "from jurisdiction profile $0 + additional manual amounts $1,000" in (
+        " ".join(item.value for item in app.markdown)
+    )
+
+    app.selectbox(key="purchase_jurisdiction_profile_input").set_value(
+        "Austria — resale, ordinary purchase"
+    ).run(timeout=30)
+
+    assert not app.exception
+    labels = " ".join(item.label for item in app.number_input)
+    assert "not included in profile estimate" in labels
+    assert "on top of profile estimate" in labels
+    assert app.number_input(key="purchase_fees").value == 1_000
+    assert app.number_input(key="purchase_monthly_cost").value == 250
+    assert app.number_input(key="purchase_yearly_tax").value == 1_200
+    assert app.number_input(key="purchase_maintenance_percentage").value == 0.5
+    assert any("unknown or not modeled" in item.value for item in app.caption)
+    cost_captions = " ".join(item.value for item in app.caption)
+    assert "purchase price" in cost_captions
+    assert "mortgage principal" in cost_captions
+    assert "Automatic affordability uses these same combined fees" in cost_captions
+
+    app.selectbox(key="purchase_jurisdiction_profile_input").set_value(
+        "Madrid (Spain) — resale, general rate"
+    ).run(timeout=30)
+    assert not app.exception
+    assert app.number_input(key="purchase_fees").value == 1_000
+    assert "from jurisdiction profile $6,000" in " ".join(
+        item.value for item in app.markdown
+    )
+
+    app.selectbox(key="purchase_jurisdiction_profile_input").select_index(0).run(
+        timeout=30
+    )
+    assert not app.exception
+    labels = " ".join(item.label for item in app.number_input)
+    assert "Additional fixed one-off transaction fees" in labels
+    assert app.number_input(key="purchase_fees").value == 1_000
+    assert app.number_input(key="purchase_yearly_tax").value == 1_200
+
+
 def test_monte_carlo_views_explain_average_and_individual_paths(tmp_path):
     # Engine-only tests install a process-wide minimal numpy stub at collection
     # time, so render the completed Altair/pandas UI in a clean Python process.
@@ -764,6 +828,46 @@ assert any(item.value == 'Average detail for month 1' for item in app.subheader)
     assert result.returncode == 0, result.stderr
 
 
+def test_agent_facing_actions_and_result_tables_are_identifiable(tmp_path):
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+expenses = next(
+    expander for expander in app.expander if expander.key == 'sidebar_expenses'
+)
+next(button for button in expenses.button if button.label == '＋ Add expense').click().run(
+    timeout=30,
+)
+assert any('Added expense Expense 2' in item.value for item in app.toast)
+remove = next(
+    button for button in app.button
+    if (button.key or '').startswith('remove_expense_')
+)
+assert 'Expense 2' in remove.label
+next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=60)
+assert any('Simulation completed:' in item.value for item in app.toast)
+chart_table = next(
+    frame.value for frame in app.dataframe
+    if 'Series' in frame.value.columns and 'Scenario / run' in frame.value.columns
+)
+assert {{'Month', 'Series', 'Amount', 'Unit'}} <= set(chart_table.columns)
+detail_tables = [
+    frame.value for frame in app.dataframe
+    if 'Category' in frame.value.columns and 'Item' in frame.value.columns
+]
+assert detail_tables
+assert all('Month' in frame.columns and 'Unit' in frame.columns for frame in detail_tables)
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_monte_carlo_low_sample_warning_is_visible(tmp_path):
     script = f"""
 from streamlit.testing.v1 import AppTest
@@ -790,7 +894,10 @@ app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
 next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=60)
 assert not app.exception
 assert any('Deterministic A/B alternatives' in item.value for item in app.toast)
-assert sum(item.label == 'Apply and compare' for item in app.button) == 3
+assert sum(
+    item.label.startswith('Apply and compare ')
+    for item in app.button
+) == 3
 """
     environment = dict(os.environ)
     environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")

@@ -380,10 +380,20 @@ def estimate_property_costs(
     breakdown = tuple(
         (label, amount, basis) for label, amount, basis in entries if amount
     )
+    property_tax_base = owned_value
+    if profile.property_tax_base == "assessed_value":
+        if assessed_value is None:
+            if profile.annual_property_tax_percentage:
+                warnings.append(
+                    "Assessed value not entered for recurring property tax; "
+                    "the sale price is used as a proxy."
+                )
+        else:
+            property_tax_base = assessed_value * ownership_percentage / 100
     return PropertyCostEstimate(
         acquisition_costs=sum(amount for _, amount, _ in breakdown),
         annual_property_tax=(
-            owned_value * profile.annual_property_tax_percentage / 100
+            property_tax_base * profile.annual_property_tax_percentage / 100
         ),
         monthly_maintenance=(
             owned_value * profile.annual_maintenance_percentage / 100 / 12
