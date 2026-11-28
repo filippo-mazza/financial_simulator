@@ -58,8 +58,11 @@ def test_import_preview_confirmation_duplicates_and_new_upload(monkeypatch):
     document = json.loads(FIXTURE.read_text())
     app, upload = setup_app(monkeypatch, document)
     original = copy.deepcopy(app.session_state["expenses"])
+    assert any("Expense JSON loaded." in item.value for item in app.toast)
     assert widget(app.selectbox, "Select one covered month to import").value is None
     assert app.session_state["expenses"] == original
+    app.run(timeout=60)
+    assert not any("Expense JSON loaded." in item.value for item in app.toast)
     select_month(app)
     assert widget(app.selectbox, "uncategorized — map to").value == "Skip"
     assert widget(app.selectbox, "unexpected — map to").value == "Skip"
@@ -72,6 +75,7 @@ def test_import_preview_confirmation_duplicates_and_new_upload(monkeypatch):
     widget(app.checkbox, "I acknowledge the currency is EUR; amounts will be treated as dollars without conversion").check().run(timeout=60)
     widget(app.button, "Append imported expenses").click().run(timeout=60)
     assert not app.exception
+    assert any("Appended expenses for 2025-01." in item.value for item in app.toast)
     assert app.session_state["expenses"][:len(original)] == original
     assert next(item for item in app.session_state["expenses"] if item["name"] == "Imported 2025-01 groceries")["monthly_amount"] == 201
     count = len(app.session_state["expenses"])
@@ -181,6 +185,7 @@ def test_invalid_document_does_not_change_scenario(monkeypatch):
     document["transactions"] = [{"description": "private"}]
     app, _ = setup_app(monkeypatch, document)
     assert any("Cannot import aggregated expenses" in item.value for item in app.error)
+    assert not any("Expense JSON loaded." in item.value for item in app.toast)
     assert not any("private" in item.value for item in app.error)
     assert app.session_state["expenses"] == [
         {"name": "Living expenses", "expense_type": "housing",
