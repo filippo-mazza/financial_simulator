@@ -16,6 +16,7 @@ from app import (CHART_EVENT_COLORS, SimulationTrajectory, _consume_run_request,
                  monte_carlo_sample_guidance,
                  monte_carlo_view_explanation, select_downside_trajectory,
                  select_representative_trajectories,
+                 scenario_validation_errors,
                  read_simulation_export, run_simulation,
                  run_simulation_batch, run_simulations)
 from investment import Investment
@@ -341,6 +342,48 @@ def test_month_details_show_salary_inflation_from_following_year():
     )
     assert details["income_rates"]["Salary"][11] == 1000
     assert salary_rate["Amount"] == 1020
+
+
+def test_validation_errors_name_each_item_field_and_correction():
+    config = SimulationConfig(
+        years=1,
+        investments=[
+            InvestmentConfig("Portfolio", "stock", 100, 0),
+            InvestmentConfig("Portfolio", "stock", 200, 0),
+        ],
+        incomes=[IncomeConfig("Salary", "salary", 1000, tax_rate=101)],
+        expenses=[],
+        loans=[],
+    )
+
+    errors = "\n".join(scenario_validation_errors(config))
+
+    assert "Income — Salary — Custom tax rate (%)" in errors
+    assert "received 101" in errors
+    assert "0 and 100" in errors
+    assert "Investment names must be unique" in errors
+    assert "Rename all but one" in errors
+
+
+def test_export_inspectable_monthly_table_matches_monthly_summary():
+    config = SimulationConfig(
+        years=1, initial_cash=100,
+        investments=[], incomes=[], expenses=[], loans=[],
+    )
+    results = run_simulation(config)
+    document = json.loads(create_simulation_export(config, *results))
+
+    table = document["results"]["inspectable_monthly"]
+    assert len(table) == 12 * 3
+    assert {row["Scenario / run"] for row in table} == {"Average/exported result"}
+    assert {row["Unit"] for row in table} == {"USD"}
+    for index, month in enumerate(document["results"]["monthly"], start=1):
+        rows = [row for row in table if row["Month"] == index]
+        assert {row["Series"]: row["Amount"] for row in rows} == {
+            "Net worth": month["net_worth"],
+            "Available cash": month["cash"],
+            "Investments": month["investments"],
+        }
 
 
 def test_multiple_simulations_require_positive_count():

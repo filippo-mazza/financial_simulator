@@ -216,7 +216,10 @@ def test_imported_custom_curveball_can_be_removed(monkeypatch, tmp_path):
     app.run(timeout=30)
 
     curveballs = _expander(app, "sidebar_curveballs")
-    next(item for item in curveballs.button if item.label == "🗑️").click().run(
+    next(
+        item for item in curveballs.button
+        if item.label == "🗑️ Remove Old custom event"
+    ).click().run(
         timeout=30
     )
 
@@ -403,7 +406,10 @@ curveballs = app.session_state['curveballs']
 ids = [item['_id'] for item in curveballs]
 assert ids[0] == 'existing-curveball'
 assert len(set(ids)) == 2
-remove_buttons = [button for button in app.button if button.label == '🗑️']
+remove_buttons = [
+    button for button in app.button
+    if button.label.startswith('🗑️ Remove Imported custom event')
+]
 assert len(remove_buttons) == 2
 assert len({{button.key for button in remove_buttons}}) == 2
 """
@@ -764,6 +770,46 @@ assert any(item.value == 'Average detail for month 1' for item in app.subheader)
     assert result.returncode == 0, result.stderr
 
 
+def test_agent_facing_actions_and_result_tables_are_identifiable(tmp_path):
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+expenses = next(
+    expander for expander in app.expander if expander.key == 'sidebar_expenses'
+)
+next(button for button in expenses.button if button.label == '＋ Add expense').click().run(
+    timeout=30,
+)
+assert any('Added expense Expense 2' in item.value for item in app.toast)
+remove = next(
+    button for button in app.button
+    if (button.key or '').startswith('remove_expense_')
+)
+assert 'Expense 2' in remove.label
+next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=60)
+assert any('Simulation completed:' in item.value for item in app.toast)
+chart_table = next(
+    frame.value for frame in app.dataframe
+    if 'Series' in frame.value.columns and 'Scenario / run' in frame.value.columns
+)
+assert {{'Month', 'Series', 'Amount', 'Unit'}} <= set(chart_table.columns)
+detail_tables = [
+    frame.value for frame in app.dataframe
+    if 'Category' in frame.value.columns and 'Item' in frame.value.columns
+]
+assert detail_tables
+assert all('Month' in frame.columns and 'Unit' in frame.columns for frame in detail_tables)
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_monte_carlo_low_sample_warning_is_visible(tmp_path):
     script = f"""
 from streamlit.testing.v1 import AppTest
@@ -790,7 +836,10 @@ app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
 next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=60)
 assert not app.exception
 assert any('Deterministic A/B alternatives' in item.value for item in app.toast)
-assert sum(item.label == 'Apply and compare' for item in app.button) == 3
+assert sum(
+    item.label.startswith('Apply and compare ')
+    for item in app.button
+) == 3
 """
     environment = dict(os.environ)
     environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
