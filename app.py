@@ -628,6 +628,7 @@ def _scenario_structure_signature(config):
             item.name, item.enabled, item.probability, item.start_month_min,
             item.start_month_max, item.duration_months, item.affected_income_name,
             item.income_reduction_pct, item.recovery_months,
+            item.event_kind, item.expense_amount_max is not None,
         ) for item in config.curveballs),
         purchase_signature,
     )
