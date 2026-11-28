@@ -402,8 +402,18 @@ assumptions, not forecasts or financial advice.
 ## Verification status
 
 The [aggregated expense JSON contract](docs/aggregated-expenses.md) describes
-the versioned output of the bank statement analysis prompt. Expense JSON
-import is not yet available.
+the versioned output of the bank statement analysis prompt. In **Tools & AI**,
+upload that JSON to preview its totals and reconciliation, select a covered
+month, review category mappings and amounts, and explicitly append expenses to
+the current scenario. Existing expenses are not replaced. A covered month may
+be partial; check for overlapping expenses and review unreconciled amounts
+before applying. The simulator does not convert currencies.
+
+The uploader temporarily holds the selected file in the Streamlit server
+session; the application does not save the raw file to disk. Parsed aggregates
+are used for the preview, and confirmed expense inputs remain in the current
+scenario and can be included in scenario exports. Imported-month tracking is
+session-only; check for duplicates again after restarting or importing a scenario.
 
 The project has been tested end to end in Codex (5.6 Luna). The current test
 suite includes unit tests, collection edge cases, family scenarios, and a

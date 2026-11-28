@@ -7,8 +7,10 @@ can be exercised in unit tests and reused by another front end later.
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from copy import deepcopy
+import hashlib
 import inspect
 import json
+import math
 import random
 import re
 from statistics import fmean
@@ -2327,6 +2329,203 @@ Privacy and output:
 """
 
 
+def _aggregate_scope(state):
+    workspace = state.get("scenario_workspace")
+    if isinstance(workspace, ScenarioWorkspace):
+        return f"workspace_{state.get('aggregate_workspace_id', 'initial')}_{workspace.active_id}"
+    return f"single_{state.get('aggregate_single_id', 'initial')}"
+
+
+def _new_aggregate_workspace(state, source_scope=None, clone_all=False):
+    periods = state.setdefault("aggregate_imported_months", {})
+    source_months = set(periods.get(source_scope, set()))
+    state["aggregate_workspace_id"] = uuid.uuid4().hex
+    workspace = state["scenario_workspace"]
+    for variant in workspace.variants:
+        if clone_all or variant.id == workspace.active_id:
+            scope = f"workspace_{state['aggregate_workspace_id']}_{variant.id}"
+            periods[scope] = set(source_months)
+
+
+def _reset_aggregate_editor(state):
+    scope = _aggregate_scope(state)
+    state.setdefault("aggregate_imported_months", {}).pop(scope, None)
+    revisions = state.setdefault("aggregate_editor_revisions", {})
+    revisions[scope] = revisions.get(scope, 0) + 1
+
+
+def render_aggregated_expense_import(st):
+    """Preview and explicitly append one validated aggregate month to the editor."""
+    uploader_key = f"aggregated_expense_file_{st.session_state.get('aggregate_upload_generation', 0)}"
+    upload = st.file_uploader(
+        "Import aggregated expenses JSON", type="json", key=uploader_key,
+        help="Upload only the privacy-minimized summary, not a bank statement.",
+    )
+    st.caption(
+        "The uploader temporarily holds file bytes in the Streamlit server session; "
+        "the app does not save the file or transaction data. Successful import clears the uploader."
+    )
+    if upload is None:
+        return
+    data = upload.getvalue()
+    try:
+        from aggregated_expenses import parse_aggregated_expenses
+        document, warnings = parse_aggregated_expenses(data)
+    except ValueError as error:
+        st.error(f"Cannot import aggregated expenses: {error}")
+        return
+
+    scope = _aggregate_scope(st.session_state)
+    digest = hashlib.sha256(data).hexdigest()
+    generation = st.session_state.get("aggregate_upload_generation", 0)
+    revision = st.session_state.get("aggregate_editor_revisions", {}).get(scope, 0)
+    prefix = f"aggregate_{scope}_{generation}_{revision}_{digest}"
+    del data
+    currency = document["currency"]
+    st.caption(
+        f"Currency: {currency or 'unknown'} · Covered months: "
+        f"{document['period']['start']} to {document['period']['end']}. "
+        "A listed month may cover only part of that month; review before using it as a monthly amount."
+    )
+    st.write("Monthly expense totals", [
+        {"Month": item["month"], "Total": str(item["expenses_total"])
+         if item["expenses_total"] is not None else "Unknown"}
+        for item in document["monthly_totals"]
+    ])
+    reconciliation = document["reconciliation"]
+    st.write("Reconciliation", {
+        key: str(value) if value is not None else "Unknown"
+        for key, value in reconciliation.items()
+    })
+    for warning in warnings:
+        st.warning(str(warning))
+    if reconciliation["status"] != "reconciled":
+        st.warning("This summary is unreconciled; review its totals and exclusions.")
+    months = [item["month"] for item in document["monthly_totals"]]
+    if not months:
+        st.warning("No covered months are available to import.")
+        return
+    month = st.selectbox(
+        "Select one covered month to import", months, index=None,
+        placeholder="Choose a month", key=f"{prefix}_month",
+    )
+    if month is None:
+        return
+    monthly = next(item for item in document["monthly_totals"] if item["month"] == month)
+    st.write("Category totals", [
+        {"Category": category, "Total": str(value) if value is not None else "Unknown"}
+        for category, value in monthly["categories"].items()
+    ])
+    st.caption(
+        "Map each category or skip it. Amounts are truncated to whole dollars in the "
+        "scenario; the applied amounts are shown below. Zero amounts are omitted, "
+        "except for the stochastic unexpected type. "
+        "No currency conversion is performed. Duplicate tracking is session-only and "
+        "resets when a scenario file is loaded."
+    )
+    st.warning(
+        "The simulator's unexpected expense type is stochastic: it generates random "
+        "events and does not use the entered amount as a recurring monthly expense."
+    )
+    options = ["Skip", *sorted(Expense("Import", "housing", 0).expense_growth)]
+    selections = []
+    missing = []
+    existing_names = {
+        item["name"] for item in [
+            *st.session_state.expenses, *st.session_state.additional_expenses,
+        ]
+    }
+    for category, value in monthly["categories"].items():
+        key = f"{prefix}_{month}_{category}"
+        default = category if category in options and category != "unexpected" else "Skip"
+        mapping = st.selectbox(
+            f"{category} — map to", options, index=options.index(default),
+            key=f"{key}_mapping",
+        )
+        if mapping == "Skip":
+            continue
+        default_amount = None
+        if value is not None:
+            try:
+                amount_float = float(value)
+                if math.isfinite(amount_float) and amount_float <= 9007199254740991:
+                    # Binary float rounding must not turn a fractional value
+                    # immediately below a whole dollar into the next dollar.
+                    default_amount = (
+                        float(int(value)) if int(amount_float) != int(value)
+                        else amount_float
+                    )
+            except (OverflowError, ValueError):
+                pass
+        amount = st.number_input(
+            f"{category} — amount override", min_value=0.0,
+            max_value=9007199254740991.0, value=default_amount,
+            step=1.0, format="%.2f", key=f"{key}_amount",
+            help="Unknown amounts require an explicit value; leave empty to avoid importing.",
+        )
+        if amount is None:
+            missing.append(category)
+            st.caption("Amount unknown: enter an override or choose Skip.")
+            continue
+        applied = _whole_amount(amount)
+        if mapping == "unexpected":
+            st.caption(
+                f"{category}: ${applied:,} stored as unexpected; this is not a recurring "
+                "monthly amount. Random events determine the expense."
+            )
+        else:
+            st.caption(f"{category}: ${applied:,}/month applied as {mapping}.")
+        if applied == 0 and mapping != "unexpected":
+            continue
+        base_name = f"Imported {month} {category}"
+        name, suffix = base_name, 2
+        while name in existing_names:
+            name, suffix = f"{base_name} ({suffix})", suffix + 1
+        existing_names.add(name)
+        selections.append({
+            "name": name, "expense_type": mapping,
+            "monthly_amount": float(applied), "_id": uuid.uuid4().hex,
+        })
+
+    periods = st.session_state.setdefault("aggregate_imported_months", {})
+    already_imported = month in periods.get(scope, set())
+    if already_imported:
+        st.warning("This month was already imported into this scenario, possibly from another document.")
+    confirmation_digest = hashlib.sha256(json.dumps([
+        (item["name"], item["expense_type"], item["monthly_amount"])
+        for item in selections
+    ]).encode()).hexdigest()
+    confirmation_prefix = f"{prefix}_{month}_{confirmation_digest}"
+    duplicate_ok = not already_imported or st.checkbox(
+        "I confirm I want to append this month again", key=f"{prefix}_{month}_duplicate",
+    )
+    currency_ok = currency == "USD" or st.checkbox(
+        f"I acknowledge the currency is {currency or 'unknown'}; amounts will be treated as dollars without conversion",
+        key=f"{prefix}_{month}_currency",
+    )
+    confirmed = st.checkbox(
+        "I reviewed the applied whole-dollar amounts and confirm appending them to this scenario",
+        key=f"{confirmation_prefix}_confirm",
+    )
+    if st.button("Append imported expenses", key=f"{prefix}_{month}_apply"):
+        if not confirmed or not duplicate_ok or not currency_ok:
+            st.error("Complete all required confirmations before appending.")
+        elif missing:
+            st.error("Enter amounts or skip unknown categories: " + ", ".join(missing))
+        elif not selections:
+            st.error("Select at least one category to append with a usable applied amount.")
+        else:
+            st.session_state.expenses.extend(selections)
+            periods.setdefault(scope, set()).add(month)
+            st.session_state.aggregate_upload_generation = (
+                st.session_state.get("aggregate_upload_generation", 0) + 1
+            )
+            st.session_state.pop("simulation_result", None)
+            st.session_state.pop("scenario_comparison_result", None)
+            st.session_state.import_success_notice = f"Appended expenses for {month}."
+            st.rerun()
+
+
 def main():
     import altair as alt
     import streamlit as st
@@ -2719,6 +2918,11 @@ def main():
             return
         workspace = workspace.reset_from(ALTERNATIVE_ID, BASELINE_ID)
         st.session_state.scenario_workspace = workspace
+        prefix = f"workspace_{st.session_state.get('aggregate_workspace_id', 'initial')}_"
+        periods = st.session_state.setdefault("aggregate_imported_months", {})
+        periods[prefix + ALTERNATIVE_ID] = set(periods.get(prefix + BASELINE_ID, set()))
+        revisions = st.session_state.setdefault("aggregate_editor_revisions", {})
+        revisions[prefix + ALTERNATIVE_ID] = revisions.get(prefix + ALTERNATIVE_ID, 0) + 1
         if workspace.active_id == ALTERNATIVE_ID:
             import_config(workspace.config_for(ALTERNATIVE_ID), run_after_load=False)
         st.session_state.pop("simulation_result", None)
@@ -2738,6 +2942,9 @@ def main():
             TERTIARY_ID, name, workspace.config_for(BASELINE_ID),
         )).activate(TERTIARY_ID)
         st.session_state.scenario_workspace = workspace
+        prefix = f"workspace_{st.session_state.get('aggregate_workspace_id', 'initial')}_"
+        periods = st.session_state.setdefault("aggregate_imported_months", {})
+        periods[prefix + TERTIARY_ID] = set(periods.get(prefix + BASELINE_ID, set()))
         for key in ("scenario_tertiary_name", "scenario_variant_selector"):
             st.session_state.pop(key, None)
         import_config(workspace.config_for(TERTIARY_ID), run_after_load=False)
@@ -2757,6 +2964,7 @@ def main():
             st.session_state.workspace_import_error = str(error)
             return
         st.session_state.scenario_workspace = imported_workspace
+        _new_aggregate_workspace(st.session_state)
         for key in (
             "scenario_baseline_name", "scenario_alternative_name",
             "scenario_tertiary_name",
@@ -2784,6 +2992,7 @@ def main():
             st.session_state.import_error = str(error)
             return
         import_config(imported)
+        _reset_aggregate_editor(st.session_state)
         st.session_state.import_warnings = import_warnings
         st.session_state.import_uploader_counter = (
             st.session_state.get("import_uploader_counter", 0) + 1
@@ -2829,6 +3038,7 @@ def main():
             ScenarioVariant(ALTERNATIVE_ID, scenario_names[1], imported_configs[1][1]),
         ))
         st.session_state.scenario_workspace = workspace
+        _new_aggregate_workspace(st.session_state)
         for key in (
             "scenario_baseline_name", "scenario_alternative_name",
             "scenario_variant_selector",
@@ -2970,8 +3180,8 @@ def main():
             "Correct errors before asking it to attach a downloadable `.json` file. "
             "If it only displays the JSON, copy the full object into a text editor "
             "and save it as `analyzed-expenses.json`.\n"
-            "4. Keep the JSON on your device. When the expense-summary "
-            "import is available, return here and import it through that flow. "
+            "4. Return here and use **Tools & AI → Import aggregated expenses JSON** "
+            "to review and append a selected month. "
             "The existing Scenario import accepts simulator scenario files only; "
             "do not upload this summary there."
         )
@@ -3751,6 +3961,7 @@ def main():
             ):
                 show_bank_analysis_prompt()
             st.caption("Manual workflow; this simulator never uploads bank CSVs.")
+            render_aggregated_expense_import(st)
 
         st.header("Scenario")
         scenario_controls_placeholder = st.empty()
@@ -4507,7 +4718,9 @@ def main():
                     "Create Baseline A and Alternative B",
                     key="create_scenario_workspace",
                 ):
+                    source_scope = _aggregate_scope(st.session_state)
                     st.session_state.scenario_workspace = ScenarioWorkspace.from_config(config)
+                    _new_aggregate_workspace(st.session_state, source_scope, clone_all=True)
                     st.session_state.pop("simulation_result", None)
                     st.session_state.pop("scenario_variant_selector", None)
                     st.rerun()
@@ -4914,7 +5127,9 @@ def main():
                         "scenario_variant_selector",
                     ):
                         st.session_state.pop(key, None)
+                    source_scope = _aggregate_scope(st.session_state)
                     st.session_state.scenario_workspace = suggestion_workspace
+                    _new_aggregate_workspace(st.session_state, source_scope, clone_all=True)
                     st.session_state.scenario_comparison_result = {
                         "fingerprint": suggestion_fingerprint,
                         "comparison": comparison,
