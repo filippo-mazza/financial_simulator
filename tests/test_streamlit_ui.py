@@ -28,11 +28,15 @@ def test_sidebar_expanders_keep_stable_identity_when_summary_changes(monkeypatch
     app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
 
     expected_keys = {
-        "sidebar_import", "sidebar_cash", "sidebar_investments", "sidebar_income",
+        "sidebar_tools_ai", "sidebar_import", "sidebar_cash",
+        "sidebar_investments", "sidebar_income",
         "sidebar_expenses", "sidebar_loans", "sidebar_assumptions", "sidebar_family",
         "sidebar_jurisdictions", "sidebar_curveballs",
     }
     assert {expander.key for expander in app.expander} == expected_keys
+    assert _expander(app.sidebar, "sidebar_tools_ai").label == "Tools & AI"
+    assert app.sidebar.expander[0].key == "sidebar_tools_ai"
+    assert not app.session_state.get("sidebar_tools_ai", False)
     assert _expander(app, "sidebar_cash").label.startswith("Cash · $5,000")
 
     app.number_input(key="scenario_initial_cash").set_value(7500).run(timeout=30)
@@ -48,8 +52,14 @@ def test_getting_started_guidance_is_hidden_after_running_simulations(
 from streamlit.testing.v1 import AppTest
 app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
 guidance = next(item.value for item in app.info if "Start here" in item.value)
+assert "tap the **expand sidebar** button at the top left" in guidance
+assert "left menu" in guidance
 assert "not financial advice" in guidance
 assert "qualified professional" in guidance
+styles = next(item.value for item in app.markdown if "stExpandSidebarButton" in item.value)
+assert "max-width: 768px" in styles
+assert "prefers-reduced-motion: no-preference" in styles
+assert "sidebar-nudge 0.8s ease-in-out 3" in styles
 next(item for item in app.number_input if item.label == "Number of simulations").set_value(1).run(timeout=30)
 next(item for item in app.button if item.label == "▶ Run simulations").click().run(timeout=60)
 assert not app.exception
@@ -83,6 +93,24 @@ def test_curveballs_panel_exposes_predefined_event_checkboxes(monkeypatch, tmp_p
     )
     assert app.session_state["curveballs"][0]["name"] == "Temporary job loss"
     assert app.session_state["curveballs"][0]["enabled"] is True
+
+
+def test_expense_curveball_preset_exposes_expense_amount(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    app = AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+    curveballs = _expander(app, "sidebar_curveballs")
+    medical = next(item for item in curveballs.checkbox
+                   if item.label == "Unexpected medical bill")
+    medical.set_value(True).run(timeout=30)
+
+    assert not app.exception
+    assert app.session_state["curveballs"][0]["event_kind"] == "expense_shock"
+    assert any(
+        item.label == "Unexpected medical bill — Amount per affected month ($)"
+        for item in app.number_input
+    )
 
 
 def test_selected_curveball_opens_its_item_keyed_card(monkeypatch, tmp_path):
@@ -188,7 +216,7 @@ def test_imported_custom_curveball_can_be_removed(monkeypatch, tmp_path):
     app.run(timeout=30)
 
     curveballs = _expander(app, "sidebar_curveballs")
-    next(item for item in curveballs.button if item.label == "Remove").click().run(
+    next(item for item in curveballs.button if item.label == "🗑️").click().run(
         timeout=30
     )
 
@@ -213,6 +241,11 @@ def test_new_expense_is_inserted_at_top_of_expense_list(monkeypatch, tmp_path):
     ]
     assert expense_buttons[0].endswith("Expense 2")
     assert expense_buttons[1].endswith("Living expenses")
+    assert any(
+        item.label == "Expense — Expense 2: Name"
+        for item in _expander(app, "sidebar_expenses").text_input
+    )
+    assert not any("Expense 1 — Expense 2" in item.label for item in app.text_input)
 
 
 def test_added_cards_open_independently_and_survive_edit_and_rerun(tmp_path):
@@ -370,7 +403,7 @@ curveballs = app.session_state['curveballs']
 ids = [item['_id'] for item in curveballs]
 assert ids[0] == 'existing-curveball'
 assert len(set(ids)) == 2
-remove_buttons = [button for button in app.button if button.label == 'Remove']
+remove_buttons = [button for button in app.button if button.label == '🗑️']
 assert len(remove_buttons) == 2
 assert len({{button.key for button in remove_buttons}}) == 2
 """
@@ -679,7 +712,12 @@ app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
 next(item for item in app.number_input if item.label == 'Number of simulations').set_value(2)
 next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=30)
 assert not app.exception
-assert any('not a guaranteed or individually realizable household path' in item.value and 'hide liquidity shortfalls' in item.value for item in app.info)
+assert any(
+    'not a guaranteed or individually realizable household path' in item.value
+    and 'lowest observed month-end cash in this batch' in item.value
+    and 'not a statistical estimate of downside risk' in item.value
+    for item in app.info
+)
 next(item for item in app.radio if item.label == 'Result view').set_value('Individual run').run(timeout=30)
 assert not app.exception
 assert any('one simulated trajectory rather than an average' in item.value for item in app.info)
@@ -825,6 +863,44 @@ def _fresh_app(monkeypatch, tmp_path):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     return AppTest.from_file(str(APP_PATH)).run(timeout=30)
+
+
+def test_bank_analysis_dialog_preserves_active_scenario_and_results(tmp_path):
+    script = f"""
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
+app.button(key="create_scenario_workspace").click().run(timeout=30)
+next(
+    item for item in app.number_input
+    if item.label == "Number of simulations"
+).set_value(1).run(timeout=30)
+next(item for item in app.button if item.label == "▶ Run simulations").click().run(
+    timeout=60,
+)
+saved_run_id = app.session_state["simulation_result"]["run_id"]
+active_scenario_id = app.session_state["scenario_workspace"].active_id
+next(
+    item for item in app.button
+    if item.key == "bank_analysis_prompt_button"
+).click().run(timeout=30)
+assert not app.exception
+assert app.session_state["simulation_result"]["run_id"] == saved_run_id
+assert app.session_state["scenario_workspace"].active_id == active_scenario_id
+assert not app.text_area(key="bank_analysis_prompt_text").disabled
+prompt = app.text_area(key="bank_analysis_prompt_text").value
+assert '"schema_version": 1' in prompt
+assert "Do not include names, account/card numbers" in prompt
+assert any("shared with ChatGPT" in item.value for item in app.warning)
+assert any("attach a downloadable" in item.value for item in app.markdown)
+"""
+    environment = dict(os.environ)
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=APP_PATH.parent, env=environment,
+        text=True, capture_output=True, check=False, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_scenario_json_actions_are_grouped_in_sidebar(monkeypatch, tmp_path):

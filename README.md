@@ -388,18 +388,34 @@ For a new child, **Childcare monthly cost (until school)** is charged until the
 existing school-start milestone; it stops in the transition month and the
 configured school cost starts in the following month. Older exports without
 this field retain the legacy recurring child-cost behavior. The **Curveballs**
-panel offers predefined checkbox stress events (temporary job loss, reduced
-working hours, and extended illness leave) rather than a long parameter editor.
+panel offers predefined checkbox stress events (income shocks plus unexpected
+medical bills, car repairs, home repairs, school trips, lost-phone replacement,
+emergency travel, and an unexpected tax bill) rather than a long parameter editor.
 Their documented probabilities, durations, reductions, and recovery periods are
 fixed defaults. Events are sampled once per trajectory from the simulation seed,
-recorded in monthly details/export, and overlapping events multiply their income
-factors. Unselected events consume no random draws and never trigger. Cash and
+recorded in monthly details/export, and overlapping income events multiply their
+income factors. Expense shocks are recorded as named one-off or temporary
+expenses. Unselected events consume no random draws and never trigger. Cash and
 net-worth recovery are reported against pre-event levels; these are stress-test
 assumptions, not forecasts or financial advice.
 
 ![Streamlit controls](docs/screenshots/streamlit-controls.png)
 
 ## Verification status
+
+The [aggregated expense JSON contract](docs/aggregated-expenses.md) describes
+the versioned output of the bank statement analysis prompt. In **Tools & AI**,
+upload that JSON to preview its totals and reconciliation, select a covered
+month, review category mappings and amounts, and explicitly append expenses to
+the current scenario. Existing expenses are not replaced. A covered month may
+be partial; check for overlapping expenses and review unreconciled amounts
+before applying. The simulator does not convert currencies.
+
+The uploader temporarily holds the selected file in the Streamlit server
+session; the application does not save the raw file to disk. Parsed aggregates
+are used for the preview, and confirmed expense inputs remain in the current
+scenario and can be included in scenario exports. Imported-month tracking is
+session-only; check for duplicates again after restarting or importing a scenario.
 
 The project has been tested end to end in Codex (5.6 Luna). The current test
 suite includes unit tests, collection edge cases, family scenarios, and a

@@ -7,8 +7,10 @@ can be exercised in unit tests and reused by another front end later.
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from copy import deepcopy
+import hashlib
 import inspect
 import json
+import math
 import random
 import re
 from statistics import fmean
@@ -90,7 +92,11 @@ class DependentConfig:
 
 @dataclass
 class CurveballConfig:
-    """One optional, temporary adverse event in a trajectory."""
+    """One optional, temporary adverse event in a trajectory.
+
+    ``event_kind`` keeps the original income-reduction curveballs backwards
+    compatible while allowing one-off or temporary expense shocks.
+    """
 
     name: str
     enabled: bool = False
@@ -101,6 +107,10 @@ class CurveballConfig:
     affected_income_name: str | None = None
     income_reduction_pct: float = 100.0
     recovery_months: int = 0
+    event_kind: str = "income_reduction"
+    expense_type: str = "miscellaneous"
+    expense_amount: float = 0.0
+    expense_amount_max: float | None = None
 
 
 PREDEFINED_CURVEBALLS = (
@@ -130,6 +140,90 @@ PREDEFINED_CURVEBALLS = (
         "duration_months": 3,
         "income_reduction_pct": 60.0,
         "recovery_months": 3,
+    },
+    {
+        "key": "medical_bill",
+        "name": "Unexpected medical bill",
+        "description": "6% chance of a one-off $900 healthcare bill.",
+        "probability_pct": 6.0,
+        "duration_months": 1,
+        "income_reduction_pct": 0.0,
+        "recovery_months": 0,
+        "event_kind": "expense_shock",
+        "expense_type": "healthcare",
+        "expense_amount": 900.0,
+    },
+    {
+        "key": "car_repair",
+        "name": "Unexpected car repair",
+        "description": "6% chance of a one-off $500 transportation bill.",
+        "probability_pct": 6.0,
+        "duration_months": 1,
+        "income_reduction_pct": 0.0,
+        "recovery_months": 0,
+        "event_kind": "expense_shock",
+        "expense_type": "transportation",
+        "expense_amount": 500.0,
+    },
+    {
+        "key": "house_repair",
+        "name": "Unexpected home repair",
+        "description": "6% chance of a one-off $1,200 housing bill.",
+        "probability_pct": 6.0,
+        "duration_months": 1,
+        "income_reduction_pct": 0.0,
+        "recovery_months": 0,
+        "event_kind": "expense_shock",
+        "expense_type": "housing",
+        "expense_amount": 1200.0,
+    },
+    {
+        "key": "school_trip",
+        "name": "Unexpected school trip",
+        "description": "6% chance of a one-off $180 education bill.",
+        "probability_pct": 6.0,
+        "duration_months": 1,
+        "income_reduction_pct": 0.0,
+        "recovery_months": 0,
+        "event_kind": "expense_shock",
+        "expense_type": "education",
+        "expense_amount": 180.0,
+    },
+    {
+        "key": "lost_phone",
+        "name": "Lost phone replacement",
+        "description": "6% chance of a one-off $600 miscellaneous bill.",
+        "probability_pct": 6.0,
+        "duration_months": 1,
+        "income_reduction_pct": 0.0,
+        "recovery_months": 0,
+        "event_kind": "expense_shock",
+        "expense_type": "miscellaneous",
+        "expense_amount": 600.0,
+    },
+    {
+        "key": "emergency_travel",
+        "name": "Emergency travel",
+        "description": "6% chance of a one-off $1,600 miscellaneous bill.",
+        "probability_pct": 6.0,
+        "duration_months": 1,
+        "income_reduction_pct": 0.0,
+        "recovery_months": 0,
+        "event_kind": "expense_shock",
+        "expense_type": "miscellaneous",
+        "expense_amount": 1600.0,
+    },
+    {
+        "key": "unexpected_tax_bill",
+        "name": "Unexpected tax bill",
+        "description": "5% chance of a one-off $2,000 tax or administrative bill.",
+        "probability_pct": 5.0,
+        "duration_months": 1,
+        "income_reduction_pct": 0.0,
+        "recovery_months": 0,
+        "event_kind": "expense_shock",
+        "expense_type": "miscellaneous",
+        "expense_amount": 2000.0,
     },
 )
 
@@ -536,6 +630,7 @@ def _scenario_structure_signature(config):
             item.name, item.enabled, item.probability, item.start_month_min,
             item.start_month_max, item.duration_months, item.affected_income_name,
             item.income_reduction_pct, item.recovery_months,
+            item.event_kind, item.expense_amount_max is not None,
         ) for item in config.curveballs),
         purchase_signature,
     )
@@ -1646,8 +1741,10 @@ def monte_carlo_view_explanation(view_mode, simulation_count):
             f"{simulation_count} simulated runs. These are estimates based on the "
             f"selected run count, not a guaranteed "
             "or individually realizable household path. Average cash and net worth can "
-            "hide liquidity shortfalls in individual runs. Quantitative downside metrics "
-            "and uncertainty shading are tracked in "
+            "hide liquidity shortfalls in individual runs. The lowest-cash value shown "
+            "below is the lowest observed month-end cash in this batch, not a statistical "
+            "estimate of downside risk. Quantitative downside-risk estimates and "
+            "uncertainty shading are tracked in "
             "[issue #25](https://github.com/filippo-mazza/financial_simulator/issues/25) "
             "and [issue #67](https://github.com/filippo-mazza/financial_simulator/issues/67)."
         )
@@ -1700,6 +1797,36 @@ def select_representative_trajectories(trajectories):
                 "trajectory": trajectory, "rank": index + 1, "roles": [role],
             })
     return entries
+
+
+DOWNSIDE_SCENARIO_LABEL = "Illustrative downside scenario"
+
+
+def select_downside_trajectory(trajectories):
+    """Pick the actual run whose month-end cash balance falls lowest over the horizon.
+
+    Ties are broken by run number, then by the earliest month.  Returns
+    ``(trajectory, month, lowest_cash)`` with a one-based month.
+    """
+    if not trajectories:
+        raise ValueError("at least one trajectory is required")
+    best = None
+    for trajectory in sorted(trajectories, key=lambda t: t.run_number):
+        cash = trajectory.result[2]["bank_account"]
+        month_index = min(range(len(cash)), key=lambda i: (cash[i], i))
+        if best is None or cash[month_index] < best[2]:
+            best = (trajectory, month_index + 1, cash[month_index])
+    return best
+
+
+def downside_scenario_explanation(simulation_count):
+    """Explain how the illustrative downside scenario is selected."""
+    return (
+        f"Among the {simulation_count} simulated run(s), this is the actual run whose "
+        "month-end cash balance reaches the lowest value at any month over the full "
+        "horizon (ties go to the lower run number, then the earlier month). It is one "
+        "illustrative sample path, not a percentile or a worst-case guarantee."
+    )
 
 
 def monte_carlo_compare_explanation(simulation_count):
@@ -2239,6 +2366,259 @@ def read_simulation_export(data, include_warnings=False):
     return (config, import_warnings) if include_warnings else config
 
 
+def build_expense_analysis_prompt():
+    categories = sorted(Expense("Prompt category", "housing", 0).expense_growth)
+    monthly_categories = {category: None for category in categories}
+    monthly_categories["uncategorized"] = None
+    schema_example = {
+        "format": "financial-simulator-aggregated-expenses",
+        "schema_version": 1,
+        "currency": None,
+        "period": {"start": "YYYY-MM", "end": "YYYY-MM"},
+        "monthly_totals": [{
+            "month": "YYYY-MM",
+            "categories": monthly_categories,
+            "expenses_total": None,
+            "excluded_debits_total": None,
+            "excluded_income_total": None,
+            "excluded_transfer_credits_total": None,
+            "refunds_total": None,
+            "other_excluded_credits_total": None,
+        }],
+        "reconciliation": {
+            "source_debits_total": None,
+            "expenses_total": None,
+            "excluded_debits_total": None,
+            "debits_difference": None,
+            "source_credits_total": None,
+            "excluded_income_total": None,
+            "excluded_transfer_credits_total": None,
+            "refunds_total": None,
+            "other_excluded_credits_total": None,
+            "credits_difference": None,
+            "status": "unreconciled",
+        },
+    }
+    return f"""Convert the attached bank statement CSV into a privacy-minimized monthly expense summary for the Financial Simulator. Do not return or retain transaction-level data in the output.
+
+Interpretation and classification:
+- Treat a negative amount as money leaving the account and a positive amount as money entering it, unless the CSV clearly documents a different sign convention. Review the convention with the user.
+- Use the transaction date as printed in the statement for the YYYY-MM month. Do not infer missing dates or silently substitute a posting date.
+- Count ordinary purchases and bills as expenses. Exclude income and transfers between the user's own accounts from expenses; do not mistake a transfer or card payment for a new expense.
+- Treat credits as income, transfers, or refunds only when the statement supports that interpretation. Track refunds separately from gross expense categories; do not net them against expenses. Put credits you cannot confidently identify in other_excluded_credits_total.
+- Map expenses to the closest applicable simulator category from this list: {", ".join(categories)}. Put uncertain or unclassifiable expenses in "uncategorized"; do not guess. The user may override classifications after reviewing them; do not include transaction details or free-text explanations in the JSON.
+- Never invent a value, currency, date, category, transaction, or missing month. Use null where the schema permits an unknown value; if a required date is unknown, ask the user before producing JSON.
+
+Reconciliation:
+- Sum source debits and credits separately for the covered period as nonnegative magnitudes. expenses_total is the sum of all category totals, including uncategorized; period totals are sums of the corresponding monthly totals, or null if a contributing month or value is missing. debits_difference is source_debits_total minus expenses_total minus excluded_debits_total; credits_difference is source_credits_total minus excluded_income_total, excluded_transfer_credits_total, refunds_total, and other_excluded_credits_total. A difference with an unknown operand is null. Set status to "reconciled" only when every amount and currency is known, every month in the period is included, and both differences are exactly zero; do not force totals to match.
+- Include a month only when the statement covers it. Report the actual covered start and end months, and do not fabricate zero-activity months. A missing month or unknown value requires an unreconciled status.
+- Use one ISO 4217 currency code per document. Never sum different currencies or silently convert them; for mixed currencies prepare one document per currency, with reconciliation restricted to that currency. If currency is unknown use null and unreconciled.
+
+Privacy and output:
+- The CSV is being shared with ChatGPT under the user's ChatGPT account settings and data controls. Minimize the output: include only monthly aggregates, currency, covered period, and reconciliation metadata. Do not include names, account/card numbers, merchant names, descriptions, transaction IDs, or individual transaction dates/amounts.
+- Return exactly one valid JSON object for the currency being summarized, with no Markdown fences or prose around it. Use format "financial-simulator-aggregated-expenses" and schema_version 1. Use numeric totals in that currency, and use null for genuinely unavailable values. Include a monthly_totals entry only for a month covered by the statement; use zero only for a verified zero, not a missing value.
+
+{json.dumps(schema_example, indent=2)}
+"""
+
+
+def _aggregate_scope(state):
+    workspace = state.get("scenario_workspace")
+    if isinstance(workspace, ScenarioWorkspace):
+        return f"workspace_{state.get('aggregate_workspace_id', 'initial')}_{workspace.active_id}"
+    return f"single_{state.get('aggregate_single_id', 'initial')}"
+
+
+def _new_aggregate_workspace(state, source_scope=None, clone_all=False):
+    periods = state.setdefault("aggregate_imported_months", {})
+    source_months = set(periods.get(source_scope, set()))
+    state["aggregate_workspace_id"] = uuid.uuid4().hex
+    workspace = state["scenario_workspace"]
+    for variant in workspace.variants:
+        if clone_all or variant.id == workspace.active_id:
+            scope = f"workspace_{state['aggregate_workspace_id']}_{variant.id}"
+            periods[scope] = set(source_months)
+
+
+def _reset_aggregate_editor(state):
+    scope = _aggregate_scope(state)
+    state.setdefault("aggregate_imported_months", {}).pop(scope, None)
+    revisions = state.setdefault("aggregate_editor_revisions", {})
+    revisions[scope] = revisions.get(scope, 0) + 1
+
+
+def render_aggregated_expense_import(st):
+    """Preview and explicitly append one validated aggregate month to the editor."""
+    uploader_key = f"aggregated_expense_file_{st.session_state.get('aggregate_upload_generation', 0)}"
+    upload = st.file_uploader(
+        "Import aggregated expenses JSON", type="json", key=uploader_key,
+        help="Upload only the privacy-minimized summary, not a bank statement.",
+    )
+    st.caption(
+        "The uploader temporarily holds file bytes in the Streamlit server session; "
+        "the app does not save the file or transaction data. Successful import clears the uploader."
+    )
+    if upload is None:
+        return
+    data = upload.getvalue()
+    try:
+        from aggregated_expenses import parse_aggregated_expenses
+        document, warnings = parse_aggregated_expenses(data)
+    except ValueError as error:
+        st.error(f"Cannot import aggregated expenses: {error}")
+        return
+
+    scope = _aggregate_scope(st.session_state)
+    digest = hashlib.sha256(data).hexdigest()
+    generation = st.session_state.get("aggregate_upload_generation", 0)
+    revision = st.session_state.get("aggregate_editor_revisions", {}).get(scope, 0)
+    prefix = f"aggregate_{scope}_{generation}_{revision}_{digest}"
+    del data
+    currency = document["currency"]
+    st.caption(
+        f"Currency: {currency or 'unknown'} · Covered months: "
+        f"{document['period']['start']} to {document['period']['end']}. "
+        "A listed month may cover only part of that month; review before using it as a monthly amount."
+    )
+    st.write("Monthly expense totals", [
+        {"Month": item["month"], "Total": str(item["expenses_total"])
+         if item["expenses_total"] is not None else "Unknown"}
+        for item in document["monthly_totals"]
+    ])
+    reconciliation = document["reconciliation"]
+    st.write("Reconciliation", {
+        key: str(value) if value is not None else "Unknown"
+        for key, value in reconciliation.items()
+    })
+    for warning in warnings:
+        st.warning(str(warning))
+    if reconciliation["status"] != "reconciled":
+        st.warning("This summary is unreconciled; review its totals and exclusions.")
+    months = [item["month"] for item in document["monthly_totals"]]
+    if not months:
+        st.warning("No covered months are available to import.")
+        return
+    month = st.selectbox(
+        "Select one covered month to import", months, index=None,
+        placeholder="Choose a month", key=f"{prefix}_month",
+    )
+    if month is None:
+        return
+    monthly = next(item for item in document["monthly_totals"] if item["month"] == month)
+    st.write("Category totals", [
+        {"Category": category, "Total": str(value) if value is not None else "Unknown"}
+        for category, value in monthly["categories"].items()
+    ])
+    st.caption(
+        "Map each category or skip it. Amounts are truncated to whole dollars in the "
+        "scenario; the applied amounts are shown below. Zero amounts are omitted, "
+        "except for the stochastic unexpected type. "
+        "No currency conversion is performed. Duplicate tracking is session-only and "
+        "resets when a scenario file is loaded."
+    )
+    st.warning(
+        "The simulator's unexpected expense type is stochastic: it generates random "
+        "events and does not use the entered amount as a recurring monthly expense."
+    )
+    options = ["Skip", *sorted(Expense("Import", "housing", 0).expense_growth)]
+    selections = []
+    missing = []
+    existing_names = {
+        item["name"] for item in [
+            *st.session_state.expenses, *st.session_state.additional_expenses,
+        ]
+    }
+    for category, value in monthly["categories"].items():
+        key = f"{prefix}_{month}_{category}"
+        default = category if category in options and category != "unexpected" else "Skip"
+        mapping = st.selectbox(
+            f"{category} — map to", options, index=options.index(default),
+            key=f"{key}_mapping",
+        )
+        if mapping == "Skip":
+            continue
+        default_amount = None
+        if value is not None:
+            try:
+                amount_float = float(value)
+                if math.isfinite(amount_float) and amount_float <= 9007199254740991:
+                    # Binary float rounding must not turn a fractional value
+                    # immediately below a whole dollar into the next dollar.
+                    default_amount = (
+                        float(int(value)) if int(amount_float) != int(value)
+                        else amount_float
+                    )
+            except (OverflowError, ValueError):
+                pass
+        amount = st.number_input(
+            f"{category} — amount override", min_value=0.0,
+            max_value=9007199254740991.0, value=default_amount,
+            step=1.0, format="%.2f", key=f"{key}_amount",
+            help="Unknown amounts require an explicit value; leave empty to avoid importing.",
+        )
+        if amount is None:
+            missing.append(category)
+            st.caption("Amount unknown: enter an override or choose Skip.")
+            continue
+        applied = _whole_amount(amount)
+        if mapping == "unexpected":
+            st.caption(
+                f"{category}: ${applied:,} stored as unexpected; this is not a recurring "
+                "monthly amount. Random events determine the expense."
+            )
+        else:
+            st.caption(f"{category}: ${applied:,}/month applied as {mapping}.")
+        if applied == 0 and mapping != "unexpected":
+            continue
+        base_name = f"Imported {month} {category}"
+        name, suffix = base_name, 2
+        while name in existing_names:
+            name, suffix = f"{base_name} ({suffix})", suffix + 1
+        existing_names.add(name)
+        selections.append({
+            "name": name, "expense_type": mapping,
+            "monthly_amount": float(applied), "_id": uuid.uuid4().hex,
+        })
+
+    periods = st.session_state.setdefault("aggregate_imported_months", {})
+    already_imported = month in periods.get(scope, set())
+    if already_imported:
+        st.warning("This month was already imported into this scenario, possibly from another document.")
+    confirmation_digest = hashlib.sha256(json.dumps([
+        (item["name"], item["expense_type"], item["monthly_amount"])
+        for item in selections
+    ]).encode()).hexdigest()
+    confirmation_prefix = f"{prefix}_{month}_{confirmation_digest}"
+    duplicate_ok = not already_imported or st.checkbox(
+        "I confirm I want to append this month again", key=f"{prefix}_{month}_duplicate",
+    )
+    currency_ok = currency == "USD" or st.checkbox(
+        f"I acknowledge the currency is {currency or 'unknown'}; amounts will be treated as dollars without conversion",
+        key=f"{prefix}_{month}_currency",
+    )
+    confirmed = st.checkbox(
+        "I reviewed the applied whole-dollar amounts and confirm appending them to this scenario",
+        key=f"{confirmation_prefix}_confirm",
+    )
+    if st.button("Append imported expenses", key=f"{prefix}_{month}_apply"):
+        if not confirmed or not duplicate_ok or not currency_ok:
+            st.error("Complete all required confirmations before appending.")
+        elif missing:
+            st.error("Enter amounts or skip unknown categories: " + ", ".join(missing))
+        elif not selections:
+            st.error("Select at least one category to append with a usable applied amount.")
+        else:
+            st.session_state.expenses.extend(selections)
+            periods.setdefault(scope, set()).add(month)
+            st.session_state.aggregate_upload_generation = (
+                st.session_state.get("aggregate_upload_generation", 0) + 1
+            )
+            st.session_state.pop("simulation_result", None)
+            st.session_state.pop("scenario_comparison_result", None)
+            st.session_state.import_success_notice = f"Appended expenses for {month}."
+            st.rerun()
+
+
 def main():
     import altair as alt
     import streamlit as st
@@ -2248,6 +2628,14 @@ def main():
     <style>
     .block-container { max-width: 1200px; padding-top: 2rem; }
     [data-testid="stMetricValue"] { color: #35c99a; }
+    @media (max-width: 768px) and (prefers-reduced-motion: no-preference) {
+        [data-testid="stExpandSidebarButton"] {
+            animation: sidebar-nudge 0.8s ease-in-out 3;
+        }
+        @keyframes sidebar-nudge {
+            50% { transform: translateX(4px); }
+        }
+    }
     </style>
     """, unsafe_allow_html=True)
     st.title("📈 Financial Simulator")
@@ -2370,9 +2758,9 @@ def main():
             st.session_state.expanded_cards.setdefault(legacy_card, True)
 
     def item_context(item, collection, index):
-        """Return a stable, human-readable context for repeated UI controls."""
+        """Return a name-based context that stays correct when items are reordered."""
         name = str(item.get("name", "")).strip()
-        return f"{collection.title()} {index + 1}" + (f" — {name}" if name else "")
+        return f"{collection.title()} — {name}" if name else f"{collection.title()} {index + 1}"
 
     def field_label(context, label):
         """Prefix repeated field labels so browser agents can identify the target."""
@@ -2538,7 +2926,7 @@ def main():
             st.session_state.pop(f"curveball_preset_{preset['key']}", None)
             for suffix in (
                 "probability", "income", "start_min", "start_max", "duration",
-                "reduction", "recovery",
+                "reduction", "recovery", "expense_amount", "expense_amount_max",
             ):
                 st.session_state.pop(
                     f"curveball_{suffix}_{preset['key']}", None
@@ -2623,6 +3011,11 @@ def main():
             return
         workspace = workspace.reset_from(ALTERNATIVE_ID, BASELINE_ID)
         st.session_state.scenario_workspace = workspace
+        prefix = f"workspace_{st.session_state.get('aggregate_workspace_id', 'initial')}_"
+        periods = st.session_state.setdefault("aggregate_imported_months", {})
+        periods[prefix + ALTERNATIVE_ID] = set(periods.get(prefix + BASELINE_ID, set()))
+        revisions = st.session_state.setdefault("aggregate_editor_revisions", {})
+        revisions[prefix + ALTERNATIVE_ID] = revisions.get(prefix + ALTERNATIVE_ID, 0) + 1
         if workspace.active_id == ALTERNATIVE_ID:
             import_config(workspace.config_for(ALTERNATIVE_ID), run_after_load=False)
         st.session_state.pop("simulation_result", None)
@@ -2642,6 +3035,9 @@ def main():
             TERTIARY_ID, name, workspace.config_for(BASELINE_ID),
         )).activate(TERTIARY_ID)
         st.session_state.scenario_workspace = workspace
+        prefix = f"workspace_{st.session_state.get('aggregate_workspace_id', 'initial')}_"
+        periods = st.session_state.setdefault("aggregate_imported_months", {})
+        periods[prefix + TERTIARY_ID] = set(periods.get(prefix + BASELINE_ID, set()))
         for key in ("scenario_tertiary_name", "scenario_variant_selector"):
             st.session_state.pop(key, None)
         import_config(workspace.config_for(TERTIARY_ID), run_after_load=False)
@@ -2661,6 +3057,7 @@ def main():
             st.session_state.workspace_import_error = str(error)
             return
         st.session_state.scenario_workspace = imported_workspace
+        _new_aggregate_workspace(st.session_state)
         for key in (
             "scenario_baseline_name", "scenario_alternative_name",
             "scenario_tertiary_name",
@@ -2688,6 +3085,7 @@ def main():
             st.session_state.import_error = str(error)
             return
         import_config(imported)
+        _reset_aggregate_editor(st.session_state)
         st.session_state.import_warnings = import_warnings
         st.session_state.import_uploader_counter = (
             st.session_state.get("import_uploader_counter", 0) + 1
@@ -2733,6 +3131,7 @@ def main():
             ScenarioVariant(ALTERNATIVE_ID, scenario_names[1], imported_configs[1][1]),
         ))
         st.session_state.scenario_workspace = workspace
+        _new_aggregate_workspace(st.session_state)
         for key in (
             "scenario_baseline_name", "scenario_alternative_name",
             "scenario_variant_selector",
@@ -2864,6 +3263,68 @@ def main():
         for profile in configured_jurisdiction_profiles():
             with st.expander(profile.name):
                 st.markdown(describe_profile_assumptions(profile))
+
+    @st.dialog("Bank statement analysis prompt", width="large")
+    def show_bank_analysis_prompt():
+        st.markdown(
+            "1. Export a CSV from your bank and open your own ChatGPT account.\n"
+            "2. Paste the prompt below and upload the CSV **directly to ChatGPT**.\n"
+            "3. Review its categories, dates, exclusions, and reconciliation. "
+            "Correct errors before asking it to attach a downloadable `.json` file. "
+            "If it only displays the JSON, copy the full object into a text editor "
+            "and save it as `analyzed-expenses.json`.\n"
+            "4. Return here and use **Tools & AI → Import aggregated expenses JSON** "
+            "to review and append a selected month. "
+            "The existing Scenario import accepts simulator scenario files only; "
+            "do not upload this summary there."
+        )
+        st.warning(
+            "Your bank data is shared with ChatGPT under your ChatGPT account "
+            "settings and data controls. Review those settings before uploading. "
+            "This simulator does not receive or upload your CSV."
+        )
+        prompt = build_expense_analysis_prompt()
+        prompt_json = json.dumps(prompt).replace("</", "<\\/")
+
+        st.iframe(
+            f"""
+            <button id="copy-prompt" type="button">Copy prompt</button>
+            <span id="copy-status" role="status" aria-live="polite"></span>
+            <script>
+            const promptText = {prompt_json};
+            const button = document.getElementById("copy-prompt");
+            const status = document.getElementById("copy-status");
+            button.addEventListener("click", async () => {{
+              try {{
+                await navigator.clipboard.writeText(promptText);
+                status.textContent = "Prompt copied.";
+              }} catch (error) {{
+                status.textContent =
+                  "Clipboard access is unavailable. Select and copy the full prompt below.";
+              }}
+            }});
+            </script>
+            <style>
+            button {{
+              border: 1px solid #888;
+              border-radius: 0.4rem;
+              background: transparent;
+              color: inherit;
+              cursor: pointer;
+              font: inherit;
+              padding: 0.45rem 0.8rem;
+            }}
+            #copy-status {{ margin-left: 0.6rem; }}
+            </style>
+            """,
+            height=48,
+        )
+        st.text_area(
+            "Full prompt (select and copy manually if needed)",
+            value=prompt,
+            height=400,
+            key="bank_analysis_prompt_text",
+        )
 
     def render_jurisdiction_profiles():
         if st.button("? Assumptions, sources and limitations",
@@ -3014,8 +3475,8 @@ def main():
                     "rental_expense_percentage", "rental_expense_basis", "rental",
                 )
                 if st.button(
-                    f"Remove {profile_context}", key=f"remove_jurisdiction_{profile_key}",
-                    help="Remove this jurisdiction profile from the scenario.",
+                    "🗑️", key=f"remove_jurisdiction_{profile_key}",
+                    help=f"Remove {profile_context} from the scenario.",
                 ):
                     remove_item(st.session_state.jurisdiction_profiles, index)
                     st.rerun()
@@ -3249,8 +3710,8 @@ def main():
                             "$50 investment fee."
                         )
                 if st.button(
-                    f"Remove {context}", key=f"remove_investment_{item_key(item)}",
-                    help="Remove this investment from the scenario.",
+                    "🗑️", key=f"remove_investment_{item_key(item)}",
+                    help=f"Remove {context} from the scenario.",
                 ):
                     remove_item(st.session_state.investments, index)
                     st.rerun()
@@ -3293,8 +3754,8 @@ def main():
                     key=f"income_bonus_{item_key(item)}",
                 )
                 if st.button(
-                    f"Remove {context}", key=f"remove_income_{item_key(item)}",
-                    help="Remove this income source from the scenario.",
+                    "🗑️", key=f"remove_income_{item_key(item)}",
+                    help=f"Remove {context} from the scenario.",
                 ):
                     remove_item(st.session_state.incomes, index)
                     st.rerun()
@@ -3327,8 +3788,8 @@ def main():
                     step=25.0, format="%.0f", key=f"expense_amount_{item_key(item)}",
                 )
                 if st.button(
-                    f"Remove {context}", key=f"remove_expense_{item_key(item)}",
-                    help="Remove this expense from the scenario.",
+                    "🗑️", key=f"remove_expense_{item_key(item)}",
+                    help=f"Remove {context} from the scenario.",
                 ):
                     remove_item(st.session_state.expenses, index)
                     st.rerun()
@@ -3389,8 +3850,8 @@ def main():
                     step=100.0, format="%.0f", key=f"loan_paid_{item_key(item)}",
                 )
                 if st.button(
-                    f"Remove {context}", key=f"remove_loan_{item_key(item)}",
-                    help="Remove this loan from the scenario.",
+                    "🗑️", key=f"remove_loan_{item_key(item)}",
+                    help=f"Remove {context} from the scenario.",
                 ):
                     remove_item(st.session_state.loans, index)
                     st.rerun()
@@ -3450,8 +3911,8 @@ def main():
                 )
                 st.caption("* Illustrative assumption; adjust or disable for your situation.")
                 if st.button(
-                    f"Remove {context}", key=f"remove_dependent_{item_key(item)}",
-                    help="Remove this child from the scenario.",
+                    "🗑️", key=f"remove_dependent_{item_key(item)}",
+                    help=f"Remove {context} from the scenario.",
                 ):
                     remove_item(st.session_state.dependents, index)
                     st.rerun()
@@ -3467,7 +3928,12 @@ def main():
         predefined_names = {preset["name"] for preset in PREDEFINED_CURVEBALLS}
         for preset in PREDEFINED_CURVEBALLS:
             existing = configured.get(preset["name"])
+            event_kind = preset.get("event_kind", "income_reduction")
             if existing is not None:
+                existing.setdefault("event_kind", event_kind)
+                existing.setdefault("expense_type", preset.get("expense_type", "miscellaneous"))
+                existing.setdefault("expense_amount", preset.get("expense_amount", 0.0))
+                existing.setdefault("expense_amount_max", preset.get("expense_amount_max"))
                 existing["start_month_min"] = min(
                     max_month, max(1, int(existing.get("start_month_min", 1)))
                 )
@@ -3492,6 +3958,10 @@ def main():
                     "affected_income_name": None,
                     "income_reduction_pct": preset["income_reduction_pct"],
                     "recovery_months": preset["recovery_months"],
+                    "event_kind": event_kind,
+                    "expense_type": preset.get("expense_type", "miscellaneous"),
+                    "expense_amount": preset.get("expense_amount", 0.0),
+                    "expense_amount_max": preset.get("expense_amount_max"),
                     "_id": uuid.uuid4().hex,
                 }
                 st.session_state.curveballs.insert(0, existing)
@@ -3515,19 +3985,20 @@ def main():
                         max_value=100.0, value=float(existing["probability"]),
                         step=5.0, key=f"curveball_probability_{preset['key']}",
                     )
-                    income_options = ["All incomes"] + [
-                        item["name"] for item in st.session_state.incomes
-                    ]
-                    target = existing.get("affected_income_name")
-                    target_label = target if target in income_options else "All incomes"
-                    selected_target = st.selectbox(
-                        f"{preset['name']} — Affected income", income_options,
-                        index=income_options.index(target_label),
-                        key=f"curveball_income_{preset['key']}",
-                    )
-                    existing["affected_income_name"] = (
-                        None if selected_target == "All incomes" else selected_target
-                    )
+                    if event_kind == "income_reduction":
+                        income_options = ["All incomes"] + [
+                            item["name"] for item in st.session_state.incomes
+                        ]
+                        target = existing.get("affected_income_name")
+                        target_label = target if target in income_options else "All incomes"
+                        selected_target = st.selectbox(
+                            f"{preset['name']} — Affected income", income_options,
+                            index=income_options.index(target_label),
+                            key=f"curveball_income_{preset['key']}",
+                        )
+                        existing["affected_income_name"] = (
+                            None if selected_target == "All incomes" else selected_target
+                        )
                     start_left, start_right = st.columns(2)
                     existing["start_month_min"] = start_left.number_input(
                         f"{preset['name']} — Earliest start month", min_value=1,
@@ -3543,26 +4014,67 @@ def main():
                     )
                     if existing["start_month_max"] < existing["start_month_min"]:
                         existing["start_month_max"] = existing["start_month_min"]
+                    duration_label = (
+                        "Expense-shock duration (months)"
+                        if event_kind == "expense_shock"
+                        else "Income-reduction duration (months)"
+                    )
                     existing["duration_months"] = st.number_input(
-                        f"{preset['name']} — Income-reduction duration (months)", min_value=1,
+                        f"{preset['name']} — {duration_label}", min_value=1,
                         value=int(existing["duration_months"]), step=1,
                         key=f"curveball_duration_{preset['key']}",
                     )
-                    existing["income_reduction_pct"] = st.number_input(
-                        f"{preset['name']} — Income reduction (%)", min_value=0.0,
-                        max_value=100.0,
-                        value=float(existing["income_reduction_pct"]), step=5.0,
-                        key=f"curveball_reduction_{preset['key']}",
-                    )
-                    existing["recovery_months"] = st.number_input(
-                        f"{preset['name']} — Recovery period (months)", min_value=0,
-                        value=int(existing["recovery_months"]), step=1,
-                        key=f"curveball_recovery_{preset['key']}",
-                    )
-                    st.caption(
-                        "Recovery tapers the reduction linearly; overlapping events "
-                        "multiply their income factors."
-                    )
+                    if event_kind == "income_reduction":
+                        existing["income_reduction_pct"] = st.number_input(
+                            f"{preset['name']} — Income reduction (%)", min_value=0.0,
+                            max_value=100.0,
+                            value=float(existing["income_reduction_pct"]), step=5.0,
+                            key=f"curveball_reduction_{preset['key']}",
+                        )
+                        existing["recovery_months"] = st.number_input(
+                            f"{preset['name']} — Recovery period (months)", min_value=0,
+                            value=int(existing["recovery_months"]), step=1,
+                            key=f"curveball_recovery_{preset['key']}",
+                        )
+                        st.caption(
+                            "Recovery tapers the reduction linearly; overlapping events "
+                            "multiply their income factors."
+                        )
+                    else:
+                        existing["expense_amount"] = st.number_input(
+                            f"{preset['name']} — Amount per affected month ($)",
+                            min_value=0.0, value=float(existing.get("expense_amount", 0.0)),
+                            step=50.0, format="%.0f",
+                            key=f"curveball_expense_amount_{preset['key']}",
+                            help=(
+                                "A one-month event is a one-off bill. Longer durations "
+                                "charge this amount once per affected month."
+                            ),
+                        )
+                        current_max = existing.get("expense_amount_max")
+                        maximum = st.number_input(
+                            f"{preset['name']} — Maximum amount per affected month ($)",
+                            min_value=float(existing["expense_amount"]),
+                            value=max(
+                                float(existing["expense_amount"]),
+                                float(current_max) if current_max is not None else 0.0,
+                            ),
+                            step=50.0, format="%.0f",
+                            key=f"curveball_expense_amount_max_{preset['key']}",
+                            help=(
+                                "Set this above the amount to sample a deterministic "
+                                "uniform amount range for each triggered trajectory."
+                            ),
+                        )
+                        existing["expense_amount_max"] = (
+                            maximum if maximum > existing["expense_amount"] else None
+                        )
+                        existing["expense_type"] = preset.get(
+                            "expense_type", existing.get("expense_type", "miscellaneous")
+                        )
+                        st.caption(
+                            f"Recorded as a {existing['expense_type']} expense in monthly details."
+                        )
         custom_count = sum(
             item.get("name") not in predefined_names
             for item in st.session_state.curveballs
@@ -3577,13 +4089,24 @@ def main():
                     continue
                 remove_col, label_col = st.columns([1, 3])
                 if remove_col.button(
-                    "Remove", key=f"remove_imported_curveball_{item_key(item)}",
+                    "🗑️", key=f"remove_imported_curveball_{item_key(item)}",
+                    help=f"Remove imported curveball {item.get('name', '')}.",
                 ):
                     st.session_state.curveballs.remove(item)
                     st.rerun()
                 label_col.caption(item.get("name", "Imported curveball"))
 
     with st.sidebar:
+        with st.expander("Tools & AI", key="sidebar_tools_ai"):
+            if st.button(
+                "Bank statement analysis prompt",
+                key="bank_analysis_prompt_button",
+                use_container_width=True,
+            ):
+                show_bank_analysis_prompt()
+            st.caption("Manual workflow; this simulator never uploads bank CSVs.")
+            render_aggregated_expense_import(st)
+
         st.header("Scenario")
         scenario_controls_placeholder = st.empty()
 
@@ -4141,6 +4664,8 @@ def main():
     ):
         welcome_placeholder.info(
             "**Start here**\n\n"
+            "On mobile, tap the **expand sidebar** button at the top left to open "
+            "the left menu.\n\n"
             "- **Set up a scenario:** review or edit the starting cash, income, "
             "expenses, investments, loans, and assumptions in the **Scenario** "
             "controls in the left sidebar. Add optional details such as dependents, "
@@ -4337,7 +4862,9 @@ def main():
                     "Create Baseline A and Alternative B",
                     key="create_scenario_workspace",
                 ):
+                    source_scope = _aggregate_scope(st.session_state)
                     st.session_state.scenario_workspace = ScenarioWorkspace.from_config(config)
+                    _new_aggregate_workspace(st.session_state, source_scope, clone_all=True)
                     st.session_state.pop("simulation_result", None)
                     st.session_state.pop("scenario_variant_selector", None)
                     st.rerun()
@@ -4744,7 +5271,9 @@ def main():
                         "scenario_variant_selector",
                     ):
                         st.session_state.pop(key, None)
+                    source_scope = _aggregate_scope(st.session_state)
                     st.session_state.scenario_workspace = suggestion_workspace
+                    _new_aggregate_workspace(st.session_state, source_scope, clone_all=True)
                     st.session_state.scenario_comparison_result = {
                         "fingerprint": suggestion_fingerprint,
                         "comparison": comparison,
@@ -5143,11 +5672,22 @@ def main():
 
     final_net_worth = net_worth[-1]
     starting_net_worth = net_worth[0]
-    columns = st.columns(4)
+    columns = st.columns(5)
     columns[0].metric(f"{label_prefix}final net worth", _money(final_net_worth), f"{final_net_worth - starting_net_worth:+,.0f}")
-    columns[1].metric(f"{label_prefix}final cash", _money(details["bank_account"][-1]))
-    columns[2].metric(f"{label_prefix}final investments", _money(details["investments"][-1]))
-    columns[3].metric("Loans repaid", len(repayment_dates))
+    downside_trajectory, downside_month, downside_cash = select_downside_trajectory(
+        trajectories
+    )
+    columns[1].metric(
+        "Lowest month-end cash",
+        _money(downside_cash),
+        f"Month {downside_month} · run {downside_trajectory.run_number}",
+        delta_color="off",
+        help=f"**{DOWNSIDE_SCENARIO_LABEL}.** "
+        + downside_scenario_explanation(int(simulation_count)),
+    )
+    columns[2].metric(f"{label_prefix}final cash", _money(details["bank_account"][-1]))
+    columns[3].metric(f"{label_prefix}final investments", _money(details["investments"][-1]))
+    columns[4].metric("Loans repaid", len(repayment_dates))
 
     single_export_download_name = build_export_filename(
         st.session_state.get("single_export_filename", single_export_filename),
@@ -5174,16 +5714,32 @@ def main():
             {"month": month, "amount": cash, "series": f"{label_prefix}cash"},
             {"month": month, "amount": investments, "series": f"{label_prefix}investments"},
         ])
+    downside_series = f"{DOWNSIDE_SCENARIO_LABEL} cash"
+    chart_values.extend(
+        {"month": month, "amount": cash, "series": downside_series}
+        for month, cash in enumerate(
+            downside_trajectory.result[2]["bank_account"], start=1)
+        if month <= len(net_worth)
+    )
 
     lines = alt.Chart(alt.Data(values=chart_values)).mark_line(strokeWidth=2.5).encode(
+        strokeDash=alt.StrokeDash(
+            "series:N",
+            scale=alt.Scale(
+                domain=[f"{label_prefix}net worth", f"{label_prefix}cash",
+                        f"{label_prefix}investments", downside_series],
+                range=[[1, 0], [1, 0], [1, 0], [6, 4]],
+            ),
+            legend=None,
+        ),
         x=alt.X("month:Q", title="Month", scale=alt.Scale(domain=[1, len(net_worth)])),
         y=alt.Y("amount:Q", title="Amount", axis=alt.Axis(format="$,.0f")),
         color=alt.Color(
             "series:N", title="Financial series",
             scale=alt.Scale(
                 domain=[f"{label_prefix}net worth", f"{label_prefix}cash",
-                        f"{label_prefix}investments"],
-                range=["#35c99a", "#5b8def", "#f4b942"],
+                        f"{label_prefix}investments", downside_series],
+                range=["#35c99a", "#5b8def", "#f4b942", "#e5484d"],
             ),
             legend=alt.Legend(orient="top", direction="horizontal"),
         ),
@@ -5282,6 +5838,20 @@ def main():
         selected_month = int(round(selection["month"]))
     selected_month = min(max(selected_month, 1), len(net_worth))
     st.session_state[month_selector_key] = selected_month
+    st.caption(
+        f"The dashed red line is the {DOWNSIDE_SCENARIO_LABEL}: run "
+        f"{downside_trajectory.run_number}, whose cash falls lowest "
+        f"({_money(downside_cash)}) in month {downside_month}."
+    )
+    if st.checkbox(
+        f"Inspect {DOWNSIDE_SCENARIO_LABEL} lowest-cash month (month {downside_month})",
+        key=f"inspect_downside_{run_id}_{view_mode}",
+        help=downside_scenario_explanation(int(simulation_count)),
+    ):
+        net_worth, _, details = downside_trajectory.result
+        selected_month = min(max(downside_month, 1), len(net_worth))
+        detail_prefix = f"{DOWNSIDE_SCENARIO_LABEL} (run {downside_trajectory.run_number})"
+        st.session_state[month_selector_key] = selected_month
     selected_month = st.number_input(
         "Simulation month",
         min_value=1,

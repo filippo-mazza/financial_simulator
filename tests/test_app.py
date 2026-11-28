@@ -6,17 +6,39 @@ import math
 import pytest
 
 from bank_account import InsufficientFundsException
+from expense import Expense
 from app import (CHART_EVENT_COLORS, SimulationTrajectory, _consume_run_request,
                  _whole_amount, aggregate_purchase_events,
                  DependentConfig, ExpenseConfig,
                  FinancialAssumptions, IncomeConfig, InvestmentConfig, LoanConfig, SimulationConfig,
                  build_components, build_simulation_events, create_simulation_export,
-                 get_month_details, monte_carlo_sample_guidance,
-                 monte_carlo_view_explanation, select_representative_trajectories,
+                 build_expense_analysis_prompt, get_month_details,
+                 monte_carlo_sample_guidance,
+                 monte_carlo_view_explanation, select_downside_trajectory,
+                 select_representative_trajectories,
                  read_simulation_export, run_simulation,
                  run_simulation_batch, run_simulations)
 from investment import Investment
 from property_purchase import AutomaticPurchasePolicy, PropertyPurchase
+
+
+def test_expense_analysis_prompt_uses_versioned_aggregate_schema():
+    prompt = build_expense_analysis_prompt()
+    schema = json.loads("{" + prompt.split("\n\n{", 1)[1])
+
+    assert schema["format"] == "financial-simulator-aggregated-expenses"
+    assert schema["schema_version"] == 1
+    assert set(schema["monthly_totals"][0]["categories"]) == {
+        *Expense("Prompt category", "housing", 0).expense_growth,
+        "uncategorized",
+    }
+    assert "YYYY-MM" in schema["monthly_totals"][0]["month"]
+    assert "merchant names" in prompt
+    assert "account/card numbers" in prompt
+    assert "do not force totals to match" in prompt
+    assert "do not guess" in prompt
+    assert "under the user's ChatGPT account settings" in prompt
+    assert "transaction-level data" in prompt
 
 
 def test_build_components_exposes_all_model_options():
@@ -246,6 +268,9 @@ def test_monte_carlo_view_explanations_distinguish_average_and_individual_paths(
     assert "Arithmetic-average overview" in overview
     assert "not a guaranteed or individually realizable household path" in overview
     assert "hide liquidity shortfalls" in overview
+    assert "lowest observed month-end cash in this batch" in overview
+    assert "not a statistical estimate of downside risk" in overview
+    assert "Quantitative downside-risk estimates" in overview
     assert "issue #25" in overview and "issue #67" in overview
     assert "arithmetic average is the same as Run 1" in single_run
     assert "does not hide differences between runs" in single_run
@@ -893,3 +918,27 @@ def test_representative_selection_breaks_ties_by_run_number():
 def test_representative_selection_requires_trajectories():
     with pytest.raises(ValueError):
         select_representative_trajectories([])
+
+
+def _cash_trajectories(*cash_paths):
+    return [
+        SimulationTrajectory(i, i, [0] * len(cash), [], {"bank_account": cash})
+        for i, cash in enumerate(cash_paths, start=1)
+    ]
+
+
+def test_downside_selection_uses_lowest_cash_over_horizon():
+    trajectory, month, cash = select_downside_trajectory(
+        _cash_trajectories([100, 50, 200], [90, 80, 10], [500, 5, 400, 5]))
+    assert (trajectory.run_number, month, cash) == (3, 2, 5)
+
+
+def test_downside_selection_breaks_ties_by_run_then_month():
+    trajectory, month, cash = select_downside_trajectory(
+        list(reversed(_cash_trajectories([9, 1, 1], [1, 9, 9]))))
+    assert (trajectory.run_number, month, cash) == (1, 2, 1)
+
+
+def test_downside_selection_requires_trajectories():
+    with pytest.raises(ValueError):
+        select_downside_trajectory([])

@@ -414,6 +414,37 @@ def test_comparison_warns_when_additional_unexpected_expense_changes_draws():
     assert any("structure differs" in warning.lower() for warning in comparison.warnings)
 
 
+@pytest.mark.parametrize(
+    ("baseline_kind", "baseline_max", "alternative_kind", "alternative_max", "warns"),
+    [
+        ("expense_shock", None, "expense_shock", 0, True),
+        ("expense_shock", 0, "expense_shock", None, True),
+        ("income_reduction", 0, "expense_shock", 0, True),
+        ("expense_shock", None, "expense_shock", None, False),
+        ("expense_shock", 100, "expense_shock", 200, False),
+    ],
+)
+def test_comparison_tracks_expense_curveball_draw_structure(
+    baseline_kind, baseline_max, alternative_kind, alternative_max, warns,
+):
+    baseline = _config()
+    baseline.curveballs = [CurveballConfig(
+        "Shock", enabled=True, probability=1.0,
+        start_month_min=1, start_month_max=1, duration_months=1,
+        event_kind=baseline_kind, expense_amount=0, expense_amount_max=baseline_max,
+    )]
+    workspace = ScenarioWorkspace.from_config(baseline)
+    alternative = workspace.config_for(ALTERNATIVE_ID)
+    alternative.curveballs[0].event_kind = alternative_kind
+    alternative.curveballs[0].expense_amount = 0 if alternative_max == 0 else 10
+    alternative.curveballs[0].expense_amount_max = alternative_max
+    workspace = workspace.save(ALTERNATIVE_ID, alternative)
+
+    comparison = run_paired_scenario_comparison(workspace, 1)
+
+    assert any("structure differs" in warning.lower() for warning in comparison.warnings) == warns
+
+
 def test_input_differences_preserve_empty_none_and_missing_values():
     baseline = SimulationConfig(
         years=1, investments=None, incomes=[], expenses=[], loans=[],
