@@ -7,7 +7,7 @@ import pytest
 
 from bank_account import InsufficientFundsException
 from expense import Expense
-from app import (CHART_EVENT_COLORS, SimulationTrajectory, _consume_run_request,
+from app import (CHART_EVENT_COLORS, CurveballConfig, SimulationTrajectory, _consume_run_request,
                  _whole_amount, aggregate_purchase_events,
                  DependentConfig, ExpenseConfig,
                  FinancialAssumptions, IncomeConfig, InvestmentConfig, LoanConfig, SimulationConfig,
@@ -363,6 +363,40 @@ def test_validation_errors_name_each_item_field_and_correction():
     assert "0 and 100" in errors
     assert "Investment names must be unique" in errors
     assert "Rename all but one" in errors
+
+
+def test_curveball_range_can_extend_beyond_simulation_horizon():
+    config = SimulationConfig(
+        years=1, investments=[], incomes=[], expenses=[], loans=[],
+        curveballs=[CurveballConfig("Disabled shock")],
+    )
+
+    assert scenario_validation_errors(config) == []
+    run_simulation(config)
+
+
+def test_curveball_income_reduction_is_described_as_lost_income():
+    config = SimulationConfig(
+        years=1, seed=7, initial_cash=1000, investments=[],
+        incomes=[IncomeConfig("Salary", "salary", 1000)],
+        expenses=[], loans=[],
+        curveballs=[CurveballConfig(
+            "Job loss", True, 1.0, 1, 1, 1,
+            income_reduction_pct=100.0,
+        )],
+    )
+    net_worth, _, details = run_simulation(config)
+
+    _, flows = get_month_details(net_worth, details, month=1)
+    reduction = next(
+        row for row in flows
+        if row["Category"] == "Curveball income reduction"
+    )
+
+    assert reduction["Amount"] == 700
+    assert reduction["Sign convention"] == (
+        "Positive amount is income lost because of the curveball"
+    )
 
 
 def test_export_inspectable_monthly_table_matches_monthly_summary():

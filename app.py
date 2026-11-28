@@ -1495,7 +1495,6 @@ def scenario_validation_errors(config):
                 "Enter 0 or a positive monthly expense amount.",
             ))
 
-    max_month = config.years * 12
     for item in config.curveballs:
         context = f"Curveball — {item.name or '(unnamed)'}"
         if not 0 <= item.probability <= 1:
@@ -1504,17 +1503,18 @@ def scenario_validation_errors(config):
                 "must be between 0 and 1",
                 "Use a probability from 0 to 1 in programmatic scenarios.",
             ))
-        if not 1 <= item.start_month_min <= max_month:
+        if item.start_month_min < 1:
             errors.append(_field_error(
                 context, "Earliest start month", item.start_month_min,
-                f"must be between 1 and {max_month}",
-                "Move the start into the simulated month range.",
+                "must be at least 1",
+                "Enter a positive one-based start month.",
             ))
-        if not item.start_month_min <= item.start_month_max <= max_month:
+        if item.start_month_max < item.start_month_min:
             errors.append(_field_error(
                 context, "Latest start month", item.start_month_max,
-                f"must be between earliest start {item.start_month_min} and {max_month}",
-                "Set the latest start no earlier than the earliest start and within the horizon.",
+                f"must be no earlier than earliest start {item.start_month_min}",
+                "Set the latest start to the earliest start or a later month. "
+                "Starts beyond the simulation horizon have no effect.",
             ))
         if item.duration_months < 1:
             errors.append(_field_error(
@@ -2278,7 +2278,11 @@ def get_month_details(net_worth, details, month):
                         "Automatic contribution fee", "Expense paid",
                         "Loan payment", "Property operating costs (linked)",
                     }
+                    else (
+                        "Positive amount is income lost because of the curveball"
+                        if category == "Curveball income reduction"
                     else "Positive amount shown as income or balance"
+                    )
                 ),
             }
             for name, values in details.get(detail_name, {}).items()
