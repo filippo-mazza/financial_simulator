@@ -2473,6 +2473,14 @@ def render_aggregated_expense_import(st):
     generation = st.session_state.get("aggregate_upload_generation", 0)
     revision = st.session_state.get("aggregate_editor_revisions", {}).get(scope, 0)
     prefix = f"aggregate_{scope}_{generation}_{revision}_{digest}"
+    upload_notice_key = f"{generation}:{digest}"
+    if st.session_state.get("aggregate_upload_notice_key") != upload_notice_key:
+        st.session_state.aggregate_upload_notice_key = upload_notice_key
+        st.toast(
+            "Expense JSON loaded. Choose a month, review its amounts, and append it to the scenario.",
+            icon="📄",
+            duration=5,
+        )
     del data
     currency = document["currency"]
     st.caption(
@@ -2648,11 +2656,19 @@ def main():
             "The other scenario is stored as an independent configuration snapshot."
         )
     workspace_notice = st.session_state.pop("workspace_success_notice", None)
+    action_notice = st.session_state.pop("scenario_action_notice", None)
     import_notice = st.session_state.pop("import_success_notice", None)
+    if workspace_notice:
+        st.toast(workspace_notice, icon="✅", duration=5)
+    if action_notice:
+        st.toast(action_notice, icon="✅", duration=5)
     if import_notice:
         st.toast(import_notice, icon="✅", duration=5)
     for import_warning in st.session_state.pop("import_warnings", []):
         st.warning(import_warning)
+
+    def queue_scenario_action_notice(message):
+        st.session_state.scenario_action_notice = message
 
     st.session_state.setdefault("additional_expenses", [])
     st.session_state.setdefault("dependents", [])
@@ -3020,6 +3036,7 @@ def main():
             import_config(workspace.config_for(ALTERNATIVE_ID), run_after_load=False)
         st.session_state.pop("simulation_result", None)
         st.session_state.pop("scenario_comparison_result", None)
+        queue_scenario_action_notice("Alternative B reset from Baseline A.")
 
     def add_tertiary_scenario():
         workspace = st.session_state.get("scenario_workspace")
@@ -3043,6 +3060,7 @@ def main():
         import_config(workspace.config_for(TERTIARY_ID), run_after_load=False)
         st.session_state.pop("simulation_result", None)
         st.session_state.pop("scenario_comparison_result", None)
+        queue_scenario_action_notice(f"Added {name} to the workspace.")
 
     def import_scenario_workspace():
         uploaded = st.session_state.get(
@@ -3168,6 +3186,7 @@ def main():
         }
         st.session_state.expenses.insert(0, item)
         st.session_state.expanded_cards[card_state_key("expense", item)] = True
+        st.toast(f"Added {item['name']} to the scenario.", icon="✅", duration=5)
 
     def add_dependent():
         number = len(st.session_state.dependents) + 1
@@ -3177,6 +3196,7 @@ def main():
             "school_start_age": 6, "school_monthly_cost": 250.0,
             "_id": uuid.uuid4().hex,
         })
+        st.toast(f"Added Child {number} to the scenario.", icon="✅", duration=5)
 
     def add_curveball():
         number = len(st.session_state.curveballs) + 1
@@ -3190,6 +3210,7 @@ def main():
         }
         st.session_state.curveballs.insert(0, item)
         st.session_state.expanded_cards[card_state_key("curveball", item)] = True
+        st.toast(f"Added {item['name']} to the scenario.", icon="✅", duration=5)
 
     def add_investment(investment_type):
         item = {
@@ -3208,6 +3229,7 @@ def main():
         }
         st.session_state.investments.insert(0, item)
         st.session_state.expanded_cards[card_state_key("investment", item)] = True
+        st.toast(f"Added {item['name']} to the scenario.", icon="✅", duration=5)
 
     def add_income(income_type):
         item = {
@@ -3218,24 +3240,29 @@ def main():
         }
         st.session_state.incomes.insert(0, item)
         st.session_state.expanded_cards[card_state_key("income", item)] = True
+        st.toast(f"Added {item['name']} to the scenario.", icon="✅", duration=5)
 
     def add_loan():
-        st.session_state.loans.append({
+        item = {
             "name": f"Loan {len(st.session_state.loans) + 1}", "amount": 10000.0,
             "interest_rate": 2.0, "duration_years": 25, "fixed_rate": False,
             "already_paid": 0.0,
             "_id": uuid.uuid4().hex,
-        })
+        }
+        st.session_state.loans.append(item)
+        st.toast(f"Added {item['name']} to the scenario.", icon="✅", duration=5)
 
     def add_jurisdiction_profile():
-        st.session_state.jurisdiction_profiles.append({
+        item = {
             "name": f"Custom jurisdiction {len(st.session_state.jurisdiction_profiles) + 1}",
             "acquisition_cost_percentage": 0.0,
             "annual_property_tax_percentage": 0.0,
             "annual_maintenance_percentage": 0.0,
             "rental_expense_percentage": 0.0,
             "_id": uuid.uuid4().hex,
-        })
+        }
+        st.session_state.jurisdiction_profiles.append(item)
+        st.toast(f"Added {item['name']} to the scenario.", icon="✅", duration=5)
 
     @st.dialog("Jurisdiction presets: assumptions, sources and limitations",
                width="large")
@@ -3352,6 +3379,7 @@ def main():
                 st.session_state.jurisdiction_profiles.append({
                     **asdict(catalog[chosen]), "_id": uuid.uuid4().hex,
                 })
+                st.toast(f"Added {chosen} to the scenario.", icon="✅", duration=5)
                 st.rerun()
         if st.button("＋ Add jurisdiction profile", use_container_width=True):
             add_jurisdiction_profile()
@@ -3482,7 +3510,10 @@ def main():
                     st.rerun()
 
     def remove_item(collection, index):
-        collection.pop(index)
+        item = collection.pop(index)
+        st.session_state.scenario_action_notice = (
+            f"Removed {item.get('name', 'item')} from the scenario."
+        )
 
     def render_investments():
         investment_types = sorted(Investment.TOPOLOGY_DETAILS)
@@ -3968,11 +3999,21 @@ def main():
                 st.session_state.expanded_cards[
                     card_state_key("curveball", existing)
                 ] = True
+                st.toast(
+                    f"Added {preset['name']} to the scenario.",
+                    icon="✅",
+                    duration=5,
+                )
             elif not selected and existing is not None:
                 st.session_state.curveballs = [
                     item for item in st.session_state.curveballs
                     if item.get("name") != preset["name"]
                 ]
+                st.toast(
+                    f"Removed {preset['name']} from the scenario.",
+                    icon="✅",
+                    duration=5,
+                )
             st.caption(preset["description"])
             if selected:
                 existing = next(
@@ -4093,6 +4134,9 @@ def main():
                     help=f"Remove imported curveball {item.get('name', '')}.",
                 ):
                     st.session_state.curveballs.remove(item)
+                    st.session_state.scenario_action_notice = (
+                        f"Removed {item['name']} from the scenario."
+                    )
                     st.rerun()
                 label_col.caption(item.get("name", "Imported curveball"))
 
@@ -4849,8 +4893,6 @@ def main():
             )
             st.divider()
             st.markdown("**A/B workspace JSON**")
-            if workspace_notice:
-                st.success(workspace_notice)
             workspace_error = st.session_state.pop("workspace_import_error", None)
             workspace = st.session_state.scenario_workspace
             if workspace is None:
@@ -4867,6 +4909,9 @@ def main():
                     _new_aggregate_workspace(st.session_state, source_scope, clone_all=True)
                     st.session_state.pop("simulation_result", None)
                     st.session_state.pop("scenario_variant_selector", None)
+                    queue_scenario_action_notice(
+                        "Created Baseline A and Alternative B."
+                    )
                     st.rerun()
             else:
                 # Every rerun first saves the visible editor into only the active
@@ -4946,6 +4991,8 @@ def main():
                         workspace_export_filename, workspace_suggestion,
                     ),
                     mime="application/json",
+                    on_click=queue_scenario_action_notice,
+                    args=("A/B scenario workspace exported.",),
                     use_container_width=True,
                     help=(
                         "Exports all saved named input configurations without simulation results."
@@ -5003,6 +5050,13 @@ def main():
         }
         st.session_state.active_result_mode = "comparison"
         st.session_state.focus_comparison_results = True
+        st.toast(
+            f"Compared {workspace.variant(BASELINE_ID).name} and "
+            f"{workspace.variant(ALTERNATIVE_ID).name} across "
+            f"{simulation_count} paired simulations.",
+            icon="✅",
+            duration=5,
+        )
 
     scenario_fingerprint = json.dumps(asdict(config), sort_keys=True)
     if run_requested:
@@ -5022,6 +5076,16 @@ def main():
             "trajectories": batch.trajectories,
         }
         st.session_state.active_result_mode = "single"
+        count_label = (
+            "simulation" if int(simulation_count) == 1
+            else "simulations"
+        )
+        st.toast(
+            f"Simulation complete: {simulation_count} {count_label}, "
+            f"{len(batch.average_result[0])} months.",
+            icon="✅",
+            duration=5,
+        )
 
     if st.session_state.active_result_mode == "comparison":
         comparison_record = st.session_state.get("scenario_comparison_result")
@@ -5709,6 +5773,8 @@ def main():
         file_name=single_export_download_name,
         key="single_scenario_export_download",
         mime="application/json",
+        on_click=queue_scenario_action_notice,
+        args=("Scenario exported as JSON.",),
         help="Download the scenario inputs and month-by-month results as JSON.",
     )
 

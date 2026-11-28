@@ -222,6 +222,7 @@ def test_imported_custom_curveball_can_be_removed(monkeypatch, tmp_path):
 
     assert not app.exception
     assert app.session_state["curveballs"] == []
+    assert any("Removed Old custom event" in item.value for item in app.toast)
 
 
 def test_new_expense_is_inserted_at_top_of_expense_list(monkeypatch, tmp_path):
@@ -246,6 +247,7 @@ def test_new_expense_is_inserted_at_top_of_expense_list(monkeypatch, tmp_path):
         for item in _expander(app, "sidebar_expenses").text_input
     )
     assert not any("Expense 1 — Expense 2" in item.label for item in app.text_input)
+    assert any("Added Expense 2 to the scenario." in item.value for item in app.toast)
 
 
 def test_added_cards_open_independently_and_survive_edit_and_rerun(tmp_path):
@@ -429,6 +431,7 @@ def test_ab_workspace_keeps_baseline_and_alternative_inputs_isolated(
 
     app.button(key="create_scenario_workspace").click().run(timeout=30)
     assert not app.exception
+    assert any("Created Baseline A and Alternative B." in item.value for item in app.toast)
     assert app.text_input(key="scenario_baseline_name").value == "Baseline A"
     assert app.text_input(key="scenario_alternative_name").value == "Alternative B"
 
@@ -459,6 +462,21 @@ def test_add_scenario_c_chooses_unused_default_name(monkeypatch, tmp_path):
 
     assert not app.exception
     assert app.text_input(key="scenario_tertiary_name").value == "Alternative C (2)"
+
+
+def test_reset_alternative_shows_confirmation(monkeypatch, tmp_path):
+    app = _fresh_app(monkeypatch, tmp_path)
+    app.button(key="create_scenario_workspace").click().run(timeout=30)
+    app.radio(key="scenario_variant_selector").set_value("alternative").run(timeout=30)
+    app.number_input(key="scenario_initial_cash").set_value(9000).run(timeout=30)
+
+    app.button(key="reset_alternative_scenario").click().run(timeout=30)
+
+    assert not app.exception
+    assert app.number_input(key="scenario_initial_cash").value == 5000
+    assert any("Alternative B reset from Baseline A." in item.value for item in app.toast)
+    app.run(timeout=30)
+    assert not any("Alternative B reset from Baseline A." in item.value for item in app.toast)
 
 
 def test_ab_workspace_restores_each_scenario_rent_selection(monkeypatch, tmp_path):
@@ -532,6 +550,7 @@ next(item for item in app.number_input if item.label == 'Number of simulations')
 next(item for item in app.button if item.label == '⇄ Compare A/B').click().run(timeout=30)
 assert not app.exception
 assert any(item.value == 'Paired A/B comparison' for item in app.subheader)
+assert any('Compared Baseline A and Alternative B across 2 paired simulations.' in item.value for item in app.toast)
 assert any('B−A is calculated within each seed pair' in item.value for item in app.info)
 assert any('scheduled investment contributions' in item.value.lower() for item in app.caption)
 assert len(app.dataframe) >= 2
@@ -712,6 +731,7 @@ app = AppTest.from_file({str(APP_PATH)!r}).run(timeout=30)
 next(item for item in app.number_input if item.label == 'Number of simulations').set_value(2)
 next(item for item in app.button if item.label == '▶ Run simulations').click().run(timeout=30)
 assert not app.exception
+assert any('Simulation complete: 2 simulations, 120 months.' in item.value for item in app.toast)
 assert any(
     'not a guaranteed or individually realizable household path' in item.value
     and 'lowest observed month-end cash in this batch' in item.value
@@ -983,6 +1003,51 @@ def test_scenario_json_import_errors_keep_uploads_and_explain_failure(
     assert not app.exception
     assert app.session_state["workspace_import_counter"] == 0
     assert app.sidebar.file_uploader(key="scenario_workspace_file_0").value
+
+
+def test_workspace_import_shows_confirmation(monkeypatch, tmp_path):
+    from app import SimulationConfig, create_scenario_workspace_export
+    from scenario_workspace import ScenarioWorkspace
+
+    app = _fresh_app(monkeypatch, tmp_path)
+    config = SimulationConfig(
+        years=1, investments=[], incomes=[], expenses=[], loans=[],
+    )
+    payload = create_scenario_workspace_export(
+        ScenarioWorkspace.from_config(config),
+    ).encode()
+    app.sidebar.file_uploader(key="scenario_workspace_file_0").upload(
+        "workspace.json", payload, "application/json",
+    ).run(timeout=30)
+    app.button(key="import_scenario_workspace").click().run(timeout=30)
+
+    assert not app.exception
+    assert any("Scenario workspace imported." in item.value for item in app.toast)
+
+
+def test_export_actions_show_confirmation(monkeypatch, tmp_path):
+    app = _fresh_app(monkeypatch, tmp_path)
+    next(
+        item for item in app.number_input if item.label == "Number of simulations"
+    ).set_value(1).run(timeout=30)
+    next(item for item in app.button if item.label == "▶ Run simulations").click().run(
+        timeout=60,
+    )
+    panel = _expander(app.sidebar, "sidebar_import")
+    next(
+        item for item in panel.download_button
+        if item.label == "Export single-scenario JSON"
+    ).click().run(timeout=30)
+    assert any("Scenario exported as JSON." in item.value for item in app.toast)
+
+    app.button(key="create_scenario_workspace").click().run(timeout=30)
+    panel = _expander(app.sidebar, "sidebar_import")
+    next(
+        item for item in panel.download_button
+        if item.label == "Export A/B workspace JSON"
+    ).click().run(timeout=30)
+    assert not app.exception
+    assert any("A/B scenario workspace exported." in item.value for item in app.toast)
 
 
 def test_older_single_scenario_import_updates_widget_state_before_render(tmp_path):
