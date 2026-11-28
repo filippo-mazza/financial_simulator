@@ -401,6 +401,10 @@ assumptions, not forecasts or financial advice.
 
 ## Verification status
 
+The [aggregated expense JSON contract](docs/aggregated-expenses.md) describes
+the versioned output of the bank statement analysis prompt. Expense JSON
+import is not yet available.
+
 The project has been tested end to end in Codex (5.6 Luna). The current test
 suite includes unit tests, collection edge cases, family scenarios, and a
 subprocess smoke test that runs the documented five-year example with the real
