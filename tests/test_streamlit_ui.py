@@ -747,6 +747,12 @@ assert any(item.value == 'Average detail for month 120' for item in app.subheade
 month.set_value(1).run(timeout=30)
 assert not app.exception
 assert any(item.value == 'Average detail for month 1' for item in app.subheader)
+next(item for item in app.radio if item.label == 'Result view').set_value('Individual run').run(timeout=30)
+assert not app.exception
+next(item for item in app.radio if item.label == 'Result view').set_value('Overview').run(timeout=30)
+assert not app.exception
+assert next(item for item in app.number_input if item.label == 'Simulation month').value == 1
+assert any(item.value == 'Average detail for month 1' for item in app.subheader)
 """
     environment = dict(os.environ)
     environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib")

@@ -5640,12 +5640,18 @@ def main():
             f"({simulation_count} simulations)"
         )
         detail_prefix = "Average"
+    month_state_key = (
+        f"month_selection_{run_id}_{view_mode}_"
+        f"{getattr(selected_trajectory, 'run_number', 0)}"
+    )
     month_selector_key = (
         f"selected_month_{run_id}_{view_mode}_"
         f"{getattr(selected_trajectory, 'run_number', 0)}"
     )
+    if month_state_key not in st.session_state:
+        st.session_state[month_state_key] = len(net_worth)
     if month_selector_key not in st.session_state:
-        st.session_state[month_selector_key] = len(net_worth)
+        st.session_state[month_selector_key] = st.session_state[month_state_key]
 
     selected_outcome = purchase_outcome_from_details(details)
     timing_explanation = purchase_timing_explanation(selected_outcome)
@@ -5753,7 +5759,7 @@ def main():
     month_selection = alt.selection_point(
         name="selected_month", fields=["month"], nearest=True,
         on="click", clear=False,
-        value=[{"month": st.session_state[month_selector_key]}],
+        value=[{"month": st.session_state[month_state_key]}],
     )
     month_data = alt.Data(values=[
         {"month": month} for month in range(1, len(net_worth) + 1)
@@ -5832,12 +5838,18 @@ def main():
             f"month {event['month']}: {event['label']}" for event in events
         ))
     selected = chart_state.selection.get("selected_month", [])
-    selected_month = st.session_state[month_selector_key]
+    selected_month = st.session_state[month_state_key]
     if selected:
         selection = selected[0] if isinstance(selected, list) else selected
-        selected_month = int(round(selection["month"]))
+        chart_month = int(round(selection["month"]))
+        if chart_month != st.session_state.get(
+                f"{month_state_key}_last_chart", None):
+            selected_month = chart_month
+            st.session_state[month_state_key] = chart_month
+            st.session_state[month_selector_key] = chart_month
+        st.session_state[f"{month_state_key}_last_chart"] = chart_month
     selected_month = min(max(selected_month, 1), len(net_worth))
-    st.session_state[month_selector_key] = selected_month
+    st.session_state[month_state_key] = selected_month
     st.caption(
         f"The dashed red line is the {DOWNSIDE_SCENARIO_LABEL}: run "
         f"{downside_trajectory.run_number}, whose cash falls lowest "
@@ -5860,6 +5872,7 @@ def main():
         key=month_selector_key,
         help="Select a month to inspect its details without using the chart.",
     )
+    st.session_state[month_state_key] = selected_month
     selected_events = [
         event for event in events if event["month"] == selected_month
     ]
