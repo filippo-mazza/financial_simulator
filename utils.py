@@ -61,7 +61,8 @@ def _withdraw_for_simulation(bank_account, amount, month, reason):
     except InsufficientFundsException as error:
         raise InsufficientFundsException(
             f"Simulation stopped in month {month + 1}: unable to pay {reason} "
-            f"of \\${amount:,.2f} with \\${balance:,.2f} available."
+            f"of \\${amount:,.2f} with \\${balance:,.2f} available. "
+            "Increase starting cash or income, or reduce this expense or payment."
         ) from error
 
 
@@ -509,15 +510,16 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
                 )
                 outcome = monthly_details["purchase_outcome"]
                 outcome["affordability"] = affordability
+                failure_reasons = []
                 if not cash_is_sufficient:
-                    outcome["failure_reason"] = (
+                    failure_reasons.append(
                         f"Closing cash ${closing_cash:,.0f} is below the required "
-                        f"${property_purchase.minimum_required_cash:,.0f}."
+                        f"${property_purchase.minimum_required_cash:,.0f}. "
+                        "Add cash or lower the minimum-cash or reserve requirement."
                     )
-                elif not affordability_passes:
-                    outcome["failure_reason"] = affordability["reason"]
-                else:
-                    outcome["failure_reason"] = None
+                if not affordability_passes:
+                    failure_reasons.append(affordability["reason"])
+                outcome["failure_reason"] = " ".join(failure_reasons) or None
                 conditions_pass = cash_is_sufficient and affordability_passes
                 if pending_completion_month is None:
                     if conditions_pass:
@@ -764,6 +766,4 @@ def compute_net_worth_over_time(years, bank_account, investments, loans, income_
             random.setstate(random_state)
             
     return monthly_net_worth, loan_repayment_dates, monthly_details
-
-
 

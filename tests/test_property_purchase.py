@@ -122,6 +122,49 @@ def test_invalid_or_unaffordable_purchase_does_not_mutate_components():
         PropertyPurchase(100, 101).validate()
 
 
+def test_purchase_validation_reports_all_invalid_fields_with_corrections():
+    purchase = PropertyPurchase(
+        purchase_price=-100,
+        down_payment_percentage=120,
+        transaction_fees=-50,
+        mortgage_duration_years=0,
+        purchase_month=-1,
+    )
+
+    with pytest.raises(PropertyPurchaseError) as error:
+        purchase.validate()
+
+    message = str(error.value)
+    for detail in (
+        "purchase_price: received -100",
+        "down_payment_percentage: received 120",
+        "transaction_fees: received -50",
+        "mortgage_duration_years: received 0",
+        "purchase_month: received -1",
+        "Enter the property's positive purchase price",
+        "Enter a down-payment percentage from 0 to 100",
+    ):
+        assert detail in message
+
+
+def test_mortgage_affordability_reports_each_blocker_and_next_step():
+    purchase = PropertyPurchase(100_000, 20, mortgage_interest_rate=6)
+    policy = MortgageAffordabilityPolicy(
+        max_debt_service_ratio_pct=20,
+        qualifying_income_names=("Salary",),
+        base_monthly_living_buffer=2_000,
+    )
+    assessment = evaluate_mortgage_affordability(
+        purchase, policy, [IncomeSource("Salary", "salary", 1_000)], [],
+    )
+
+    assert assessment["eligible"] is False
+    assert "above the configured 20.0% limit" in assessment["reason"]
+    assert "reduce debt" in assessment["reason"]
+    assert "below the configured household buffer" in assessment["reason"]
+    assert "lower the household buffer" in assessment["reason"]
+
+
 def test_purchase_configuration_round_trips_and_legacy_config_stays_disabled():
     config = SimulationConfig(
         initial_cash=200_000, investments=[], incomes=[], expenses=[], loans=[],

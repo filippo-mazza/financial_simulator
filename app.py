@@ -306,6 +306,511 @@ class SimulationConfig:
     purchase_assessed_value: float | None = None
 
 
+def _financial_assumption_errors(values):
+    errors = []
+    supported = {
+        "investment_return_means", "investment_return_std_devs",
+        "stock_dividend_rate", "contribution_fee", "income_tax_rates",
+    }
+    for field_name in sorted(set(values) - supported):
+        errors.append(
+            f"assumptions.{field_name}: received {values[field_name]!r}; required "
+            "a supported financial-assumption field. Remove this unrecognized field."
+        )
+
+    def check_number(path, value, minimum, maximum):
+        valid = isinstance(value, (int, float)) and not isinstance(value, bool)
+        if valid:
+            try:
+                valid = math.isfinite(value)
+            except OverflowError:
+                valid = False
+        if valid:
+            valid = value >= minimum and (maximum is None or value <= maximum)
+        if not valid:
+            constraint = (
+                f"a finite number from {minimum} to {maximum}"
+                if maximum is not None
+                else f"a finite number of at least {minimum}"
+            )
+            action = (
+                f"Enter a value between {minimum} and {maximum}."
+                if maximum is not None
+                else f"Enter {minimum} or a greater finite value."
+            )
+            errors.append(
+                f"{path}: received {value!r}; required {constraint}. {action}"
+            )
+
+    for field_name, minimum, maximum in (
+        ("stock_dividend_rate", 0, 1),
+        ("contribution_fee", 0, None),
+    ):
+        if field_name in values:
+            check_number(
+                f"assumptions.{field_name}", values[field_name], minimum, maximum,
+            )
+    for field_name, expected_keys, minimum, maximum in (
+        ("investment_return_means", INVESTMENT_TYPES, -100, 100),
+        ("investment_return_std_devs", INVESTMENT_TYPES, 0, 100),
+        ("income_tax_rates", INCOME_TYPES, 0, 100),
+    ):
+        if field_name not in values:
+            continue
+        mapping = values[field_name]
+        if not isinstance(mapping, dict):
+            errors.append(
+                f"assumptions.{field_name}: received {mapping!r}; required an "
+                "object mapping each supported type to a percentage. Restore "
+                "the complete rate mapping."
+            )
+            continue
+        for key in sorted(set(mapping) - set(expected_keys)):
+            errors.append(
+                f"assumptions.{field_name}.{key}: received {mapping[key]!r}; "
+                "required a supported type. Remove this unrecognized key."
+            )
+        for key in expected_keys:
+            path = f"assumptions.{field_name}.{key}"
+            if key not in mapping:
+                errors.append(
+                    f"{path}: received <missing>; required a value. Add the rate "
+                    "for this type."
+                )
+            else:
+                check_number(path, mapping[key], minimum, maximum)
+    return errors
+
+
+def validate_simulation_config(config: SimulationConfig):
+    """Return all editable scenario errors with field-level corrective guidance."""
+    errors = []
+
+    def add(path, value, constraint, action):
+        errors.append(
+            f"{path}: received {value!r}; required {constraint}. {action}"
+        )
+
+    def finite_number(path, value, minimum=None, maximum=None):
+        valid = (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        )
+        if valid:
+            try:
+                valid = math.isfinite(value)
+            except OverflowError:
+                valid = False
+        if valid and minimum is not None:
+            valid = value >= minimum
+        if valid and maximum is not None:
+            valid = value <= maximum
+        if not valid:
+            if minimum is not None and maximum is not None:
+                constraint = f"a finite number from {minimum} to {maximum}"
+                action = f"Enter a value between {minimum} and {maximum}."
+            elif minimum is not None:
+                constraint = f"a finite number of at least {minimum}"
+                action = f"Enter {minimum} or a greater finite value."
+            else:
+                constraint = "a finite number"
+                action = "Enter a finite numeric value."
+            add(path, value, constraint, action)
+
+    def integer(path, value, minimum=None):
+        if (not isinstance(value, int) or isinstance(value, bool)
+                or (minimum is not None and value < minimum)):
+            if path == "seed":
+                add(
+                    path, value, "an integer (the simulation seed must be an integer)",
+                    "Enter a whole-number simulation seed.",
+                )
+                return
+            constraint = "an integer" if minimum is None else f"an integer of at least {minimum}"
+            action = "Enter a whole number." if minimum is None else (
+                f"Enter a whole number of at least {minimum}."
+            )
+            add(path, value, constraint, action)
+
+    def boolean(path, value):
+        if not isinstance(value, bool):
+            add(path, value, "a boolean value", "Use true or false.")
+
+    if not isinstance(config.assumptions, FinancialAssumptions):
+        add(
+            "assumptions", config.assumptions,
+            "a FinancialAssumptions instance",
+            "Restore valid financial assumptions before running the scenario.",
+        )
+    else:
+        errors.extend(_financial_assumption_errors({
+            field_name: getattr(config.assumptions, field_name, None)
+            for field_name in (
+                "investment_return_means", "investment_return_std_devs",
+                "stock_dividend_rate", "contribution_fee", "income_tax_rates",
+            )
+        }))
+
+    def item_path(collection, index, item):
+        name = getattr(item, "name", None)
+        suffix = f" ({name!r})" if name is not None else ""
+        return f"{collection}[{index}]{suffix}"
+
+    def named_items(collection, items):
+        names = set()
+        for index, item in enumerate(items):
+            path = item_path(collection, index, item)
+            name = getattr(item, "name", None)
+            if not isinstance(name, str) or not name.strip():
+                add(f"{path}.name", name, "a non-empty name", "Enter a name for this item.")
+            elif name in names:
+                add(
+                    f"{path}.name", name, "a name unique within this collection",
+                    "Rename this item so each configured item has a unique name.",
+                )
+            if isinstance(name, str):
+                names.add(name)
+        return names
+
+    integer("years", config.years, 1)
+    integer("seed", config.seed)
+    boolean("fixed_rate", config.fixed_rate)
+    finite_number("initial_cash", config.initial_cash, 0)
+    finite_number("yearly_fee", config.yearly_fee, 0)
+
+    income_specs = config.incomes
+    if income_specs is None:
+        income_specs = [IncomeConfig(
+            "Primary income", config.income_type, config.monthly_income,
+            config.tax_rate, config.bonus_pct,
+        )]
+    income_names = named_items("incomes", income_specs)
+    for index, item in enumerate(income_specs):
+        path = item_path("incomes", index, item)
+        if item.income_type not in INCOME_TYPES:
+            add(
+                f"{path}.income_type", item.income_type,
+                f"one of {', '.join(INCOME_TYPES)}",
+                "Choose a supported income type.",
+            )
+        finite_number(f"{path}.monthly_amount", item.monthly_amount, 0)
+        finite_number(f"{path}.tax_rate", item.tax_rate, 0, 100)
+        finite_number(f"{path}.bonus_pct", item.bonus_pct, 0, 100)
+
+    investment_specs = config.investments
+    if investment_specs is None:
+        investment_specs = [InvestmentConfig(
+            "Portfolio", config.investment_type, config.investment_initial,
+            0 if config.investment_type == "real_estate"
+            else config.investment_contribution,
+            config.investment_contribution
+            if config.investment_type == "real_estate" else 0,
+        )]
+    try:
+        profile_lookup = _jurisdiction_lookup(config)
+    except (TypeError, ValueError):
+        profile_lookup = {}
+        add(
+            "jurisdiction_profiles", config.jurisdiction_profiles,
+            "a list of valid profiles with unique names",
+            "Correct or remove invalid profiles.",
+        )
+    named_items("investments", investment_specs)
+    linked_loan_names = []
+    linked_rental_names = []
+    for index, item in enumerate(investment_specs):
+        path = item_path("investments", index, item)
+        if item.investment_type not in INVESTMENT_TYPES:
+            add(
+                f"{path}.investment_type", item.investment_type,
+                f"one of {', '.join(INVESTMENT_TYPES)}",
+                "Choose a supported investment type.",
+            )
+        if (item.jurisdiction_profile_name is not None
+                and (not isinstance(item.jurisdiction_profile_name, str)
+                     or item.jurisdiction_profile_name not in profile_lookup)):
+            add(
+                f"{path}.jurisdiction_profile_name",
+                item.jurisdiction_profile_name,
+                "null or the name of a configured property jurisdiction profile",
+                "Unknown property jurisdiction profile. Select an existing profile "
+                "or clear this setting.",
+            )
+        for field_name in (
+            "initial_amount", "monthly_contribution", "monthly_expenses",
+            "yearly_tax", "auto_invest_min_cash",
+        ):
+            finite_number(f"{path}.{field_name}", getattr(item, field_name), 0)
+        boolean(f"{path}.auto_invest_enabled", item.auto_invest_enabled)
+        finite_number(f"{path}.auto_invest_percentage",
+                      item.auto_invest_percentage, 0, 100)
+        if item.auto_invest_percentage == 0:
+            add(
+                f"{path}.auto_invest_percentage", item.auto_invest_percentage,
+                "greater than 0 and at most 100",
+                "Enter a percentage greater than 0 and no greater than 100.",
+            )
+        integer(f"{path}.auto_invest_max_per_year",
+                item.auto_invest_max_per_year, 1)
+        for field_name in ("ownership_percentage", "liability_share_percentage"):
+            value = getattr(item, field_name)
+            finite_number(f"{path}.{field_name}", value, 0, 100)
+            if value == 0:
+                add(
+                    f"{path}.{field_name}", value,
+                    "above 0 and at most 100",
+                    "Enter a percentage greater than 0 and no greater than 100.",
+                )
+        if (item.auto_invest_enabled
+                and (not isinstance(item.investment_type, str)
+                     or item.investment_type not in AUTO_INVEST_TYPES)):
+            add(
+                f"{path}.auto_invest_enabled", item.auto_invest_enabled,
+                "disabled unless this is a stock or safe investment",
+                "Disable automatic contributions or change the investment type.",
+            )
+        if item.investment_type != "real_estate" and (
+                item.ownership_percentage != 100
+                or item.liability_share_percentage != 100
+                or item.linked_loan_name is not None
+                or item.rental_income_name is not None
+                or item.jurisdiction_profile_name is not None):
+            add(
+                f"{path}.investment_type", item.investment_type,
+                "real_estate when property ownership, links, or jurisdiction "
+                "profiles are configured",
+                "Change this to real_estate or remove the property-only settings.",
+            )
+        if item.linked_loan_name is not None:
+            linked_loan_names.append((path, item.linked_loan_name))
+        if item.rental_income_name is not None:
+            linked_rental_names.append((path, item.rental_income_name))
+
+    loan_specs = config.loans
+    if loan_specs is None:
+        loan_specs = [LoanConfig(
+            "Loan", config.loan_amount, config.loan_rate, config.loan_duration,
+            config.fixed_rate, config.loan_already_paid,
+        )]
+    named_items("loans", loan_specs)
+    for index, item in enumerate(loan_specs):
+        path = item_path("loans", index, item)
+        finite_number(f"{path}.amount", item.amount, 0)
+        finite_number(f"{path}.interest_rate", item.interest_rate, 0)
+        integer(f"{path}.duration_years", item.duration_years, 1)
+        finite_number(f"{path}.already_paid", item.already_paid, 0)
+        boolean(f"{path}.fixed_rate", item.fixed_rate)
+        if (isinstance(item.amount, (int, float))
+                and not isinstance(item.amount, bool)
+                and isinstance(item.already_paid, (int, float))
+                and not isinstance(item.already_paid, bool)
+                and item.already_paid > item.amount):
+            add(
+                f"{path}.already_paid", item.already_paid,
+                f"no greater than amount ({item.amount!r})",
+                "Lower the amount already paid or increase the loan amount.",
+            )
+    for path, loan_name in linked_loan_names:
+        matches = sum(item.name == loan_name for item in loan_specs)
+        if matches != 1:
+            add(
+                f"{path}.linked_loan_name", loan_name,
+                "the name of exactly one configured loan",
+                "Select an existing unique loan name.",
+            )
+    for path, income_name in linked_rental_names:
+        matches = [
+            item for item in income_specs
+            if item.name == income_name and item.income_type == "rent"
+        ]
+        if len(matches) != 1:
+            add(
+                f"{path}.rental_income_name", income_name,
+                "the name of exactly one rent income source from configured incomes",
+                "Select an existing rent income source with a unique name.",
+            )
+    for collection, links in (
+        ("linked_loan_name", linked_loan_names),
+        ("rental_income_name", linked_rental_names),
+    ):
+        seen = set()
+        for path, linked_name in links:
+            if isinstance(linked_name, str) and linked_name in seen:
+                add(
+                    f"{path}.{collection}", linked_name,
+                    "a link used by only one property",
+                    "Remove this duplicate link or select a different item.",
+                )
+            if isinstance(linked_name, str):
+                seen.add(linked_name)
+
+    expense_specs = config.expenses
+    if expense_specs is None:
+        expense_specs = [ExpenseConfig(
+            "Living expenses", config.expense_type, config.monthly_expense,
+        )]
+    all_expenses = [*expense_specs, *(config.additional_expenses or [])]
+    named_items("expenses", all_expenses)
+    for index, item in enumerate(all_expenses):
+        path = item_path("expenses", index, item)
+        if (not isinstance(item.expense_type, str)
+                or item.expense_type not in Expense(
+                    "validation", "housing", 0,
+                ).expense_growth):
+            add(
+                f"{path}.expense_type", item.expense_type,
+                "a supported expense category",
+                "Choose a category listed in the expense type selector.",
+            )
+        finite_number(f"{path}.monthly_amount", item.monthly_amount, 0)
+
+    for index, item in enumerate(config.dependents):
+        path = item_path("dependents", index, item)
+        if not isinstance(item.name, str) or not item.name.strip():
+            add(f"{path}.name", item.name, "a non-empty name", "Enter a name for this dependent.")
+        finite_number(f"{path}.monthly_cost", item.monthly_cost, 0)
+        integer(f"{path}.age", item.age, 0)
+        if item.school_start_age is not None:
+            integer(f"{path}.school_start_age", item.school_start_age, 0)
+        finite_number(f"{path}.school_monthly_cost", item.school_monthly_cost, 0)
+        if item.childcare_monthly_cost is not None:
+            finite_number(f"{path}.childcare_monthly_cost",
+                          item.childcare_monthly_cost, 0)
+
+    for index, item in enumerate(config.curveballs):
+        path = item_path("curveballs", index, item)
+        if not isinstance(item.name, str) or not item.name.strip():
+            add(f"{path}.name", item.name, "a non-empty name", "Enter a name for this event.")
+        boolean(f"{path}.enabled", item.enabled)
+        finite_number(f"{path}.probability", item.probability, 0, 1)
+        integer(f"{path}.start_month_min", item.start_month_min, 1)
+        integer(f"{path}.start_month_max", item.start_month_max, 1)
+        integer(f"{path}.duration_months", item.duration_months, 1)
+        integer(f"{path}.recovery_months", item.recovery_months, 0)
+        finite_number(f"{path}.income_reduction_pct",
+                      item.income_reduction_pct, 0, 100)
+        if (isinstance(item.start_month_min, int)
+                and not isinstance(item.start_month_min, bool)
+                and isinstance(item.start_month_max, int)
+                and not isinstance(item.start_month_max, bool)
+                and item.start_month_min > item.start_month_max):
+            add(
+                f"{path}.start_month_min", item.start_month_min,
+                f"no greater than start_month_max ({item.start_month_max!r})",
+                "Lower the earliest month or raise the latest month.",
+            )
+        if item.event_kind not in ("income_reduction", "expense_shock"):
+            add(
+                f"{path}.event_kind", item.event_kind,
+                "'income_reduction' or 'expense_shock'",
+                "Choose a supported event type.",
+            )
+        if item.event_kind == "income_reduction" and item.affected_income_name is not None:
+            if (not isinstance(item.affected_income_name, str)
+                    or item.affected_income_name not in income_names):
+                add(
+                    f"{path}.affected_income_name", item.affected_income_name,
+                    "the name of a configured income source",
+                    "Select an existing income source or clear this field.",
+                )
+        if item.event_kind == "expense_shock":
+            if (not isinstance(item.expense_type, str)
+                    or item.expense_type not in Expense(
+                        "validation", "housing", 0,
+                    ).expense_growth):
+                add(
+                    f"{path}.expense_type", item.expense_type,
+                    "a supported expense category",
+                    "Choose a category listed in the expense type selector.",
+                )
+            finite_number(f"{path}.expense_amount", item.expense_amount, 0)
+            if item.expense_amount_max is not None:
+                finite_number(f"{path}.expense_amount_max",
+                              item.expense_amount_max, 0)
+                if (isinstance(item.expense_amount_max, (int, float))
+                        and not isinstance(item.expense_amount_max, bool)
+                        and isinstance(item.expense_amount, (int, float))
+                        and not isinstance(item.expense_amount, bool)
+                        and item.expense_amount_max < item.expense_amount):
+                    add(
+                        f"{path}.expense_amount_max", item.expense_amount_max,
+                        f"at least expense_amount ({item.expense_amount!r})",
+                        "Raise the maximum amount or lower the minimum amount.",
+                    )
+
+    if config.property_purchase is not None and config.selected_rent_expense is not None:
+        rent_matches = [
+            item for item in all_expenses
+            if item.name == config.selected_rent_expense
+            and item.expense_type == "housing"
+        ]
+        if len(rent_matches) != 1:
+            add(
+                "selected_rent_expense", config.selected_rent_expense,
+                "the name of exactly one configured housing expense",
+                "Select an existing unique housing expense or clear this setting.",
+            )
+
+    purchase_profile_name = config.property_purchase_jurisdiction_profile
+    if (purchase_profile_name is not None
+            and (not isinstance(purchase_profile_name, str)
+                 or purchase_profile_name not in profile_lookup)):
+        add(
+            "property_purchase_jurisdiction_profile", purchase_profile_name,
+            "null or the name of a configured property jurisdiction profile",
+            "Unknown property jurisdiction profile. Select an existing profile "
+            "or clear this setting.",
+        )
+    elif purchase_profile_name is not None and config.property_purchase is None:
+        add(
+            "property_purchase_jurisdiction_profile", purchase_profile_name,
+            "null unless a property purchase is configured",
+            "Configure a property purchase or clear this profile selection.",
+        )
+    for field_name in ("purchase_cadastral_income", "purchase_assessed_value"):
+        value = getattr(config, field_name)
+        if value is not None:
+            finite_number(field_name, value, 0)
+
+    purchase = config.property_purchase
+    if purchase is not None:
+        try:
+            if isinstance(purchase, AutomaticPurchasePolicy):
+                purchase.validate("property_purchase")
+                boolean(
+                    "property_purchase.purchase.fixed_rate",
+                    purchase.purchase.fixed_rate,
+                )
+            elif isinstance(purchase, PropertyPurchase):
+                boolean("property_purchase.fixed_rate", purchase.fixed_rate)
+                purchase.validate(
+                    investments=investment_specs,
+                    loans=loan_specs,
+                    field_prefix="property_purchase",
+                )
+                if (isinstance(config.years, int) and not isinstance(config.years, bool)
+                        and isinstance(purchase.purchase_month, int)
+                        and not isinstance(purchase.purchase_month, bool)
+                        and purchase.purchase_month >= config.years * 12):
+                    add(
+                        "property_purchase.purchase_month", purchase.purchase_month,
+                        f"less than the simulation length ({config.years * 12} months)",
+                        "Choose a purchase month within the simulation horizon.",
+                    )
+            else:
+                add(
+                    "property_purchase", purchase,
+                    "a PropertyPurchase or AutomaticPurchasePolicy",
+                    "Choose a supported purchase policy or disable the purchase.",
+                )
+        except (ValueError, TypeError) as error:
+            errors.extend(str(error).splitlines()[1:] or [str(error)])
+
+    if errors:
+        return errors
+    return []
+
+
 @dataclass(frozen=True)
 class ScenarioSuggestion:
     """A deterministic, opt-in Alternative B derived from one current scenario."""
@@ -1601,11 +2106,11 @@ def scenario_validation_errors(config):
 
 def build_components(config: SimulationConfig):
     """Create fresh model objects from UI/configuration values."""
-    errors = scenario_validation_errors(config)
-    if errors:
+    validation_errors = validate_simulation_config(config)
+    if validation_errors:
         raise ValueError(
-            "Scenario validation failed. Correct the following field(s):\n"
-            + "\n".join(f"- {error}" for error in errors)
+            "Please correct the scenario before running it:\n- "
+            + "\n- ".join(validation_errors)
         )
     profile_lookup = _jurisdiction_lookup(config)
     if config.incomes is None:
@@ -2522,24 +3027,69 @@ def read_scenario_workspace_export(data):
             data = data.decode("utf-8")
         document = json.loads(data)
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as error:
-        raise ValueError("The selected workspace is not valid UTF-8 JSON.") from error
+        raise ValueError(
+            "The selected workspace is not valid UTF-8 JSON. Upload a valid "
+            "UTF-8-encoded scenario workspace."
+        ) from error
     if (not isinstance(document, dict)
             or document.get("format") != "financial-simulator-scenario-workspace"):
-        raise ValueError("This is not a Financial Simulator scenario workspace.")
+        raise ValueError(
+            f"This is not a Financial Simulator scenario workspace: format "
+            f"received {document.get('format') if isinstance(document, dict) else document!r}; "
+            "required 'financial-simulator-scenario-workspace'. Upload a "
+            "supported workspace export."
+        )
     if document.get("schema_version") != SCENARIO_WORKSPACE_EXPORT_VERSION:
-        raise ValueError("This scenario workspace version is not supported.")
+        raise ValueError(
+            f"Workspace schema_version received {document.get('schema_version')!r}; "
+            f"required {SCENARIO_WORKSPACE_EXPORT_VERSION}. Export the workspace "
+            "with a supported app version."
+        )
     variants = document.get("variants")
     if not isinstance(variants, list) or len(variants) not in (2, 3):
-        raise ValueError("A scenario workspace must contain two or three variants.")
+        raise ValueError(
+            f"variants: received {variants!r}; required a list of exactly two or "
+            "three scenario objects. Export a complete A/B or A/B/C workspace."
+        )
     restored = []
-    for item in variants:
-        if not isinstance(item, dict) or not isinstance(item.get("scenario"), dict):
-            raise ValueError("A scenario workspace variant is invalid.")
+    variant_errors = []
+    for index, item in enumerate(variants):
+        path = f"variants[{index}]"
+        if not isinstance(item, dict):
+            variant_errors.append(
+                f"{path}: received {item!r}; required an object containing id, "
+                "name, and scenario. Restore a valid workspace variant."
+            )
+            continue
+        if not isinstance(item.get("scenario"), dict):
+            variant_errors.append(
+                f"{path}.scenario: received {item.get('scenario')!r}; required a "
+                "scenario object. Restore the variant's exported scenario."
+            )
+            continue
+        invalid_identity = False
+        for field_name in ("id", "name"):
+            field_value = item.get(field_name)
+            if not isinstance(field_value, str) or not field_value.strip():
+                variant_errors.append(
+                    f"{path}.{field_name}: received {field_value!r}; required a "
+                    f"non-empty {field_name}. Enter a name and ID for this variant."
+                )
+                invalid_identity = True
+        if invalid_identity:
+            continue
         try:
             config = read_simulation_export(json.dumps(item["scenario"]))
             restored.append(ScenarioVariant(item.get("id"), item.get("name"), config))
         except (TypeError, ValueError) as error:
-            raise ValueError(f"A scenario workspace variant is invalid: {error}") from error
+            variant_errors.append(
+                f"{path} ({item.get('name')!r}): {error}"
+            )
+    if variant_errors:
+        raise ValueError(
+            "The scenario workspace has actionable validation errors:\n- "
+            + "\n- ".join(variant_errors)
+        )
     ids = {item.id for item in restored}
     if (not {BASELINE_ID, ALTERNATIVE_ID}.issubset(ids)
             or ids - {BASELINE_ID, ALTERNATIVE_ID, TERTIARY_ID}):
@@ -2560,18 +3110,85 @@ def read_simulation_export(data, include_warnings=False):
             data = data.decode("utf-8")
         document = json.loads(data)
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as error:
-        raise ValueError("The selected file is not valid UTF-8 JSON.") from error
+        raise ValueError(
+            "The selected file is not valid UTF-8 JSON. Upload a valid "
+            "UTF-8-encoded Financial Simulator export."
+        ) from error
 
     if not isinstance(document, dict) or document.get("format") != "financial-simulator-export":
-        raise ValueError("This is not a Financial Simulator export.")
+        received_format = document.get("format") if isinstance(document, dict) else document
+        raise ValueError(
+            f"This is not a Financial Simulator export: format received "
+            f"{received_format!r}; required 'financial-simulator-export'. Upload "
+            "a supported simulator export."
+        )
     if document.get("schema_version") != 1:
-        raise ValueError("This export version is not supported.")
+        raise ValueError(
+            f"schema_version: received {document.get('schema_version')!r}; "
+            "required 1; this export version is not supported. Export the "
+            "scenario using a supported app version."
+        )
     parameters = document.get("parameters")
     if not isinstance(parameters, dict):
-        raise ValueError("The export does not contain simulation parameters.")
+        raise ValueError(
+            f"parameters: received {parameters!r}; required an object containing "
+            "scenario settings. Upload a complete simulator export."
+        )
 
     parameters = dict(parameters)
     import_warnings = []
+    import_errors = []
+
+    def validate_object_fields(config_type, values, path):
+        if not isinstance(values, dict):
+            import_errors.append(
+                f"{path}: received {values!r}; required a JSON object. "
+                "Restore this item's object fields."
+            )
+            return False
+        expected_fields = inspect.signature(config_type).parameters
+        unknown_fields = set(values) - set(expected_fields)
+        required_fields = {
+            field_name for field_name, parameter in expected_fields.items()
+            if parameter.default is inspect.Parameter.empty
+        }
+        missing_fields = required_fields - set(values)
+        for field_name in sorted(unknown_fields):
+            import_errors.append(
+                f"{path}.{field_name}: received {values[field_name]!r}; required "
+                "a supported field. Remove this unrecognized field."
+            )
+        for field_name in sorted(missing_fields):
+            import_errors.append(
+                f"{path}.{field_name}: received <missing>; required a value. "
+                "Add this field to the exported object."
+            )
+        return not missing_fields
+
+    def construct_object(config_type, values, path, fill_missing=False):
+        complete = validate_object_fields(config_type, values, path)
+        if not isinstance(values, dict):
+            return None
+        if not complete and not fill_missing:
+            return None
+        try:
+            expected_fields = inspect.signature(config_type).parameters
+            supported_values = {
+                name: value for name, value in values.items()
+                if name in expected_fields
+            }
+            if fill_missing:
+                for field_name, parameter in expected_fields.items():
+                    if (field_name not in supported_values
+                            and parameter.default is inspect.Parameter.empty):
+                        supported_values[field_name] = None
+            return config_type(**supported_values)
+        except (TypeError, ValueError) as error:
+            import_errors.append(
+                f"{path}: received {values!r}; the object's fields are invalid "
+                f"({error}). Correct the field values and constraints."
+            )
+            return None
     features = document.get("features")
     if not isinstance(features, dict):
         features = {}
@@ -2586,33 +3203,74 @@ def read_simulation_export(data, include_warnings=False):
         items = parameters.get(name)
         if items is None:
             return None
-        if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
-            raise ValueError(f"The exported {name} must be a list.")
-        try:
-            rebuilt = []
-            for item in items:
-                values = dict(item)
-                if (name == "investments"
-                        and values.get("investment_type") == "real_estate"
-                        and "monthly_expenses" not in values):
-                    values["monthly_expenses"] = values.get("monthly_contribution", 0)
-                    values["monthly_contribution"] = 0
-                if name == "investments":
-                    values.setdefault("auto_invest_enabled", False)
-                    values.setdefault("auto_invest_min_cash", 10000.0)
-                    values.setdefault("auto_invest_percentage", 10.0)
-                    values.setdefault("auto_invest_max_per_year", 3)
-                    values.setdefault("ownership_percentage", 100.0)
-                    values.setdefault("linked_loan_name", None)
-                    values.setdefault("liability_share_percentage", 100.0)
-                    values.setdefault("rental_income_name", None)
-                    values.setdefault("jurisdiction_profile_name", None)
-                    if not auto_invest_feature_supported:
-                        values["auto_invest_enabled"] = False
-                rebuilt.append(config_type(**values))
-            return rebuilt
-        except TypeError as error:
-            raise ValueError(f"The exported {name} are invalid: {error}") from error
+        if not isinstance(items, list):
+            import_errors.append(
+                f"{name}: received {items!r}; required a JSON array. "
+                "Restore this field to a list of configured items."
+            )
+            return None
+        rebuilt = []
+        expected_fields = inspect.signature(config_type).parameters
+        required_fields = {
+            field_name for field_name, parameter in expected_fields.items()
+            if parameter.default is inspect.Parameter.empty
+        }
+        for index, item in enumerate(items):
+            path = f"{name}[{index}]"
+            if not isinstance(item, dict):
+                import_errors.append(
+                    f"{path}: received {item!r}; required a JSON object. "
+                    "Replace this entry with an object containing the item's fields."
+                )
+                continue
+            values = dict(item)
+            if (name == "investments"
+                    and values.get("investment_type") == "real_estate"
+                    and "monthly_expenses" not in values):
+                values["monthly_expenses"] = values.get("monthly_contribution", 0)
+                values["monthly_contribution"] = 0
+            if name == "investments":
+                values.setdefault("auto_invest_enabled", False)
+                values.setdefault("auto_invest_min_cash", 10000.0)
+                values.setdefault("auto_invest_percentage", 10.0)
+                values.setdefault("auto_invest_max_per_year", 3)
+                values.setdefault("ownership_percentage", 100.0)
+                values.setdefault("linked_loan_name", None)
+                values.setdefault("liability_share_percentage", 100.0)
+                values.setdefault("rental_income_name", None)
+                values.setdefault("jurisdiction_profile_name", None)
+                if not auto_invest_feature_supported:
+                    values["auto_invest_enabled"] = False
+            unknown_fields = set(values) - set(expected_fields)
+            missing_fields = required_fields - set(values)
+            for field_name in sorted(unknown_fields):
+                import_errors.append(
+                    f"{path}.{field_name}: received {values[field_name]!r}; "
+                    "required a supported field for this item. Remove this "
+                    "unrecognized field from the export."
+                )
+            for field_name in sorted(missing_fields):
+                import_errors.append(
+                    f"{path}.{field_name}: received <missing>; required a value. "
+                    "Add this field to the exported item."
+                )
+            supported_values = {
+                field_name: value for field_name, value in values.items()
+                if field_name in expected_fields
+            }
+            for field_name in missing_fields:
+                supported_values[field_name] = None
+            try:
+                rebuilt.append(config_type(**supported_values))
+            except (TypeError, ValueError) as error:
+                item_name = values.get("name")
+                item_label = f" ({item_name!r})" if item_name is not None else ""
+                import_errors.append(
+                    f"{path}{item_label}: received {values!r}; the configured "
+                    f"fields are invalid ({error}). Correct the field values "
+                    "and constraints shown above."
+                )
+        return rebuilt
 
     parameters["investments"] = rebuild_collection("investments", InvestmentConfig)
     parameters["incomes"] = rebuild_collection("incomes", IncomeConfig)
@@ -2624,115 +3282,271 @@ def read_simulation_export(data, include_warnings=False):
     parameters["dependents"] = rebuild_collection("dependents", DependentConfig) or []
     parameters["curveballs"] = rebuild_collection("curveballs", CurveballConfig) or []
     profile_values = parameters.get("jurisdiction_profiles", [])
-    if (not isinstance(profile_values, list)
-            or not all(isinstance(item, dict) for item in profile_values)):
-        raise ValueError("The exported jurisdiction profiles must be a list.")
+    rebuilt_profiles = []
+    if not isinstance(profile_values, list):
+        import_errors.append(
+            f"jurisdiction_profiles: received {profile_values!r}; required a JSON "
+            "array. Restore this field to a list of profile objects."
+        )
+    else:
+        for index, item in enumerate(profile_values):
+            if not isinstance(item, dict):
+                import_errors.append(
+                    f"jurisdiction_profiles[{index}]: received {item!r}; required "
+                    "a JSON object. Replace this entry with a property profile."
+                )
+                continue
+            try:
+                rebuilt_profiles.append(PropertyJurisdictionProfile(**item))
+            except (TypeError, ValueError) as error:
+                import_errors.append(
+                    f"jurisdiction_profiles[{index}]: received {item!r}; the "
+                    f"profile fields are invalid ({error}). Correct the field "
+                    "values and constraints shown in this message."
+                )
+    parameters["jurisdiction_profiles"] = rebuilt_profiles
     try:
-        parameters["jurisdiction_profiles"] = [
-            PropertyJurisdictionProfile(**item) for item in profile_values
-        ]
-        profiles_by_name(parameters["jurisdiction_profiles"])
-    except (TypeError, ValueError) as error:
-        raise ValueError(
-            f"The exported jurisdiction profiles are invalid: {error}"
-        ) from error
+        profiles_by_name(rebuilt_profiles)
+    except ValueError as error:
+        import_errors.append(
+            f"jurisdiction_profiles: received {[p.name for p in rebuilt_profiles]!r}; "
+            f"required unique profile names ({error}). Rename duplicate profiles."
+        )
     parameters.setdefault("property_purchase_jurisdiction_profile", None)
     parameters.setdefault("purchase_cadastral_income", None)
     parameters.setdefault("purchase_assessed_value", None)
     purchase = parameters.get("property_purchase")
     if purchase is not None:
         if not isinstance(purchase, dict):
-            raise ValueError("The exported property purchase must be an object.")
-        try:
-            if "purchase" in purchase:
-                template = purchase["purchase"]
-                if not isinstance(template, dict):
-                    raise ValueError("automatic purchase template must be an object")
-                affordability = purchase.get("mortgage_affordability")
-                if affordability is not None:
-                    if not isinstance(affordability, dict):
-                        raise ValueError(
-                            "mortgage affordability policy must be an object"
-                        )
-                    affordability = dict(affordability)
-                    # A short-lived pre-merge format exposed bonus inclusion.
-                    # Ignore it safely: bonuses are never qualifying income.
-                    affordability.pop("bonus_income_inclusion_pct", None)
-                    qualifying_names = affordability.get(
-                        "qualifying_income_names", ()
+            import_errors.append(
+                f"property_purchase: received {purchase!r}; required a JSON object. "
+                "Restore this field to a purchase object or null to disable it."
+            )
+            parameters["property_purchase"] = None
+        elif "purchase" in purchase:
+            template = construct_object(
+                PropertyPurchase, purchase.get("purchase"),
+                "property_purchase.purchase",
+                fill_missing=True,
+            )
+            affordability_values = purchase.get("mortgage_affordability")
+            affordability = None
+            if affordability_values is not None:
+                if isinstance(affordability_values, dict):
+                    affordability_values = dict(affordability_values)
+                    # Bonuses are never qualifying income; ignore this retired field.
+                    affordability_values.pop("bonus_income_inclusion_pct", None)
+                    qualifying_names = affordability_values.get(
+                        "qualifying_income_names", (),
                     )
-                    if not isinstance(qualifying_names, (list, tuple)):
-                        raise ValueError(
-                            "qualifying income names must be a list"
+                    if isinstance(qualifying_names, (list, tuple)):
+                        affordability_values["qualifying_income_names"] = tuple(
+                            qualifying_names
                         )
-                    affordability["qualifying_income_names"] = tuple(qualifying_names)
-                    affordability = MortgageAffordabilityPolicy(**affordability)
-                completion_delay = purchase.get("completion_delay")
-                if completion_delay is not None:
-                    if not isinstance(completion_delay, dict):
-                        raise ValueError(
-                            "purchase completion delay policy must be an object"
-                        )
-                    completion_delay = PurchaseCompletionDelayPolicy(
-                        **completion_delay
-                    )
-                parameters["property_purchase"] = AutomaticPurchasePolicy(
-                    PropertyPurchase(**template),
-                    purchase["minimum_available_cash"],
-                    purchase["minimum_cash_reserve"],
-                    affordability,
-                    completion_delay,
+                affordability = construct_object(
+                    MortgageAffordabilityPolicy, affordability_values,
+                    "property_purchase.mortgage_affordability",
+                )
+            completion_values = purchase.get("completion_delay")
+            completion_delay = (
+                construct_object(
+                    PurchaseCompletionDelayPolicy, completion_values,
+                    "property_purchase.completion_delay",
+                )
+                if completion_values is not None else None
+            )
+            outer_values = dict(purchase)
+            nested_fields_valid = (
+                template is not None
+                and (affordability_values is None or affordability is not None)
+                and (completion_values is None or completion_delay is not None)
+            )
+            automatic_policy = None
+            if nested_fields_valid:
+                automatic_policy = construct_object(
+                    AutomaticPurchasePolicy,
+                    {
+                        **outer_values,
+                        "purchase": template,
+                        "mortgage_affordability": affordability,
+                        "completion_delay": completion_delay,
+                    },
+                    "property_purchase",
                 )
             else:
-                parameters["property_purchase"] = PropertyPurchase(**purchase)
-        except (TypeError, ValueError) as error:
-            raise ValueError(f"The exported property purchase is invalid: {error}") from error
+                validate_object_fields(
+                    AutomaticPurchasePolicy, outer_values,
+                    "property_purchase",
+                )
+            if automatic_policy is None:
+                for field_name in (
+                    "minimum_available_cash", "minimum_cash_reserve",
+                ):
+                    if field_name not in outer_values:
+                        continue
+                    value = outer_values[field_name]
+                    valid = (
+                        isinstance(value, (int, float))
+                        and not isinstance(value, bool)
+                    )
+                    if valid:
+                        try:
+                            valid = math.isfinite(value) and value >= 0
+                        except OverflowError:
+                            valid = False
+                    if not valid:
+                        import_errors.append(
+                            f"property_purchase.{field_name}: received "
+                            f"{value!r}; required a finite amount of at least 0. "
+                            "Enter 0 or a positive cash amount."
+                        )
+                for nested_object, path, validator in (
+                    (
+                        template, "property_purchase.purchase",
+                        lambda value: value.validate(
+                            field_prefix="property_purchase.purchase",
+                        ),
+                    ),
+                    (
+                        affordability,
+                        "property_purchase.mortgage_affordability",
+                        lambda value: value.validate(
+                            field_prefix="property_purchase.mortgage_affordability",
+                        ),
+                    ),
+                    (
+                        completion_delay,
+                        "property_purchase.completion_delay",
+                        lambda value: value.validate(
+                            field_prefix="property_purchase.completion_delay",
+                        ),
+                    ),
+                ):
+                    if nested_object is None:
+                        continue
+                    try:
+                        validator(nested_object)
+                    except (TypeError, ValueError) as error:
+                        import_errors.extend(
+                            str(error).splitlines()[1:] or [
+                                f"{path}: {error}"
+                            ]
+                        )
+                automatic_policy = None
+            parameters["property_purchase"] = automatic_policy
+        else:
+            parameters["property_purchase"] = construct_object(
+                PropertyPurchase, purchase, "property_purchase",
+                fill_missing=True,
+            )
     assumptions = parameters.get("assumptions")
     if assumptions is None:
         parameters["assumptions"] = FinancialAssumptions()
     elif not isinstance(assumptions, dict):
-        raise ValueError("The exported financial assumptions must be an object.")
+        import_errors.append(
+            f"assumptions: received {assumptions!r}; required an object containing "
+            "financial assumptions. Restore the exported assumptions object."
+        )
+        parameters["assumptions"] = FinancialAssumptions()
     else:
-        try:
-            parameters["assumptions"] = FinancialAssumptions(**assumptions)
-        except (TypeError, ValueError) as error:
-            raise ValueError(f"The exported financial assumptions are invalid: {error}") from error
+        assumption_errors = _financial_assumption_errors(assumptions)
+        import_errors.extend(assumption_errors)
+        if not assumption_errors:
+            try:
+                parameters["assumptions"] = FinancialAssumptions(**assumptions)
+            except (TypeError, ValueError, OverflowError) as error:
+                import_errors.append(
+                    f"assumptions: received {assumptions!r}; financial assumption "
+                    f"fields are invalid ({error}). Correct the named rates or values."
+                )
+                parameters["assumptions"] = FinancialAssumptions()
+        else:
+            parameters["assumptions"] = FinancialAssumptions()
+    expected_parameters = inspect.signature(SimulationConfig).parameters
+    unknown_parameters = set(parameters) - set(expected_parameters)
+    for field_name in sorted(unknown_parameters):
+        import_errors.append(
+            f"{field_name}: received {parameters[field_name]!r}; required a "
+            "supported scenario field. Remove this unrecognized parameter."
+        )
+        del parameters[field_name]
     try:
         config = SimulationConfig(**parameters)
     except TypeError as error:
-        raise ValueError(f"The exported parameters are invalid: {error}") from error
-    import_errors = scenario_validation_errors(config)
+        import_errors.append(
+            f"parameters: received {parameters!r}; the scenario fields are "
+            f"invalid ({error}). Correct the named field and constraint."
+        )
+        config = SimulationConfig()
+    import_errors.extend(validate_simulation_config(config))
     if import_errors:
         raise ValueError(
-            "The exported scenario contains invalid field values:\n"
-            + "\n".join(f"- {error}" for error in import_errors)
+            "The exported scenario has actionable validation errors:\n- "
+            + "\n- ".join(import_errors)
         )
 
     trajectory_version = features.get("monte_carlo_trajectories")
     if trajectory_version is not None:
         if trajectory_version != MONTE_CARLO_TRAJECTORIES_EXPORT_VERSION:
-            raise ValueError("This Monte Carlo trajectory version is not supported.")
-        if not isinstance(config.seed, int) or isinstance(config.seed, bool):
-            raise ValueError("The exported simulation seed must be an integer.")
+            raise ValueError(
+                f"features.monte_carlo_trajectories: received {trajectory_version!r}; "
+                f"required {MONTE_CARLO_TRAJECTORIES_EXPORT_VERSION}. Export the "
+                "simulation with a supported app version."
+            )
         results = document.get("results")
         trajectories = results.get("trajectories") if isinstance(results, dict) else None
         simulation_count = results.get("simulation_count") if isinstance(results, dict) else None
         if (not isinstance(simulation_count, int)
+                or isinstance(simulation_count, bool)
                 or not 1 <= simulation_count <= MAX_SIMULATION_COUNT):
-            raise ValueError("The exported simulation count is invalid.")
-        if not isinstance(trajectories, list) or len(trajectories) != simulation_count:
-            raise ValueError("The exported trajectory count is invalid.")
+            raise ValueError(
+                f"results.simulation_count: received {simulation_count!r}; required "
+                f"an integer from 1 to {MAX_SIMULATION_COUNT}. Re-export with a "
+                "supported simulation count."
+            )
+        trajectory_errors = []
+        if (not isinstance(trajectories, list)
+                or len(trajectories) != simulation_count):
+            trajectory_errors.append(
+                f"results.trajectories: trajectory count received "
+                f"{len(trajectories) if isinstance(trajectories, list) else trajectories!r}; "
+                f"required {simulation_count} trajectory objects. Re-export the "
+                "complete simulation results."
+            )
         expected_months = config.years * 12
-        for index, trajectory in enumerate(trajectories, start=1):
+        for index, trajectory in enumerate(
+                trajectories if isinstance(trajectories, list) else [], start=1):
+            path = f"results.trajectories[{index - 1}]"
             if not isinstance(trajectory, dict):
-                raise ValueError("An exported trajectory is invalid.")
+                trajectory_errors.append(
+                    f"{path}: received {trajectory!r}; required an object containing "
+                    "run_number, seed, and monthly results."
+                )
+                continue
             if trajectory.get("run_number") != index:
-                raise ValueError("Exported trajectory run numbers must be sequential.")
+                trajectory_errors.append(
+                    f"{path}.run_number: received {trajectory.get('run_number')!r}; "
+                    f"required sequential run number {index}. Re-export the results."
+                )
             if trajectory.get("seed") != config.seed + index - 1:
-                raise ValueError("An exported trajectory seed is invalid.")
+                trajectory_errors.append(
+                    f"{path}.seed: received {trajectory.get('seed')!r}; required "
+                    f"trajectory seed {config.seed + index - 1}. Re-export the "
+                    "results or restore the matching scenario seed."
+                )
             monthly = trajectory.get("monthly")
             if not isinstance(monthly, list) or len(monthly) != expected_months:
-                raise ValueError("An exported trajectory has invalid monthly results.")
+                trajectory_errors.append(
+                    f"{path}.monthly: received "
+                    f"{len(monthly) if isinstance(monthly, list) else monthly!r}; "
+                    f"required {expected_months} monthly results. Re-export the "
+                    "complete trajectory."
+                )
+        if trajectory_errors:
+            raise ValueError(
+                "The exported trajectory results have validation errors:\n- "
+                + "\n- ".join(trajectory_errors)
+            )
     return (config, import_warnings) if include_warnings else config
 
 

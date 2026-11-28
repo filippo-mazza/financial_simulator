@@ -9,7 +9,7 @@ from bank_account import InsufficientFundsException
 from expense import Expense
 from app import (CHART_EVENT_COLORS, CurveballConfig, SimulationTrajectory, _consume_run_request,
                  _whole_amount, aggregate_purchase_events,
-                 DependentConfig, ExpenseConfig,
+                 CurveballConfig, DependentConfig, ExpenseConfig,
                  FinancialAssumptions, IncomeConfig, InvestmentConfig, LoanConfig, SimulationConfig,
                  build_components, build_simulation_events, create_simulation_export,
                  build_expense_analysis_prompt, get_month_details,
@@ -20,7 +20,9 @@ from app import (CHART_EVENT_COLORS, CurveballConfig, SimulationTrajectory, _con
                  read_simulation_export, run_simulation,
                  run_simulation_batch, run_simulations)
 from investment import Investment
-from property_purchase import AutomaticPurchasePolicy, PropertyPurchase
+from property_purchase import (
+    AutomaticPurchasePolicy, MortgageAffordabilityPolicy, PropertyPurchase,
+)
 
 
 def test_expense_analysis_prompt_uses_versioned_aggregate_schema():
@@ -696,6 +698,289 @@ def test_dividend_fee_and_tax_assumptions_change_their_expected_flows():
 def test_simulation_import_rejects_invalid_exports(document, message):
     with pytest.raises(ValueError, match=message):
         read_simulation_export(document)
+
+
+def test_scenario_validation_reports_each_invalid_item_field_and_action():
+    config = SimulationConfig(
+        years=1,
+        investments=[
+            InvestmentConfig("Risky fund", "stock", -250, -10),
+            InvestmentConfig("Bonds", "bonds", 500, 0),
+        ],
+        incomes=[IncomeConfig("Consulting", "unsupported", -500, tax_rate=120)],
+        expenses=[], loans=[],
+    )
+
+    with pytest.raises(ValueError) as error:
+        run_simulation(config)
+
+    message = str(error.value)
+    for detail in (
+        "investments[0] ('Risky fund').initial_amount",
+        "received -250",
+        "investments[0] ('Risky fund').monthly_contribution",
+        "incomes[0] ('Consulting').monthly_amount",
+        "incomes[0] ('Consulting').tax_rate",
+        "received 120",
+        "Choose a supported income type",
+        "Enter 0 or a greater finite value",
+    ):
+        assert detail in message
+
+
+def test_scenario_validation_rejects_non_boolean_import_values():
+    config = SimulationConfig(
+        years=1,
+        investments=[InvestmentConfig(
+            "Stocks", "stock", 100, 0, auto_invest_enabled="false",
+        )],
+        incomes=[], expenses=[],
+        loans=[LoanConfig("Mortgage", 1000, 2, 10, fixed_rate="false")],
+    )
+
+    with pytest.raises(ValueError) as error:
+        run_simulation(config)
+
+    message = str(error.value)
+    assert "investments[0] ('Stocks').auto_invest_enabled: received 'false'" in message
+    assert "loans[0] ('Mortgage').fixed_rate: received 'false'" in message
+    assert message.count("required a boolean value") == 2
+
+
+def test_direct_scenario_validation_checks_mutated_assumptions():
+    config = SimulationConfig(years=1, investments=[], incomes=[], expenses=[], loans=[])
+    config.assumptions.stock_dividend_rate = 2
+    config.assumptions.contribution_fee = -5
+    config.assumptions.income_tax_rates["salary"] = 150
+    config.assumptions.investment_return_means["stock"] = 101
+
+    with pytest.raises(ValueError) as error:
+        run_simulation(config)
+
+    message = str(error.value)
+    for field in (
+        "assumptions.stock_dividend_rate: received 2",
+        "assumptions.contribution_fee: received -5",
+        "assumptions.income_tax_rates.salary: received 150",
+        "assumptions.investment_return_means.stock: received 101",
+    ):
+        assert field in message
+
+
+def test_stale_rent_stop_is_ignored_when_property_purchase_is_disabled():
+    config = SimulationConfig(
+        years=1, investments=[], incomes=[], expenses=[], loans=[],
+        selected_rent_expense="Removed rent expense",
+    )
+
+    result = run_simulation(config)
+
+    assert len(result[0]) == 12
+
+
+def test_scenario_validation_reports_malformed_curveball_income_link():
+    config = SimulationConfig(
+        years=1, investments=[], incomes=[], expenses=[], loans=[],
+        curveballs=[CurveballConfig(
+            "Invalid income link", True, 0.5, 1, 1, 1,
+            affected_income_name={"not": "a name"},
+        )],
+    )
+
+    with pytest.raises(ValueError) as error:
+        run_simulation(config)
+
+    assert (
+        "curveballs[0] ('Invalid income link').affected_income_name: "
+        "received {'not': 'a name'}" in str(error.value)
+    )
+
+
+def test_scenario_import_reports_all_invalid_fields_without_mutating_payload():
+    config = SimulationConfig(
+        years=1, investments=[InvestmentConfig("Risky fund", "stock", 100, 0)],
+        incomes=[IncomeConfig("Consulting", "freelance", 500)],
+        expenses=[], loans=[],
+    )
+    document = json.loads(create_simulation_export(
+        config, *run_simulation(config),
+    ))
+    document["parameters"]["investments"][0]["initial_amount"] = -250
+    document["parameters"]["investments"][0].pop("monthly_contribution")
+    document["parameters"]["investments"][0]["investment_type"] = {"unknown": "type"}
+    document["parameters"]["investments"][0]["auto_invest_enabled"] = True
+    document["parameters"]["incomes"][0]["tax_rate"] = 120
+    original_document = json.loads(json.dumps(document))
+
+    with pytest.raises(ValueError) as error:
+        read_simulation_export(json.dumps(document))
+
+    message = str(error.value)
+    assert "investments[0] ('Risky fund').initial_amount" in message
+    assert "received -250" in message
+    assert (
+        "investments[0].monthly_contribution: received <missing>" in message
+    )
+    assert (
+        "investments[0] ('Risky fund').investment_type: received "
+        "{'unknown': 'type'}" in message
+    )
+    assert "incomes[0] ('Consulting').tax_rate" in message
+    assert "received 120" in message
+    assert "Enter a value between 0 and 100" in message
+    assert document == original_document
+
+
+def test_scenario_import_reports_all_invalid_assumption_fields():
+    config = SimulationConfig(
+        years=1, investments=[], incomes=[], expenses=[], loans=[],
+    )
+    document = json.loads(create_simulation_export(
+        config, *run_simulation(config),
+    ))
+    assumptions = document["parameters"]["assumptions"]
+    assumptions["investment_return_means"]["stock"] = 101
+    assumptions["investment_return_std_devs"]["bonds"] = -2
+    assumptions["stock_dividend_rate"] = 3
+    assumptions["contribution_fee"] = -5
+    assumptions["income_tax_rates"]["salary"] = 150
+
+    with pytest.raises(ValueError) as error:
+        read_simulation_export(json.dumps(document))
+
+    message = str(error.value)
+    for field in (
+        "assumptions.investment_return_means.stock",
+        "assumptions.investment_return_std_devs.bonds",
+        "assumptions.stock_dividend_rate",
+        "assumptions.contribution_fee",
+        "assumptions.income_tax_rates.salary",
+    ):
+        assert field in message
+    for value in ("101", "-2", "3", "-5", "150"):
+        assert f"received {value}" in message
+
+
+def test_scenario_import_validates_property_profile_references_and_values():
+    config = SimulationConfig(
+        years=1,
+        investments=[InvestmentConfig("House", "real_estate", 100_000, 0)],
+        incomes=[], expenses=[], loans=[],
+    )
+    document = json.loads(create_simulation_export(
+        config, *run_simulation(config),
+    ))
+    document["parameters"]["investments"][0][
+        "jurisdiction_profile_name"
+    ] = {"unknown": "profile"}
+    document["parameters"]["property_purchase_jurisdiction_profile"] = [
+        "missing",
+    ]
+    document["parameters"]["purchase_cadastral_income"] = {"invalid": "amount"}
+    document["parameters"]["purchase_assessed_value"] = -100
+
+    with pytest.raises(ValueError) as error:
+        read_simulation_export(json.dumps(document))
+
+    message = str(error.value)
+    assert (
+        "investments[0] ('House').jurisdiction_profile_name: received "
+        "{'unknown': 'profile'}" in message
+    )
+    assert (
+        "property_purchase_jurisdiction_profile: received ['missing']" in message
+    )
+    assert "purchase_cadastral_income: received {'invalid': 'amount'}" in message
+    assert "purchase_assessed_value: received -100" in message
+
+
+def test_purchase_import_collects_nested_unknown_and_invalid_fields():
+    config = SimulationConfig(
+        years=1, investments=[], incomes=[], expenses=[], loans=[],
+        property_purchase=AutomaticPurchasePolicy(
+            PropertyPurchase(100_000, 20), 5_000, 1_000,
+        ),
+    )
+    document = json.loads(create_simulation_export(
+        config, *run_simulation(config),
+    ))
+    template = document["parameters"]["property_purchase"]["purchase"]
+    template["purchase_price"] = -100
+    template["down_payment_percentage"] = 120
+    template["unexpected_price"] = 55
+    document["parameters"]["property_purchase"]["minimum_available_cash"] = -50
+
+    with pytest.raises(ValueError) as error:
+        read_simulation_export(json.dumps(document))
+
+    message = str(error.value)
+    assert "property_purchase.purchase.unexpected_price: received 55" in message
+    assert "property_purchase.purchase.purchase_price: received -100" in message
+    assert (
+        "property_purchase.purchase.down_payment_percentage: received 120"
+        in message
+    )
+    assert (
+        "property_purchase.minimum_available_cash: received -50"
+        in message
+    )
+
+
+def test_purchase_import_reports_sibling_values_when_nested_field_is_missing():
+    config = SimulationConfig(
+        years=1, investments=[], incomes=[], expenses=[], loans=[],
+        property_purchase=AutomaticPurchasePolicy(
+            PropertyPurchase(100_000, 20), 5_000, 1_000,
+        ),
+    )
+    document = json.loads(create_simulation_export(
+        config, *run_simulation(config),
+    ))
+    purchase_policy = document["parameters"]["property_purchase"]
+    purchase_policy["purchase"].pop("purchase_price")
+    purchase_policy["purchase"]["down_payment_percentage"] = 120
+    purchase_policy["minimum_available_cash"] = -50
+    purchase_policy["minimum_cash_reserve"] = -25
+
+    with pytest.raises(ValueError) as error:
+        read_simulation_export(json.dumps(document))
+
+    message = str(error.value)
+    assert "property_purchase.purchase.purchase_price: received <missing>" in message
+    assert (
+        "property_purchase.purchase.down_payment_percentage: received 120"
+        in message
+    )
+    assert "property_purchase.minimum_available_cash: received -50" in message
+    assert "property_purchase.minimum_cash_reserve: received -25" in message
+
+
+def test_purchase_import_reports_siblings_when_nested_object_is_not_an_object():
+    config = SimulationConfig(
+        years=1, investments=[], incomes=[], expenses=[], loans=[],
+        property_purchase=AutomaticPurchasePolicy(
+            PropertyPurchase(100_000, 20), 5_000, 1_000,
+            MortgageAffordabilityPolicy(),
+        ),
+    )
+    document = json.loads(create_simulation_export(
+        config, *run_simulation(config),
+    ))
+    purchase_policy = document["parameters"]["property_purchase"]
+    purchase_policy["purchase"] = ["invalid template"]
+    purchase_policy["minimum_available_cash"] = -50
+    purchase_policy["mortgage_affordability"]["max_debt_service_ratio_pct"] = 150
+
+    with pytest.raises(ValueError) as error:
+        read_simulation_export(json.dumps(document))
+
+    message = str(error.value)
+    assert "property_purchase.purchase: received ['invalid template']" in message
+    assert "property_purchase.minimum_available_cash: received -50" in message
+    assert (
+        "property_purchase.mortgage_affordability.max_debt_service_ratio_pct: "
+        "received 150" in message
+    )
 
 
 def test_current_situation_items_become_model_expenses():
