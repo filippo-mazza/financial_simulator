@@ -690,6 +690,17 @@ def test_direct_scenario_validation_checks_mutated_assumptions():
         assert field in message
 
 
+def test_stale_rent_stop_is_ignored_when_property_purchase_is_disabled():
+    config = SimulationConfig(
+        years=1, investments=[], incomes=[], expenses=[], loans=[],
+        selected_rent_expense="Removed rent expense",
+    )
+
+    result = run_simulation(config)
+
+    assert len(result[0]) == 12
+
+
 def test_scenario_validation_reports_malformed_curveball_income_link():
     config = SimulationConfig(
         years=1, investments=[], incomes=[], expenses=[], loans=[],

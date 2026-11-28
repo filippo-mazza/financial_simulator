@@ -738,7 +738,7 @@ def validate_simulation_config(config: SimulationConfig):
                         "Raise the maximum amount or lower the minimum amount.",
                     )
 
-    if config.selected_rent_expense is not None:
+    if config.property_purchase is not None and config.selected_rent_expense is not None:
         rent_matches = [
             item for item in all_expenses
             if item.name == config.selected_rent_expense
