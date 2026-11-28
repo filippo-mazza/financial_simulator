@@ -1,0 +1,9 @@
+# Financial issue review
+
+The issue-label event and manual issue mode wake the same saved Financial Review Agent without passing any issue ID or content. The agent searches GitHub MCP for open non-PR issues labeled needs-financial-review, selects at most one, and posts its assessment.
+
+Before activation update the saved agent instructions: honor ISSUE_REVIEW wakeups by selecting issues only; explicit PR input selects that exact PR. In issue mode review requirements rather than unimplemented code, identify the reviewed revision, skip unchanged already-reviewed requirements, and recheck eligibility and requirements before posting. For PASS/PASS WITH WARNINGS add Financial reviewed and remove needs-financial-review; for CHANGES REQUESTED or UNABLE TO REVIEW leave the request label pending and do not add Financial reviewed. Do not repeat unchanged blocking reviews; select the next eligible issue instead. In PR mode leave label transitions to the runner and include exact separate lines Reviewed commit: <40-character SHA> and Verdict: <verdict>.
+
+Both modes share the existing ten daily paid-invocation limit, five-minute cooldown, active reservation and workflow concurrency. The autonomous issue runner checks root-turn completion and successful GitHub MCP access but does not independently attest the agent's issue verdict or label changes. Agent revisions and issue deduplication are managed by the agent, not by PR hash state. A skipped or failed turn can be retried by manually dispatching issue mode after the cooldown; no scheduled retries. Existing queued events can be replaced under the workflow's bounded concurrency policy.
+
+After merging and updating the saved agent, run Financial review manually with review_mode=issue (no PR number), or remove and reapply needs-financial-review as repository owner. Verify one issue comment, appropriate label transition and no PR selection. Existing requests do not retroactively trigger the new event.
