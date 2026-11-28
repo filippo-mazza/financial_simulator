@@ -985,6 +985,45 @@ def test_scenario_json_import_errors_keep_uploads_and_explain_failure(
     assert app.sidebar.file_uploader(key="scenario_workspace_file_0").value
 
 
+def test_invalid_scenario_import_shows_all_field_errors_and_keeps_inputs(
+        monkeypatch, tmp_path):
+    import json
+
+    from app import (
+        IncomeConfig, InvestmentConfig, SimulationConfig,
+        create_simulation_export, run_simulation,
+    )
+
+    app = _fresh_app(monkeypatch, tmp_path)
+    config = SimulationConfig(
+        years=1,
+        investments=[InvestmentConfig("Imported fund", "stock", 100, 0)],
+        incomes=[IncomeConfig("Imported salary", "salary", 500)],
+        expenses=[], loans=[],
+    )
+    document = json.loads(create_simulation_export(config, *run_simulation(config)))
+    document["parameters"]["investments"][0]["initial_amount"] = -250
+    document["parameters"]["incomes"][0]["tax_rate"] = 120
+    _expander(app.sidebar, "sidebar_import").file_uploader(
+        key="scenario_import_file_0"
+    ).upload(
+        "invalid-fields.json", json.dumps(document).encode(), "application/json",
+    ).run(timeout=60)
+
+    errors = [
+        item.value for item in _expander(app.sidebar, "sidebar_import").error
+    ]
+    assert any("investments[0] ('Imported fund').initial_amount" in value
+               and "received -250" in value for value in errors)
+    assert any("incomes[0] ('Imported salary').tax_rate" in value
+               and "received 120" in value for value in errors)
+    assert any("Enter a value between 0 and 100" in value for value in errors)
+    assert app.sidebar.file_uploader(key="scenario_import_file_0").value
+    assert app.session_state["investments"][0]["name"] == "Portfolio"
+    assert app.session_state["investments"][0]["initial_amount"] == 1000
+    assert app.session_state["incomes"][0]["name"] == "Salary"
+
+
 def test_older_single_scenario_import_updates_widget_state_before_render(tmp_path):
     script = f"""
 import json

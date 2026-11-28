@@ -16,6 +16,35 @@ class PropertyPurchaseError(ValueError):
     """Raised when a purchase cannot be validated or applied."""
 
 
+def _validation_message(field, value, constraint, action, prefix=""):
+    field = f"{prefix}.{field}" if prefix else field
+    return (
+        f"{field}: received {value!r}; required {constraint}. "
+        f"{action}"
+    )
+
+
+def _nested_prefix(prefix, name):
+    return f"{prefix}.{name}" if prefix else name
+
+
+def _raise_validation_errors(errors):
+    if errors:
+        raise PropertyPurchaseError(
+            "Please correct the following purchase settings:\n- "
+            + "\n- ".join(errors)
+        )
+
+
+def _is_finite_number(value):
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 VARIABLE_INCOME_TYPES = frozenset({"freelance", "royalty", "other"})
 COMPLETION_FAILURE_POLICIES = frozenset({"retry", "cancel"})
 
@@ -33,23 +62,37 @@ class PurchaseCompletionDelayPolicy:
     maximum_months: int = 0
     on_ineligible: str = "retry"
 
-    def validate(self):
-        for value, label in (
-            (self.minimum_months, "minimum completion delay"),
-            (self.maximum_months, "maximum completion delay"),
+    def validate(self, field_prefix=""):
+        errors = []
+        for field, value in (
+            ("minimum_months", self.minimum_months),
+            ("maximum_months", self.maximum_months),
         ):
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                raise PropertyPurchaseError(
-                    f"{label} must be a nonnegative integer number of months"
-                )
-        if self.minimum_months > self.maximum_months:
-            raise PropertyPurchaseError(
-                "minimum completion delay cannot exceed maximum completion delay"
-            )
-        if self.on_ineligible not in COMPLETION_FAILURE_POLICIES:
-            raise PropertyPurchaseError(
-                "completion failure policy must be 'retry' or 'cancel'"
-            )
+                errors.append(_validation_message(
+                    field, value, f"a nonnegative integer number of months",
+                    "Enter 0 or a positive whole number of months.", field_prefix,
+                ))
+        if (isinstance(self.minimum_months, int)
+                and not isinstance(self.minimum_months, bool)
+                and isinstance(self.maximum_months, int)
+                and not isinstance(self.maximum_months, bool)
+                and self.minimum_months > self.maximum_months):
+            errors.append(_validation_message(
+                "minimum_months", self.minimum_months,
+                f"minimum completion delay cannot exceed maximum_months "
+                f"({self.maximum_months})",
+                "Increase the maximum delay or lower the minimum delay.",
+                field_prefix,
+            ))
+        if (not isinstance(self.on_ineligible, str)
+                or self.on_ineligible not in COMPLETION_FAILURE_POLICIES):
+            errors.append(_validation_message(
+                "on_ineligible", self.on_ineligible, "'retry' or 'cancel'",
+                "Choose whether to retry closing or cancel the purchase.",
+                field_prefix,
+            ))
+        _raise_validation_errors(errors)
         return self
 
     def sample_months(self, random_source):
@@ -87,31 +130,49 @@ class MortgageAffordabilityPolicy:
             + self.dependent_count * self.monthly_buffer_per_dependent
         )
 
-    def validate(self):
+    def validate(self, field_prefix=""):
+        errors = []
         percentages = (
-            (self.max_debt_service_ratio_pct, "maximum debt-service ratio"),
-            (self.variable_income_inclusion_pct, "variable income inclusion"),
+            ("max_debt_service_ratio_pct", self.max_debt_service_ratio_pct,
+             "maximum debt-service ratio"),
+            ("variable_income_inclusion_pct", self.variable_income_inclusion_pct,
+             "variable income inclusion"),
         )
-        for value, label in percentages:
-            if not math.isfinite(value) or not 0 <= value <= 100:
-                raise PropertyPurchaseError(f"{label} must be between 0 and 100")
+        for field, value, label in percentages:
+            if not _is_finite_number(value) or not 0 <= value <= 100:
+                errors.append(_validation_message(
+                    field, value, "a percentage between 0 and 100",
+                    "Enter a percentage from 0 to 100.", field_prefix,
+                ))
         amounts = (
-            (self.base_monthly_living_buffer, "base monthly living buffer"),
-            (self.monthly_buffer_per_adult, "monthly buffer per adult"),
-            (self.monthly_buffer_per_dependent, "monthly buffer per dependent"),
+            ("base_monthly_living_buffer", self.base_monthly_living_buffer),
+            ("monthly_buffer_per_adult", self.monthly_buffer_per_adult),
+            ("monthly_buffer_per_dependent", self.monthly_buffer_per_dependent),
         )
-        for value, label in amounts:
-            if not math.isfinite(value) or value < 0:
-                raise PropertyPurchaseError(f"{label} must be a finite nonnegative amount")
-        for value, label in (
-            (self.adult_count, "adult count"),
-            (self.dependent_count, "dependent count"),
+        for field, value in amounts:
+            if not _is_finite_number(value) or value < 0:
+                errors.append(_validation_message(
+                    field, value, "a finite amount of at least 0",
+                    "Enter 0 or a positive monthly amount.", field_prefix,
+                ))
+        for field, value in (
+            ("adult_count", self.adult_count),
+            ("dependent_count", self.dependent_count),
         ):
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                raise PropertyPurchaseError(f"{label} must be a nonnegative integer")
+                errors.append(_validation_message(
+                    field, value, "a nonnegative integer",
+                    "Enter 0 or a positive whole-number household count.",
+                    field_prefix,
+                ))
         if (not isinstance(self.qualifying_income_names, (tuple, list))
                 or not all(isinstance(name, str) and name for name in self.qualifying_income_names)):
-            raise PropertyPurchaseError("qualifying income names must be a sequence of names")
+            errors.append(_validation_message(
+                "qualifying_income_names", self.qualifying_income_names,
+                "a list of non-empty income-source names",
+                "Select one or more configured income sources.", field_prefix,
+            ))
+        _raise_validation_errors(errors)
         return self
 
 
@@ -142,18 +203,40 @@ class AutomaticPurchasePolicy:
         )
         return max(self.minimum_available_cash, closing_cash)
 
-    def validate(self):
-        for value, label in (
-            (self.minimum_available_cash, "minimum available cash"),
-            (self.minimum_cash_reserve, "minimum cash reserve"),
+    def validate(self, field_prefix=""):
+        errors = []
+        for field, value in (
+            ("minimum_available_cash", self.minimum_available_cash),
+            ("minimum_cash_reserve", self.minimum_cash_reserve),
         ):
-            if not math.isfinite(value) or value < 0:
-                raise PropertyPurchaseError(f"{label} must be a finite nonnegative amount")
-        self.purchase.validate(None)
+            if not _is_finite_number(value) or value < 0:
+                errors.append(_validation_message(
+                    field, value, "a finite amount of at least 0",
+                    "Enter 0 or a positive cash amount.", field_prefix,
+                ))
+        try:
+            self.purchase.validate(
+                None, field_prefix=_nested_prefix(field_prefix, "purchase"),
+            )
+        except PropertyPurchaseError as error:
+            errors.extend(str(error).splitlines()[1:])
         if self.mortgage_affordability is not None:
-            self.mortgage_affordability.validate()
+            try:
+                self.mortgage_affordability.validate(
+                    field_prefix=_nested_prefix(
+                        field_prefix, "mortgage_affordability",
+                    ),
+                )
+            except PropertyPurchaseError as error:
+                errors.extend(str(error).splitlines()[1:])
         if self.completion_delay is not None:
-            self.completion_delay.validate()
+            try:
+                self.completion_delay.validate(
+                    field_prefix=_nested_prefix(field_prefix, "completion_delay"),
+                )
+            except PropertyPurchaseError as error:
+                errors.extend(str(error).splitlines()[1:])
+        _raise_validation_errors(errors)
         return self
 
     def purchase_for_month(self, month):
@@ -221,22 +304,35 @@ def evaluate_mortgage_affordability(
     )
     buffer_passes = income_after_debt >= policy.monthly_living_buffer
     eligible = bool(selected_names) and ratio_passes and buffer_passes
+    issues = []
     if not selected_names:
-        reason = "No qualifying income sources were selected."
+        issues.append(
+            "No qualifying income sources were selected. Select at least one "
+            "configured income source in the mortgage affordability settings."
+        )
     elif qualifying_income <= 0:
-        reason = "Selected income sources provide no qualifying monthly income."
-    elif not ratio_passes:
-        reason = (
+        issues.append(
+            f"Selected sources provide ${qualifying_income:,.0f}/month in "
+            "qualifying income; choose an income source with a positive "
+            "after-tax monthly amount or adjust variable-income inclusion."
+        )
+    if selected_names and not ratio_passes and debt_service_ratio_pct is not None:
+        issues.append(
             f"Total monthly debt service ${total_debt_payment:,.0f} is "
             f"{debt_service_ratio_pct:.1f}% of qualifying income, above the "
-            f"configured {policy.max_debt_service_ratio_pct:.1f}% limit."
+            f"configured {policy.max_debt_service_ratio_pct:.1f}% limit. "
+            "Choose additional qualifying income, reduce debt, or raise the "
+            "configured ratio limit."
         )
-    elif not buffer_passes:
-        reason = (
+    if selected_names and not buffer_passes:
+        issues.append(
             f"Qualifying income after debt service ${income_after_debt:,.0f} is "
             f"below the configured household buffer "
-            f"${policy.monthly_living_buffer:,.0f}."
+            f"${policy.monthly_living_buffer:,.0f}. Choose additional qualifying "
+            "income, reduce debt, or lower the household buffer."
         )
+    if issues:
+        reason = " ".join(issues)
     else:
         reason = (
             f"Debt service is {debt_service_ratio_pct:.1f}% of qualifying income "
@@ -282,43 +378,89 @@ class PropertyPurchase:
     def mortgage_principal(self):
         return self.purchase_price - self.down_payment
 
-    def validate(self, bank_account=None, investments=(), loans=()):
+    def validate(self, bank_account=None, investments=(), loans=(), field_prefix=""):
+        errors = []
         numeric = (
-            self.purchase_price, self.down_payment_percentage,
-            self.transaction_fees, self.mortgage_interest_rate,
-            self.monthly_expenses, self.yearly_tax,
-            self.annual_maintenance_percentage,
+            ("purchase_price", self.purchase_price, "a finite amount greater than 0",
+             "Enter the property's positive purchase price."),
+            ("down_payment_percentage", self.down_payment_percentage,
+             "a percentage between 0 and 100",
+             "Enter a down-payment percentage from 0 to 100."),
+            ("transaction_fees", self.transaction_fees, "a finite amount of at least 0",
+             "Enter 0 or a positive transaction-fee amount."),
+            ("mortgage_interest_rate", self.mortgage_interest_rate,
+             "a finite annual percentage of at least 0",
+             "Enter 0 or a positive mortgage rate."),
+            ("monthly_expenses", self.monthly_expenses,
+             "a finite monthly amount of at least 0",
+             "Enter 0 or a positive monthly amount."),
+            ("yearly_tax", self.yearly_tax, "a finite annual amount of at least 0",
+             "Enter 0 or a positive annual tax amount."),
+            ("annual_maintenance_percentage", self.annual_maintenance_percentage,
+             "a percentage between 0 and 100",
+             "Enter a maintenance percentage from 0 to 100."),
         )
-        if not all(math.isfinite(value) for value in numeric):
-            raise PropertyPurchaseError("Purchase amounts and rates must be finite")
-        if self.purchase_price <= 0:
-            raise PropertyPurchaseError("Purchase price must be positive")
-        if not 0 <= self.down_payment_percentage <= 100:
-            raise PropertyPurchaseError("Down payment percentage must be between 0 and 100")
-        if self.transaction_fees < 0:
-            raise PropertyPurchaseError("Transaction fees cannot be negative")
-        if self.monthly_expenses < 0 or self.yearly_tax < 0:
-            raise PropertyPurchaseError("Property operating costs cannot be negative")
-        if not 0 <= self.annual_maintenance_percentage <= 100:
-            raise PropertyPurchaseError(
-                "Annual maintenance percentage must be between 0 and 100"
-            )
-        if self.mortgage_interest_rate < 0:
-            raise PropertyPurchaseError("Mortgage interest rate cannot be negative")
-        if self.mortgage_duration_years <= 0:
-            raise PropertyPurchaseError("Mortgage duration must be positive")
-        if not isinstance(self.purchase_month, int) or self.purchase_month < 0:
-            raise PropertyPurchaseError("Purchase month must be a nonnegative integer")
-        if not self.property_name or not self.mortgage_name:
-            raise PropertyPurchaseError("Property and mortgage names are required")
+        for field, value, constraint, action in numeric:
+            valid = _is_finite_number(value)
+            if valid:
+                if field == "purchase_price":
+                    valid = value > 0
+                elif field in ("down_payment_percentage",
+                               "annual_maintenance_percentage"):
+                    valid = 0 <= value <= 100
+                else:
+                    valid = value >= 0
+            if not valid:
+                errors.append(_validation_message(
+                    field, value, constraint, action, field_prefix,
+                ))
+        if (not isinstance(self.mortgage_duration_years, int)
+                or isinstance(self.mortgage_duration_years, bool)
+                or self.mortgage_duration_years <= 0):
+            errors.append(_validation_message(
+                "mortgage_duration_years", self.mortgage_duration_years,
+                "a positive integer number of years",
+                "Enter a whole number of mortgage years greater than 0.",
+                field_prefix,
+            ))
+        if (not isinstance(self.purchase_month, int)
+                or isinstance(self.purchase_month, bool)
+                or self.purchase_month < 0):
+            errors.append(_validation_message(
+                "purchase_month", self.purchase_month,
+                "a nonnegative integer month index",
+                "Enter 0 or a positive whole-number month index.",
+                field_prefix,
+            ))
+        for field, value in (
+            ("property_name", self.property_name),
+            ("mortgage_name", self.mortgage_name),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                errors.append(_validation_message(
+                    field, value, "a non-empty name",
+                    "Enter a name for this item.", field_prefix,
+                ))
         if any(getattr(item, "name", None) == self.property_name for item in investments):
-            raise PropertyPurchaseError(f"Investment named '{self.property_name}' already exists")
+            errors.append(_validation_message(
+                "property_name", self.property_name,
+                "a name not already used by an investment",
+                "Choose a unique property name.", field_prefix,
+            ))
         if any(getattr(item, "name", None) == self.mortgage_name for item in loans):
-            raise PropertyPurchaseError(f"Loan named '{self.mortgage_name}' already exists")
+            errors.append(_validation_message(
+                "mortgage_name", self.mortgage_name,
+                "a name not already used by a loan",
+                "Choose a unique mortgage name.", field_prefix,
+            ))
+        _raise_validation_errors(errors)
         required = self.down_payment + self.transaction_fees
         if bank_account is not None and bank_account.subaccounts["Main"] < required:
             raise InsufficientFundsException(
-                f"Insufficient funds for property purchase: ${required:,.2f} required"
+                f"Insufficient funds for property purchase: Main cash "
+                f"${bank_account.subaccounts['Main']:,.2f} is below the "
+                f"${required:,.2f} required for the down payment and fees. "
+                "Add cash or lower the down payment/transaction fees."
             )
         return self
 
